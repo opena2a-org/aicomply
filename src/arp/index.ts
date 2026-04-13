@@ -1,14 +1,34 @@
 /**
- * ARP (Agent Reputation Protocol) client.
+ * ARP (Agent Reputation Protocol) module.
  *
- * Verifies agent identity and retrieves behavioral risk signals
- * from the ARP service.
- *
- * STUB: V1 returns defaults. V2 wires to ARP crypto (HMA).
+ * Provides classification signature verification and behavioral risk signals.
  */
 
-import type { ArpVerifyResult, BehavioralRiskSignal, ArpClientOptions } from './types';
+export { verifyClassification, CLASSIFICATION_MIN_TIER, ABSOLUTE_DENY_CLASSES } from './verify';
 
+export type {
+  ArpClientOptions,
+  ArpVerifyResult,
+  BehavioralRiskSignal,
+  CapabilityManifest,
+  CapabilityTier,
+  ComplyOnViolation,
+  EncodedHybridPublicKey,
+  EncodedHybridSignature,
+  HybridAlgorithm,
+  MLDsaVariant,
+  NanoMindGuardResult,
+  NanoMindGuardVerifyErrorCode,
+  NanoMindGuardVerifyOptions,
+  NanoMindGuardVerifyResult,
+} from './types';
+
+import type { BehavioralRiskSignal, ArpClientOptions } from './types';
+
+/**
+ * ARP client for behavioral risk signals.
+ * V1: returns neutral defaults. V2: queries ARP service.
+ */
 export class ArpClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
@@ -18,29 +38,11 @@ export class ArpClient {
     this.timeoutMs = options.timeoutMs ?? 5000;
   }
 
-  /**
-   * Verify an agent's ARP signature.
-   * V1: returns not-valid stub. V2: crypto verification via @noble/post-quantum.
-   */
-  async verify(_agentId: string, _signature: string): Promise<ArpVerifyResult> {
-    // V2: verify hybrid signature using @noble/post-quantum
-    return {
-      valid: false,
-      agentId: _agentId,
-      trustLevel: 0,
-      expiresAt: 0,
-    };
-  }
-
-  /**
-   * Get behavioral risk signal for an agent.
-   * V1: returns neutral stub. V2: queries ARP service.
-   */
-  async getBehavioralRiskSignal(_agentId: string): Promise<BehavioralRiskSignal> {
+  async getBehavioralRiskSignal(agentId: string): Promise<BehavioralRiskSignal> {
     // V2: fetch from ${this.baseUrl}/v1/arp/risk/${agentId}
     return {
-      agentId: _agentId,
-      riskScore: 50, // neutral
+      agentId,
+      riskScore: 50,
       signals: [],
       assessedAt: Date.now(),
     };

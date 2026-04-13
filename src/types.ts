@@ -56,4 +56,8 @@ export interface ComplyResult {
     guard?: ClassifierResult;
   };
   signatureValid?: boolean;
+  verifyError?: {
+    code: string;
+    reason: string;
+  };
 }
