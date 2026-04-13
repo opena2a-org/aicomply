@@ -121,6 +121,12 @@ describe('CUI patterns', () => {
     const cui = matches.filter(m => m.type === 'CUI');
     expect(cui).toHaveLength(0);
   });
+
+  it('does not match bare "controlled" in normal English', () => {
+    const matches = scanPatterns('This is a controlled environment');
+    const cui = matches.filter(m => m.type === 'CUI');
+    expect(cui).toHaveLength(0);
+  });
 });
 
 describe('credential patterns', () => {
@@ -234,15 +240,27 @@ describe('classifyWithRegex', () => {
 });
 
 describe('passport patterns', () => {
-  it('detects common passport format', () => {
+  it('detects passport with context keyword', () => {
     const matches = scanPatterns('Passport: AB1234567');
     const passports = matches.filter(m => m.type === 'PASSPORT');
     expect(passports).toHaveLength(1);
   });
 
-  it('detects single-letter prefix format', () => {
-    const matches = scanPatterns('Passport: C12345678');
+  it('detects single-letter prefix with keyword', () => {
+    const matches = scanPatterns('passport C12345678');
     const passports = matches.filter(m => m.type === 'PASSPORT');
     expect(passports).toHaveLength(1);
+  });
+
+  it('does not match without passport keyword', () => {
+    const matches = scanPatterns('Model A1234567');
+    const passports = matches.filter(m => m.type === 'PASSPORT');
+    expect(passports).toHaveLength(0);
+  });
+
+  it('does not false positive on product model numbers', () => {
+    const matches = scanPatterns('iPhone A1234567, Part B12345678');
+    const passports = matches.filter(m => m.type === 'PASSPORT');
+    expect(passports).toHaveLength(0);
   });
 });

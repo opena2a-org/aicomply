@@ -40,7 +40,7 @@ import type { ComplyOptions, ComplyResult } from './types';
  * @returns Classification result with verdict and violations
  */
 export async function comply(options: ComplyOptions): Promise<ComplyResult> {
-  if (!options.content) {
+  if (!options?.content) {
     return {
       verdict: 'CLEAN',
       violations: [],

@@ -157,7 +157,7 @@ export const PATTERNS: PatternDefinition[] = [
   },
   {
     type: 'CUI',
-    regex: /\b(CUI\/\/SP-[A-Z-]+|CONTROLLED(?:\s+UNCLASSIFIED\s+INFORMATION)?|FOR\s+OFFICIAL\s+USE\s+ONLY|CUI\/\/[A-Z-]+)\b/gi,
+    regex: /\b(CUI\/\/SP-[A-Z-]+|CONTROLLED\s+UNCLASSIFIED\s+INFORMATION|FOR\s+OFFICIAL\s+USE\s+ONLY|CUI\/\/[A-Z-]+)\b/gi,
     confidence: 0.99,
   },
   {
@@ -199,9 +199,9 @@ export const PATTERNS: PatternDefinition[] = [
   },
   {
     type: 'PASSPORT',
-    // Common passport formats: 1-2 letters followed by 6-9 digits
-    regex: /\b([A-Z]{1,2}\d{6,9})\b/g,
-    confidence: 0.6,
+    // Common passport formats: 1-2 letters followed by 6-9 digits, requires context keyword
+    regex: /(?:passport|travel\s+document)[:\s#-]*\b([A-Z]{1,2}\d{6,9})\b/gi,
+    confidence: 0.75,
   },
   {
     type: 'MRN',
@@ -248,5 +248,17 @@ export function scanPatterns(content: string): PatternMatch[] {
     }
   }
 
-  return matches;
+  // Deduplicate overlapping matches: higher confidence wins
+  matches.sort((a, b) => b.confidence - a.confidence);
+  const deduped: PatternMatch[] = [];
+  for (const m of matches) {
+    const overlaps = deduped.some(
+      (d) => m.start < d.end && m.end > d.start && m.value === d.value
+    );
+    if (!overlaps) {
+      deduped.push(m);
+    }
+  }
+
+  return deduped;
 }
