@@ -40,6 +40,7 @@ export type { PatternMatch, PatternType } from './classifier/regex/patterns';
 
 import { classifyDualLayer } from './classifier/dual-layer';
 import { RegistryIntelligenceCache } from './registry';
+import { loadPolicyPack } from './policy';
 import type { DualLayerOptions } from './classifier/dual-layer';
 import type { ComplyOptions, ComplyResult, RegistryCacheOptions } from './types';
 
@@ -82,6 +83,7 @@ export async function comply(
     ...dualLayerOptions,
     ...(options.sourcePackage !== undefined && { sourcePackage: options.sourcePackage }),
     ...(options.registryCache !== undefined && { registryCache: options.registryCache }),
+    ...(options.policyPack !== undefined && { policyPack: loadPolicyPack(options.policyPack) }),
   };
 
   return classifyDualLayer(options.content, mergedOptions);
