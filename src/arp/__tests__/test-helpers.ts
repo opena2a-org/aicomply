@@ -9,7 +9,7 @@
  */
 
 import { generateKeyPairSync, sign as cryptoSign } from 'crypto';
-import { ml_dsa44 } from '@noble/post-quantum/ml-dsa';
+import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 import { createHash } from 'crypto';
 import type {
   CapabilityManifest,

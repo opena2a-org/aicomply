@@ -18,7 +18,7 @@
  */
 
 import { createPublicKey, verify as cryptoVerify } from 'crypto';
-import { ml_dsa44 } from '@noble/post-quantum/ml-dsa';
+import { ml_dsa44 } from '@noble/post-quantum/ml-dsa.js';
 import type {
   CapabilityTier,
   EncodedHybridPublicKey,
