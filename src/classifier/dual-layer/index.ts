@@ -20,7 +20,7 @@ import { classifyWithRegex } from '../regex';
 import { GuardClient } from '../guard-client';
 import { verifyClassification } from '../../arp/verify';
 import { RegistryIntelligenceCache } from '../../registry';
-import type { ClassifierResult, ComplyResult, Violation } from '../../types';
+import type { ClassifierResult, ComplyResult, PolicyPack, Violation } from '../../types';
 import type {
   NanoMindGuardResult,
   NanoMindGuardVerifyOptions,
@@ -41,6 +41,12 @@ export interface DualLayerOptions {
    * Typically the source agent identifier from the message envelope.
    */
   sourcePackage?: string;
+  /**
+   * Loaded policy pack to enforce after regex+Guard merge and Registry L2.
+   * DENY rules hard-block (verdict → DENY). WARN rules append a violation.
+   * REDACT rules are skipped in V1.
+   */
+  policyPack?: PolicyPack;
 }
 
 // ---------------------------------------------------------------------------
@@ -144,11 +150,23 @@ export async function classifyDualLayer(
   // Registry L2 threshold/block logic (Section 3.1, lines 239-263)
   // AC-005: synchronous cache lookup only — never fetch in the hot path.
   // ---------------------------------------------------------------------------
+  let result: ComplyResult;
   if (options?.registryCache && options?.sourcePackage) {
-    return applyRegistryL2(baseResult, options.registryCache, options.sourcePackage);
+    result = applyRegistryL2(baseResult, options.registryCache, options.sourcePackage);
+  } else {
+    result = baseResult;
   }
 
-  return baseResult;
+  // ---------------------------------------------------------------------------
+  // Policy pack enforcement: DENY rules hard-block, WARN rules add violations.
+  // Applied after Registry L2 so policy sees the fully-resolved verdict.
+  // REDACT is out of scope in V1 — skipped silently.
+  // ---------------------------------------------------------------------------
+  if (options?.policyPack) {
+    result = applyPolicyPack(result, options.policyPack);
+  }
+
+  return result;
 }
 
 /**
@@ -244,6 +262,61 @@ function applyRegistryL2(
       supplyChainBlock: false,
       packageName,
     },
+  };
+}
+
+/**
+ * Apply policy pack rules to an already-classified result.
+ *
+ *   - DENY rule: if any detected violation type matches a rule pattern → verdict = DENY
+ *     and a POLICY_DENY violation is appended for auditability.
+ *   - WARN rule: if any detected violation type matches a rule pattern → a POLICY_WARN
+ *     violation is appended; verdict is not escalated by WARN alone.
+ *   - REDACT rule: out of scope in V1 — skipped silently.
+ *
+ * Policy is applied after Registry L2 so it sees the fully-resolved verdict and
+ * violation set (including SUPPLY_CHAIN_ALERT and FLEET_ANOMALY_ELEVATED entries).
+ */
+function applyPolicyPack(result: ComplyResult, pack: PolicyPack): ComplyResult {
+  const detectedTypes = new Set(result.violations.map(v => v.type));
+
+  let verdict = result.verdict;
+  const additionalViolations: Violation[] = [];
+
+  for (const rule of pack.rules) {
+    if (rule.action === 'REDACT') continue; // V1: out of scope
+
+    const matched = rule.patterns.some(p => detectedTypes.has(p));
+    if (!matched) continue;
+
+    if (rule.action === 'DENY') {
+      verdict = 'DENY';
+      additionalViolations.push({
+        type: `POLICY_DENY:${rule.id}`,
+        value: rule.name,
+        start: 0,
+        end: 0,
+        confidence: 1.0,
+        classifier: 'regex',
+      });
+    } else if (rule.action === 'WARN') {
+      additionalViolations.push({
+        type: `POLICY_WARN:${rule.id}`,
+        value: rule.name,
+        start: 0,
+        end: 0,
+        confidence: 1.0,
+        classifier: 'regex',
+      });
+    }
+  }
+
+  if (additionalViolations.length === 0) return result;
+
+  return {
+    ...result,
+    verdict,
+    violations: [...result.violations, ...additionalViolations],
   };
 }
 
