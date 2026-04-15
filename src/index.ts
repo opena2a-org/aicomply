@@ -14,6 +14,7 @@ export type {
   RiskContext,
   PolicyPack,
   PolicyRule,
+  RegistryCacheOptions,
 } from './types';
 
 export { classifyWithRegex } from './classifier/regex';
@@ -38,8 +39,9 @@ export { scanPatterns, luhnCheck } from './classifier/regex/patterns';
 export type { PatternMatch, PatternType } from './classifier/regex/patterns';
 
 import { classifyDualLayer } from './classifier/dual-layer';
+import { RegistryIntelligenceCache } from './registry';
 import type { DualLayerOptions } from './classifier/dual-layer';
-import type { ComplyOptions, ComplyResult } from './types';
+import type { ComplyOptions, ComplyResult, RegistryCacheOptions } from './types';
 
 export type { DualLayerOptions } from './classifier/dual-layer';
 
@@ -52,6 +54,11 @@ export type { DualLayerOptions } from './classifier/dual-layer';
  * When guardResult and guardVerifyOptions are provided via dualLayerOptions,
  * the Guard classification is signature-verified (Ed25519+ML-DSA-44) before
  * being trusted. Invalid signatures trigger parse-to-deny (CR-001).
+ *
+ * When sourcePackage and registryCache are set on options, Registry L2 logic
+ * runs after classification (fleet anomaly threshold + supply-chain hard block).
+ * The cache must be warmed before calling comply() — use ClassificationSession
+ * or warmRegistryCache() to ensure this (AC-005: no network I/O in the hot path).
  *
  * @param options - Content to classify and optional policy/risk context
  * @param dualLayerOptions - Guard classification result and verification config
@@ -71,5 +78,86 @@ export async function comply(
     };
   }
 
-  return classifyDualLayer(options.content, dualLayerOptions);
+  const mergedOptions: DualLayerOptions = {
+    ...dualLayerOptions,
+    ...(options.sourcePackage !== undefined && { sourcePackage: options.sourcePackage }),
+    ...(options.registryCache !== undefined && { registryCache: options.registryCache }),
+  };
+
+  return classifyDualLayer(options.content, mergedOptions);
+}
+
+/**
+ * Create and warm a RegistryIntelligenceCache.
+ *
+ * Use this when you manage the cache lifecycle yourself (e.g., one warm-start
+ * per request handler). For long-lived processes with multiple comply() calls,
+ * prefer ClassificationSession which owns the full lifecycle.
+ *
+ * @example
+ * const cache = await warmRegistryCache({ baseUrl: 'https://api.oa2a.org' });
+ * const result = await comply({ content, sourcePackage: 'my-agent', registryCache: cache });
+ */
+export async function warmRegistryCache(
+  options?: RegistryCacheOptions,
+): Promise<RegistryIntelligenceCache> {
+  const cache = new RegistryIntelligenceCache(options);
+  await cache.warm();
+  return cache;
+}
+
+/**
+ * Session-scoped compliance classifier that owns the registry cache lifecycle.
+ *
+ * Warms the cache once on construction and exposes comply() for repeated calls
+ * against the same warmed cache. Use refreshCache() to trigger a background
+ * refresh when the TTL has expired.
+ *
+ * Prefer this over warmRegistryCache() when the same cache instance services
+ * multiple comply() calls (e.g., an agent session or a request batch).
+ *
+ * @example
+ * const session = await ClassificationSession.create({ baseUrl: 'https://api.oa2a.org' });
+ * const result = await session.comply({ content, sourcePackage: 'my-agent' });
+ * session.refreshCache(); // non-blocking; call when convenient
+ */
+export class ClassificationSession {
+  private readonly cache: RegistryIntelligenceCache;
+
+  private constructor(cache: RegistryIntelligenceCache) {
+    this.cache = cache;
+  }
+
+  /**
+   * Create a session with a warmed registry cache.
+   * Resolves after warm() completes (both fleet and supply-chain endpoints fetched).
+   */
+  static async create(options?: RegistryCacheOptions): Promise<ClassificationSession> {
+    const cache = new RegistryIntelligenceCache(options);
+    await cache.warm();
+    return new ClassificationSession(cache);
+  }
+
+  /**
+   * Run compliance classification, applying L2 registry logic when sourcePackage
+   * is provided. Uses the session's warmed cache — no network I/O in the hot path.
+   */
+  async comply(
+    options: ComplyOptions,
+    dualLayerOptions?: DualLayerOptions,
+  ): Promise<ComplyResult> {
+    const optionsWithCache: ComplyOptions = {
+      ...options,
+      registryCache: options.registryCache ?? this.cache,
+    };
+    return comply(optionsWithCache, dualLayerOptions);
+  }
+
+  /**
+   * Trigger a background refresh of the registry cache if stale.
+   * Non-blocking — returns immediately and does not affect in-flight classifies.
+   */
+  refreshCache(): void {
+    this.cache.refreshIfStale();
+  }
 }

@@ -2,6 +2,9 @@
  * Core types for the AIComply compliance classifier.
  */
 
+import type { RegistryIntelligenceCache, RegistryCacheOptions } from './registry';
+export type { RegistryCacheOptions };
+
 export type Verdict = 'CLEAN' | 'VIOLATION' | 'DENY';
 
 export interface Violation {
@@ -46,6 +49,17 @@ export interface ComplyOptions {
   content: string;
   policyPack?: string;
   riskContext?: RiskContext;
+  /**
+   * Name of the source package/agent for Registry L2 lookup.
+   * Required (along with registryCache) to activate L2 threshold/block logic.
+   */
+  sourcePackage?: string;
+  /**
+   * Pre-warmed Registry intelligence cache. Must be warmed before calling
+   * comply() — use ClassificationSession or warmRegistryCache() to ensure
+   * warm() has completed (AC-005: no network I/O in the hot path).
+   */
+  registryCache?: RegistryIntelligenceCache;
 }
 
 export interface ComplyResult {
