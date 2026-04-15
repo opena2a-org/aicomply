@@ -60,4 +60,14 @@ export interface ComplyResult {
     code: string;
     reason: string;
   };
+  /**
+   * Registry intelligence signals applied during L2 threshold/block logic.
+   * Present when registry data was consulted (Task 6 / Section 3.1).
+   */
+  registrySignals?: {
+    fleetAnomalyScore: number | null;
+    thresholdDelta: number;
+    supplyChainBlock: boolean;
+    packageName?: string;
+  };
 }
