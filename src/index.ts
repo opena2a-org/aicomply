@@ -84,6 +84,7 @@ export async function comply(
     ...(options.sourcePackage !== undefined && { sourcePackage: options.sourcePackage }),
     ...(options.registryCache !== undefined && { registryCache: options.registryCache }),
     ...(options.policyPack !== undefined && { policyPack: loadPolicyPack(options.policyPack) }),
+    ...(options.riskContext !== undefined && { riskContext: options.riskContext }),
   };
 
   return classifyDualLayer(options.content, mergedOptions);

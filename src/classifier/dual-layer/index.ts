@@ -20,7 +20,8 @@ import { classifyWithRegex } from '../regex';
 import { GuardClient } from '../guard-client';
 import { verifyClassification } from '../../arp/verify';
 import { RegistryIntelligenceCache } from '../../registry';
-import type { ClassifierResult, ComplyResult, PolicyPack, Violation } from '../../types';
+import { assembleRiskContext } from '../../risk';
+import type { ClassifierResult, ComplyResult, PolicyPack, RiskContext, Violation } from '../../types';
 import type {
   NanoMindGuardResult,
   NanoMindGuardVerifyOptions,
@@ -47,6 +48,12 @@ export interface DualLayerOptions {
    * REDACT rules are skipped in V1.
    */
   policyPack?: PolicyPack;
+  /**
+   * Caller-supplied risk context. When provided, Registry L2 uses the
+   * trust tier (0–4) to scale the fleet anomaly score via a sensitivity
+   * multiplier before comparing against the anomaly threshold.
+   */
+  riskContext?: RiskContext;
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +61,31 @@ export interface DualLayerOptions {
 // ---------------------------------------------------------------------------
 const FLEET_ANOMALY_THRESHOLD = 0.30;
 const THRESHOLD_DELTA = -0.15;
+
+/**
+ * Map a Registry trust tier (0–4) to an anomaly-score sensitivity multiplier.
+ *
+ * A higher multiplier means the effective anomaly score is amplified before
+ * comparison against the threshold — making classification more sensitive
+ * for lower-trust tiers. A lower multiplier dampens the score for
+ * well-verified packages.
+ *
+ * trustLevel 0 (Blocked): ARP's responsibility; L2 defers → 1.00
+ * trustLevel 1 (Warning): 1.35  — heightened sensitivity
+ * trustLevel 2 (Listed):  1.15  — mildly elevated
+ * trustLevel 3 (Scanned): 1.00  — baseline (current behaviour)
+ * trustLevel 4 (Verified): 0.80 — verified packages get a grace margin
+ * Out-of-range / missing:  1.00  — safe default
+ */
+function sensitivityMultiplier(trustLevel: number | undefined): number {
+  switch (trustLevel) {
+    case 1: return 1.35;
+    case 2: return 1.15;
+    case 3: return 1.00;
+    case 4: return 0.80;
+    default: return 1.00; // covers 0 (Blocked, ARP handles) and out-of-range
+  }
+}
 
 /**
  * Run content through both classification layers and merge results.
@@ -152,7 +184,15 @@ export async function classifyDualLayer(
   // ---------------------------------------------------------------------------
   let result: ComplyResult;
   if (options?.registryCache && options?.sourcePackage) {
-    result = applyRegistryL2(baseResult, options.registryCache, options.sourcePackage);
+    const assembled = options.riskContext !== undefined
+      ? assembleRiskContext(options.riskContext)
+      : undefined;
+    result = applyRegistryL2(
+      baseResult,
+      options.registryCache,
+      options.sourcePackage,
+      assembled?.trustLevel,
+    );
   } else {
     result = baseResult;
   }
@@ -185,8 +225,10 @@ function applyRegistryL2(
   base: Omit<ComplyResult, 'registrySignals'>,
   cache: RegistryIntelligenceCache,
   packageName: string,
+  trustLevel?: number,
 ): ComplyResult {
   const lookup = cache.lookup(packageName);
+  const mult = sensitivityMultiplier(trustLevel);
 
   if (lookup.status === 'error' || lookup.status === 'miss') {
     // AC-002: unknown is NOT clean. Surface the signal; do not silently pass.
@@ -194,6 +236,8 @@ function applyRegistryL2(
       ...base,
       registrySignals: {
         fleetAnomalyScore: null,
+        effectiveAnomalyScore: null,
+        trustSensitivityMultiplier: mult,
         thresholdDelta: 0,
         supplyChainBlock: false,
         packageName,
@@ -206,8 +250,10 @@ function applyRegistryL2(
   const activeAlerts = intelligence.supplyChainAlerts ?? [];
   const hasSupplyChainAlert = activeAlerts.length > 0;
 
-  // Hard block: any active supply-chain alert => DENY regardless of prior verdict
+  // Hard block: any active supply-chain alert => DENY regardless of prior verdict.
+  // The sensitivity multiplier does not apply here — supply-chain blocks are absolute.
   if (hasSupplyChainAlert) {
+    const effectiveScore = fleetScore !== null ? fleetScore * mult : null;
     const blockViolation: Violation = {
       type: 'SUPPLY_CHAIN_ALERT',
       value: activeAlerts.map(a => a.id).join(','),
@@ -222,6 +268,8 @@ function applyRegistryL2(
       violations: [...base.violations, blockViolation],
       registrySignals: {
         fleetAnomalyScore: fleetScore,
+        effectiveAnomalyScore: effectiveScore,
+        trustSensitivityMultiplier: mult,
         thresholdDelta: 0,
         supplyChainBlock: true,
         packageName,
@@ -229,14 +277,17 @@ function applyRegistryL2(
     };
   }
 
-  // Threshold adjustment: fleet anomaly score > 0.30 => threshold -= 0.15
+  // Apply trust-level sensitivity: scale the raw anomaly score by the multiplier
+  // before comparing against the threshold. Higher-trust packages (tier 4) get a
+  // grace margin; lower-trust packages (tier 1–2) are evaluated more strictly.
+  const effectiveScore = fleetScore !== null ? fleetScore * mult : null;
+
   const thresholdDelta =
-    fleetScore !== null && fleetScore > FLEET_ANOMALY_THRESHOLD
+    effectiveScore !== null && effectiveScore > FLEET_ANOMALY_THRESHOLD
       ? THRESHOLD_DELTA
       : 0;
 
-  // If threshold is lowered and the current verdict is CLEAN, promote to VIOLATION.
-  // The delta represents a reduction in the confidence bar required to flag.
+  // If effective anomaly is elevated and the current verdict is CLEAN, promote to VIOLATION.
   const adjustedVerdict =
     thresholdDelta < 0 && base.verdict === 'CLEAN' ? 'VIOLATION' : base.verdict;
 
@@ -244,10 +295,10 @@ function applyRegistryL2(
   if (adjustedVerdict === 'VIOLATION' && base.verdict === 'CLEAN') {
     violations.push({
       type: 'FLEET_ANOMALY_ELEVATED',
-      value: `anomalyScore=${fleetScore}`,
+      value: `anomalyScore=${fleetScore},effectiveScore=${effectiveScore}`,
       start: 0,
       end: 0,
-      confidence: fleetScore ?? 0,
+      confidence: effectiveScore ?? 0,
       classifier: 'regex',
     });
   }
@@ -258,6 +309,8 @@ function applyRegistryL2(
     violations,
     registrySignals: {
       fleetAnomalyScore: fleetScore,
+      effectiveAnomalyScore: effectiveScore,
+      trustSensitivityMultiplier: mult,
       thresholdDelta,
       supplyChainBlock: false,
       packageName,

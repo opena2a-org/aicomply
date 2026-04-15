@@ -80,6 +80,10 @@ export interface ComplyResult {
    */
   registrySignals?: {
     fleetAnomalyScore: number | null;
+    /** Anomaly score after applying the trust-level sensitivity multiplier. */
+    effectiveAnomalyScore: number | null;
+    /** Multiplier applied to fleetAnomalyScore based on Registry trust tier. */
+    trustSensitivityMultiplier: number;
     thresholdDelta: number;
     supplyChainBlock: boolean;
     packageName?: string;

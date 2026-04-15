@@ -33,13 +33,16 @@ function computeAggregateScore(
   trustLevel: number,
   signals: RiskSignal[],
 ): number {
-  if (signals.length === 0) return trustLevel;
+  // Normalize trustLevel from 0–4 registry tier to 0–100 score scale
+  const normalizedTrustLevel = trustLevel * 25;
+
+  if (signals.length === 0) return normalizedTrustLevel;
 
   const signalAvg =
     signals.reduce((sum, s) => sum + s.score, 0) / signals.length;
 
   // Weighted: 60% trust level, 40% signal average
-  return trustLevel * 0.6 + signalAvg * 0.4;
+  return normalizedTrustLevel * 0.6 + signalAvg * 0.4;
 }
 
 function scoreToRecommendation(
