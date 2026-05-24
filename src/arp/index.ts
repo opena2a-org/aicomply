@@ -1,5 +1,5 @@
 /**
- * ARP (Agent Reputation Protocol) module.
+ * ARP (Agent Runtime Protection) module.
  *
  * Provides classification signature verification and behavioral risk signals.
  */

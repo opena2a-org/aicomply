@@ -1,5 +1,5 @@
 /**
- * Types for the Agent Reputation Protocol (ARP) client.
+ * Types for the Agent Runtime Protection (ARP) client.
  *
  * These types mirror the wire format used by HMA's ARP crypto module
  * (hackmyagent/src/arp/) so AIComply can verify NanoMind-Guard
