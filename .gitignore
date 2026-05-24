@@ -2,3 +2,20 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+
+# Credentials and secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+credentials.json
+
+# OS
+.DS_Store
+
+# Packed tarballs (smoke-test artifacts)
+*.tgz

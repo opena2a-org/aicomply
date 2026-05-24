@@ -41,10 +41,11 @@ posture — not a complete control.
 
 ### Out of threat model scope (V1)
 - **Adversarial mutation of regex inputs.** V1 does not normalize Unicode
-  homoglyphs (`е` vs `e`), strip whitespace injection (`1 2 3-4 5-6 7 8 9`),
-  decode encoded forms (Base64, URL-encoded, HTML entities), or handle
-  obfuscation. Treat the regex layer as a deterministic-format check, not a
-  semantic detector.
+  homoglyphs (for example, Cyrillic small letter e at U+0435 visually
+  resembles Latin small letter e at U+0065), strip whitespace injection
+  (`1 2 3-4 5-6 7 8 9`), decode encoded forms (Base64, URL-encoded, HTML
+  entities), or handle obfuscation. Treat the regex layer as a
+  deterministic-format check, not a semantic detector.
 - **Accuracy guarantees.** V1 ships without a measured precision/recall
   baseline against a published PII corpus. False positive and false negative
   rates on your data are not characterized. Do not rely on this package as a
