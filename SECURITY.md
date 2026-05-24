@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Email **security@opena2a.org** or open a private security advisory on the
+Email **info@opena2a.org** or open a private security advisory on the
 [`aicomply` repo](https://github.com/opena2a-org/aicomply/security/advisories/new).
 Do not file public GitHub issues for security reports.
 
