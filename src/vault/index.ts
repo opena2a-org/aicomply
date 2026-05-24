@@ -13,10 +13,13 @@ const IV_LENGTH = 12; // 96-bit IV for GCM
 const TAG_LENGTH = 16; // 128-bit auth tag
 const KEY_LENGTH = 32; // 256-bit key
 
-export interface VaultEntry {
-  encrypted: Buffer;
-  iv: Buffer;
-  authTag: Buffer;
+// Internal map-value type. Not exported: keeps `Buffer` (Node-only) out of
+// the published .d.ts surface so consumers using bundler-mode TypeScript
+// without `@types/node` don't hit TS2591 when resolving the package.
+interface VaultEntry {
+  encrypted: Uint8Array;
+  iv: Uint8Array;
+  authTag: Uint8Array;
   createdAt: number;
 }
 
