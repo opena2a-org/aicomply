@@ -24,7 +24,7 @@ const result = await comply({
 });
 
 console.log(result.verdict);     // 'VIOLATION'
-console.log(result.violations);  // [{ type: 'SSN', confidence: 0.99, ... }]
+console.log(result.violations);  // [{ type: 'SSN', confidence: 0.95, value: '123-...89', ... }]
 ```
 
 Drop it into your agent's tool-result handler, your message-egress wrapper, or anywhere content crosses a trust boundary.
@@ -38,7 +38,7 @@ Drop it into your agent's tool-result handler, your message-egress wrapper, or a
 | Credentials | AWS keys, GitHub tokens, Bearer tokens, generic `api_key=` |
 | Government markings | CUI, FOUO, CONTROLLED |
 
-Pattern source lives at [`src/classifier/regex/patterns.ts`](./src/classifier/regex/patterns.ts) — not secret, designed to be reviewed and tuned for your context.
+Pattern source lives at [`src/classifier/regex/patterns.ts`](https://github.com/opena2a-org/aicomply/blob/main/src/classifier/regex/patterns.ts) — not secret, designed to be reviewed and tuned for your context.
 
 ## What V1 does NOT do
 
