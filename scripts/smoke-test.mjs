@@ -48,6 +48,7 @@ try {
     'package/dist/index.d.ts',
     'package/README.md',
     'package/LICENSE',
+    'package/SECURITY.md',
     'package/package.json',
   ];
   const tarList = run(`tar -tzf "${tarballPath}"`).split('\n');
