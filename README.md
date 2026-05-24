@@ -67,9 +67,22 @@ The cache warms once on `create()`. Subsequent `comply()` calls do no network I/
 
 ## Verdict semantics
 
-- **`CLEAN`** — no findings; safe to forward
-- **`VIOLATION`** — one or more findings; the `violations` array is the audit trail
-- **`DENY`** — hard block (a policy pack triggered, or supply-chain Registry said the source package is untrusted); treat as fatal
+- **`CLEAN`**: no findings; safe to forward
+- **`VIOLATION`**: one or more findings; the `violations` array is the audit trail
+- **`DENY`**: hard block (a policy pack triggered, or supply-chain Registry said the source package is untrusted); treat as fatal
+
+## Inspecting per-classifier results
+
+Every result also carries a `classifierResults` mirror with each layer's raw verdict, useful for debugging or logging which layer fired:
+
+```typescript
+const result = await comply({ content });
+
+result.classifierResults.regex; // { classifier: 'regex', verdict, violations }
+result.classifierResults.guard; // undefined in V1 (Guard ships in V2)
+```
+
+Treat `verdict` and `violations` as the contract; `classifierResults` is an introspection hook, not part of the stable API shape.
 
 ## License
 
