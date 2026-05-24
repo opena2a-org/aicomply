@@ -36,4 +36,4 @@ console.log(result.violations); // [{ type: 'PAN', ... }]
 
 ## License
 
-UNLICENSED -- Private package.
+Apache-2.0 — see [LICENSE](./LICENSE).
