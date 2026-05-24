@@ -12,7 +12,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "jest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "smoke-test": "node scripts/smoke-test.mjs"
   },
   "repository": {
     "type": "git",
