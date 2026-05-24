@@ -1,0 +1,83 @@
+name: Release
+
+# Publishes @opena2a/aicomply to npm via Trusted Publishing (OIDC).
+# Triggered by pushing a v* tag (e.g. v0.1.0). No NPM_TOKEN secret is used —
+# the npm registry exchanges GitHub's OIDC token for short-lived publish
+# credentials. One-time setup required on npmjs.com:
+#   Package settings → Publishing access → Trusted Publisher → GitHub Actions
+#     Organization:        opena2a-org
+#     Repository:          aicomply
+#     Workflow filename:   release.yml
+#     Environment:         (blank)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Build, test, publish
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write   # required for npm Trusted Publishing (OIDC)
+      contents: write   # required to create the GitHub Release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify version matches tag
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag ($TAG_VERSION)"
+            exit 1
+          fi
+          echo "Version check passed: $PKG_VERSION"
+
+      - name: Check if version already published (idempotence)
+        id: published
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if npm view "@opena2a/aicomply@$PKG_VERSION" version >/dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "Version $PKG_VERSION already on npm — skipping publish"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: steps.published.outputs.already == 'false'
+        run: npm publish --provenance --access public
+
+      - name: Create GitHub Release
+        if: steps.published.outputs.already == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes

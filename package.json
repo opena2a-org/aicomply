@@ -1,13 +1,13 @@
 {
   "name": "@opena2a/aicomply",
   "version": "0.1.0",
-  "private": true,
   "description": "Dual-layer compliance classifier for AI agent communications",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -19,7 +19,14 @@
     "url": "https://github.com/opena2a-org/aicomply.git"
   },
   "homepage": "https://github.com/opena2a-org/aicomply",
-  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/opena2a-org/aicomply/issues"
+  },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "devDependencies": {
     "@types/jest": "^29.5.0",
     "@types/node": "^20.0.0",
