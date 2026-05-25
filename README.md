@@ -1,5 +1,7 @@
 # @opena2a/aicomply
 
+[![Status: beta](https://img.shields.io/badge/status-beta-yellow)](./STATUS.md)
+
 Inline content classifier for AI agent I/O. Detects PII, credentials, regulated data, and other sensitive content before your agent ships it to a cloud LLM.
 
 ## Why this exists
