@@ -3,9 +3,20 @@
  */
 
 import type { RegistryIntelligenceCache, RegistryCacheOptions } from './registry';
+import type { NormalizationStep } from './normalize/types';
 export type { RegistryCacheOptions };
+export type { NormalizationStep, NormalizationTransform, DecodedExtraction } from './normalize/types';
 
 export type Verdict = 'CLEAN' | 'VIOLATION' | 'DENY';
+
+/**
+ * Where a regex match was found. Findings from the canonical normalized
+ * stream are tagged `normalized`; findings from a compact (whitespace-
+ * removed) view or a Base64/URL-decoded payload are tagged accordingly
+ * so callers can distinguish a raw match from one that required
+ * normalization to surface.
+ */
+export type ViolationView = 'normalized' | 'compact' | 'decoded-base64' | 'decoded-url';
 
 export interface Violation {
   type: string;
@@ -14,6 +25,22 @@ export interface Violation {
   end: number;
   confidence: number;
   classifier: 'regex' | 'guard';
+  /**
+   * Which content view this match came from. 'normalized' is the default
+   * (NFKC + zero-width-stripped). 'compact' / 'decoded-*' indicate the
+   * match only surfaced after additional adversarial-mutation handling.
+   */
+  view?: ViolationView;
+  /**
+   * Best-effort start position in the ORIGINAL (pre-normalization) content.
+   * May equal `start` when no transforms changed offsets. For decoded
+   * extractions, points at the enclosing encoded token in the original.
+   */
+  originalStart?: number;
+  /**
+   * Best-effort end position in the ORIGINAL content.
+   */
+  originalEnd?: number;
 }
 
 export interface ClassifierResult {
@@ -88,4 +115,20 @@ export interface ComplyResult {
     supplyChainBlock: boolean;
     packageName?: string;
   };
+  /**
+   * The input as received, byte-identical to the caller's `content`.
+   * Always set in v1.0+ so consumers can build their own audit trails.
+   */
+  originalContent?: string;
+  /**
+   * The canonicalized form after NFKC + zero-width / bidi-control stripping.
+   * Equals originalContent when no transforms applied.
+   */
+  normalizedContent?: string;
+  /**
+   * Ordered list of normalization transforms applied to produce
+   * normalizedContent and the compact / decoded views that were scanned.
+   * Empty when the input required no canonicalization.
+   */
+  normalizations?: NormalizationStep[];
 }

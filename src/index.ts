@@ -10,12 +10,18 @@ export type {
   ComplyResult,
   ClassifierResult,
   Violation,
+  ViolationView,
   Verdict,
   RiskContext,
   PolicyPack,
   PolicyRule,
   RegistryCacheOptions,
+  NormalizationStep,
+  NormalizationTransform,
+  DecodedExtraction,
 } from './types';
+
+export { normalize } from './normalize';
 
 export { classifyWithRegex } from './classifier/regex';
 export { classifyDualLayer } from './classifier/dual-layer';

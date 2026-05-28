@@ -21,7 +21,8 @@ import { GuardClient } from '../guard-client';
 import { verifyClassification } from '../../arp/verify';
 import { RegistryIntelligenceCache } from '../../registry';
 import { assembleRiskContext } from '../../risk';
-import type { ClassifierResult, ComplyResult, PolicyPack, RiskContext, Violation } from '../../types';
+import { normalize } from '../../normalize';
+import type { ClassifierResult, ComplyResult, PolicyPack, RiskContext, Violation, ViolationView } from '../../types';
 import type {
   NanoMindGuardResult,
   NanoMindGuardVerifyOptions,
@@ -101,8 +102,11 @@ export async function classifyDualLayer(
   content: string,
   options?: DualLayerOptions,
 ): Promise<ComplyResult> {
-  // Always run regex classifier
-  const regexResult = classifyWithRegex(content);
+  // Pre-regex adversarial normalization (CHIEF-CSR 2026-05-28).
+  // NFKC + zero-width strip produce normalizedContent; the compact form
+  // and any Base64/URL-decoded segments are scanned in addition.
+  const norm = normalize(content);
+  const regexResult = scanAllViews(norm);
 
   let baseResult: Omit<ComplyResult, 'registrySignals'>;
 
@@ -206,7 +210,66 @@ export async function classifyDualLayer(
     result = applyPolicyPack(result, options.policyPack);
   }
 
+  // Attach normalization metadata to every result so consumers have an
+  // audit trail of what canonicalization the input went through.
+  result.originalContent = norm.originalContent;
+  result.normalizedContent = norm.normalizedContent;
+  result.normalizations = norm.steps;
+
   return result;
+}
+
+/**
+ * Run the regex classifier across every content view produced by the
+ * normalization pipeline: the canonical normalized stream, the compact
+ * whitespace-removed view, and any Base64/URL-decoded extractions.
+ *
+ * Findings are tagged with the view they came from. Duplicates are
+ * suppressed when a match in a non-normalized view points at the same
+ * (type, originalStart, originalEnd) range as one already found in
+ * the normalized view — avoids double-reporting the same SSN that's
+ * detected both raw and via the compact-form pass.
+ */
+function scanAllViews(norm: ReturnType<typeof normalize>): ClassifierResult {
+  const normalizedScan = classifyWithRegex(norm.normalizedContent, {
+    view: 'normalized',
+    offsetMap: norm.offsetMap,
+  });
+
+  const all: Violation[] = [...normalizedScan.violations];
+  const seen = new Set<string>();
+  for (const v of all) {
+    seen.add(`${v.type}@${v.originalStart}-${v.originalEnd}`);
+  }
+
+  for (const ext of norm.decodedExtractions) {
+    const viewTag: ViolationView =
+      ext.source === 'base64' ? 'decoded-base64' : 'decoded-url';
+    // The compact-form view (whitespace-stripped) is also carried as a
+    // DecodedExtraction with source='url'; distinguish by checking
+    // whether the decoded text contains percent-escapes the original
+    // would have had. Compact form has no percent-escapes; URL-decoded
+    // content does (otherwise tryUrlDecode would have rejected it).
+    const isCompactForm = ext.source === 'url' && !ext.decoded.includes('%');
+    const taggedView: ViolationView = isCompactForm ? 'compact' : viewTag;
+
+    const scan = classifyWithRegex(ext.decoded, {
+      view: taggedView,
+      originalAnchor: { start: ext.originalStart, end: ext.originalEnd },
+    });
+    for (const v of scan.violations) {
+      const key = `${v.type}@${v.originalStart}-${v.originalEnd}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      all.push(v);
+    }
+  }
+
+  return {
+    classifier: 'regex',
+    verdict: all.length === 0 ? 'CLEAN' : 'VIOLATION',
+    violations: all,
+  };
 }
 
 /**
