@@ -75,8 +75,20 @@ export async function comply(
   options: ComplyOptions,
   dualLayerOptions?: DualLayerOptions,
 ): Promise<ComplyResult> {
-  if (!options?.content) {
-    // Empty / falsy content. Populate the audit fields so consumers can
+  // Reject non-string content explicitly so consumers can't silently
+  // bypass classification by passing a number, object, array, or missing
+  // key (`comply({})`). Empty string is allowed and short-circuits with
+  // a CLEAN result + populated audit fields.
+  if (options === null || typeof options !== 'object') {
+    throw new TypeError('comply: options must be an object');
+  }
+  if (options.content !== undefined && typeof options.content !== 'string') {
+    throw new TypeError(
+      `comply: options.content must be a string (got ${typeof options.content})`,
+    );
+  }
+  if (!options.content) {
+    // Empty / missing content. Populate the audit fields so consumers can
     // rely on `originalContent` / `normalizedContent` / `normalizations`
     // being present in the result type (per types.ts ComplyResult contract).
     return {
@@ -85,8 +97,8 @@ export async function comply(
       classifierResults: {
         regex: { classifier: 'regex', verdict: 'CLEAN', violations: [] },
       },
-      originalContent: options?.content ?? '',
-      normalizedContent: options?.content ?? '',
+      originalContent: options.content ?? '',
+      normalizedContent: options.content ?? '',
       normalizations: [],
     };
   }

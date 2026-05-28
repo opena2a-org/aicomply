@@ -1,6 +1,6 @@
 {
   "name": "@opena2a/aicomply",
-  "version": "0.1.1",
+  "version": "1.0.0",
   "description": "Dual-layer compliance classifier for AI agent communications",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -8,7 +8,8 @@
     "dist",
     "README.md",
     "LICENSE",
-    "SECURITY.md"
+    "SECURITY.md",
+    "STATUS.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

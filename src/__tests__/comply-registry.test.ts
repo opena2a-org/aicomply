@@ -39,6 +39,39 @@ afterEach(() => {
 // comply() — no registry options
 // ---------------------------------------------------------------------------
 
+describe('comply(): input validation (v1.0 hardening)', () => {
+  it('throws TypeError when content is not a string (number)', async () => {
+    await expect(comply({ content: 123 as unknown as string })).rejects.toThrow(TypeError);
+  });
+
+  it('throws TypeError when content is not a string (object)', async () => {
+    await expect(comply({ content: {} as unknown as string })).rejects.toThrow(TypeError);
+  });
+
+  it('throws TypeError when options is null', async () => {
+    await expect(comply(null as unknown as ComplyOptions)).rejects.toThrow(TypeError);
+  });
+
+  it('returns CLEAN on missing content key (no throw, populated audit fields)', async () => {
+    const r = await comply({} as ComplyOptions);
+    expect(r.verdict).toBe('CLEAN');
+    expect(r.originalContent).toBe('');
+    expect(r.normalizedContent).toBe('');
+    expect(r.normalizations).toEqual([]);
+  });
+
+  it('returns CLEAN on undefined content (allowed)', async () => {
+    const r = await comply({ content: undefined as unknown as string });
+    expect(r.verdict).toBe('CLEAN');
+  });
+
+  it('omits classifierResults.guard when Guard is unreachable (key absent, not undefined)', async () => {
+    const r = await comply({ content: 'hello world' });
+    expect('guard' in r.classifierResults).toBe(false);
+    expect(r.classifierResults.regex).toBeDefined();
+  });
+});
+
 describe('comply(): no registry options', () => {
   it('returns CLEAN with no registrySignals for safe content', async () => {
     const result = await comply({ content: SAFE_CONTENT });

@@ -181,10 +181,13 @@ export async function classifyDualLayer(
     baseResult = {
       verdict: mergeVerdicts(regexResult, guardResult),
       violations: allViolations,
-      classifierResults: {
-        regex: regexResult,
-        guard: guardResult ?? undefined,
-      },
+      // Only set `guard` when an actual result exists, so the key is
+      // absent (not `undefined`) on the regex-only fallback path. This
+      // matches the declared `guard?: ClassifierResult` optional shape
+      // and lets consumers use `'guard' in classifierResults` reliably.
+      classifierResults: guardResult
+        ? { regex: regexResult, guard: guardResult }
+        : { regex: regexResult },
     };
   }
 
