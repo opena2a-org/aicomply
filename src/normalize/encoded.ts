@@ -83,7 +83,7 @@ interface CandidateMatch {
   text: string;
   start: number;
   end: number;
-  source: 'base64' | 'url';
+  source: 'decoded-base64' | 'decoded-url';
 }
 
 function findCandidates(input: string): CandidateMatch[] {
@@ -93,7 +93,7 @@ function findCandidates(input: string): CandidateMatch[] {
   BASE64_PATTERN.lastIndex = 0;
   while ((m = BASE64_PATTERN.exec(input)) !== null) {
     if (m[0].length >= MIN_CANDIDATE_LENGTH) {
-      out.push({ text: m[0], start: m.index, end: m.index + m[0].length, source: 'base64' });
+      out.push({ text: m[0], start: m.index, end: m.index + m[0].length, source: 'decoded-base64' });
     }
   }
 
@@ -101,7 +101,7 @@ function findCandidates(input: string): CandidateMatch[] {
   while ((m = URL_PATTERN.exec(input)) !== null) {
     if (m[0].length < MIN_CANDIDATE_LENGTH) continue;
     if (countPercentEscapes(m[0]) < 2) continue;
-    out.push({ text: m[0], start: m.index, end: m.index + m[0].length, source: 'url' });
+    out.push({ text: m[0], start: m.index, end: m.index + m[0].length, source: 'decoded-url' });
   }
 
   return out;
@@ -119,7 +119,7 @@ export function extractEncoded(input: string): DecodedExtraction[] {
 
   const seed = findCandidates(input);
   for (const c of seed) {
-    const decoded = c.source === 'base64' ? tryBase64Decode(c.text) : tryUrlDecode(c.text);
+    const decoded = c.source === 'decoded-base64' ? tryBase64Decode(c.text) : tryUrlDecode(c.text);
     if (decoded === null) continue;
     out.push({
       decoded,
@@ -134,7 +134,7 @@ export function extractEncoded(input: string): DecodedExtraction[] {
     const inner = findCandidates(decoded);
     for (const ic of inner) {
       const innerDecoded =
-        ic.source === 'base64' ? tryBase64Decode(ic.text) : tryUrlDecode(ic.text);
+        ic.source === 'decoded-base64' ? tryBase64Decode(ic.text) : tryUrlDecode(ic.text);
       if (innerDecoded === null) continue;
       out.push({
         decoded: innerDecoded,

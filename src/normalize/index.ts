@@ -61,42 +61,43 @@ export function normalize(content: string): NormalizationResult {
   const decodedExtractions: DecodedExtraction[] = [];
 
   // Compact form: whitespace-removed view of the normalized stream.
-  // Carried as a DecodedExtraction so the dual-layer treats it uniformly
-  // alongside Base64/URL decodings.
+  // The compact view carries a precise per-character offsetMap back to
+  // the original content (composed: compact → normalized → original) so
+  // findings inside it project to the exact source range, not the whole
+  // extraction. This is necessary for dedup against the normalized scan.
   const compact = buildCompactForm(normalizedContent);
   if (compact.removedCount > 0 && compact.compact.length > 0) {
     steps.push({ transform: 'compact-whitespace', count: compact.removedCount });
-    // Map compact positions back to original via the normalized offset map.
-    const compactOriginalStart = normalizedToOriginalMap[compact.offsetMap[0] ?? 0] ?? 0;
-    const lastCompactIdx = compact.offsetMap[compact.offsetMap.length - 1] ?? 0;
-    const compactOriginalEnd = (normalizedToOriginalMap[lastCompactIdx] ?? content.length - 1) + 1;
+    const compactToOriginalMap = compact.offsetMap.map(
+      (normIdx) => normalizedToOriginalMap[normIdx] ?? normIdx,
+    );
+    const compactOriginalStart = compactToOriginalMap[0] ?? 0;
+    const compactOriginalEnd = (compactToOriginalMap[compactToOriginalMap.length - 1] ?? content.length - 1) + 1;
     decodedExtractions.push({
       decoded: compact.compact,
       originalStart: compactOriginalStart,
       originalEnd: Math.min(compactOriginalEnd, content.length),
-      // Compact-form is not technically an encoded form, but reusing the
-      // DecodedExtraction shape keeps the dual-layer's scan loop uniform.
-      // We mark it as 'url' for the source tag since it's not Base64;
-      // callers distinguish via NormalizationStep entries on the result.
-      source: 'url',
+      source: 'compact',
       depth: 1,
+      offsetMap: compactToOriginalMap,
     });
   }
 
-  // Base64 / URL decoded payloads from the original input.
+  // Base64 / URL decoded payloads from the original input. These views
+  // have no meaningful per-character mapping into the original (the
+  // decoded chars don't correspond to sub-positions of the encoded
+  // blob), so they ship without an offsetMap — findings get anchored
+  // to the whole encoded token via originalStart/End.
   const encoded = extractEncoded(content);
+  let base64Count = 0;
+  let urlCount = 0;
   for (const ext of encoded) {
     decodedExtractions.push(ext);
-    if (ext.source === 'base64') {
-      const existing = steps.find((s) => s.transform === 'decode-base64');
-      if (existing) existing.count += 1;
-      else steps.push({ transform: 'decode-base64', count: 1 });
-    } else {
-      const existing = steps.find((s) => s.transform === 'decode-url');
-      if (existing) existing.count += 1;
-      else steps.push({ transform: 'decode-url', count: 1 });
-    }
+    if (ext.source === 'decoded-base64') base64Count += 1;
+    else urlCount += 1;
   }
+  if (base64Count > 0) steps.push({ transform: 'decode-base64', count: base64Count });
+  if (urlCount > 0) steps.push({ transform: 'decode-url', count: urlCount });
 
   return {
     originalContent: content,

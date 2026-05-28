@@ -76,12 +76,18 @@ export async function comply(
   dualLayerOptions?: DualLayerOptions,
 ): Promise<ComplyResult> {
   if (!options?.content) {
+    // Empty / falsy content. Populate the audit fields so consumers can
+    // rely on `originalContent` / `normalizedContent` / `normalizations`
+    // being present in the result type (per types.ts ComplyResult contract).
     return {
       verdict: 'CLEAN',
       violations: [],
       classifierResults: {
         regex: { classifier: 'regex', verdict: 'CLEAN', violations: [] },
       },
+      originalContent: options?.content ?? '',
+      normalizedContent: options?.content ?? '',
+      normalizations: [],
     };
   }
 

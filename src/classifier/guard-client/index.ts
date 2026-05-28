@@ -51,12 +51,18 @@ export class GuardClient {
    */
   async isAvailable(): Promise<boolean> {
     if (!existsSync(this.socketPath)) return false;
+    let socket;
     try {
-      await this.openConnection(Math.min(this.timeoutMs, 200)).then((s) => s.end());
-      return true;
+      socket = await this.openConnection(Math.min(this.timeoutMs, 200));
     } catch {
       return false;
     }
+    // Half-close + force-destroy so the fd is released immediately
+    // (end() alone leaves the socket in FIN_WAIT until kernel reaps it,
+    // which leaks fds under tight-loop readiness probing).
+    socket.end();
+    socket.destroy();
+    return true;
   }
 
   /**

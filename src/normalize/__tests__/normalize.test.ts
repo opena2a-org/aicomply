@@ -118,7 +118,7 @@ describe('Base64 / URL decode extraction', () => {
     const exts = extractEncoded(`look: ${b64} end`);
     expect(exts).toHaveLength(1);
     expect(exts[0]?.decoded).toBe(payload);
-    expect(exts[0]?.source).toBe('base64');
+    expect(exts[0]?.source).toBe('decoded-base64');
     expect(exts[0]?.depth).toBe(1);
   });
 
@@ -154,14 +154,14 @@ describe('Base64 / URL decode extraction', () => {
     const inner = 'secret = ghp_THISisaGHPATtokenABCDEFGHIJKLMNOPQRSTU';
     const enc = encodeURIComponent(inner);
     const exts = extractEncoded(`q: ${enc}`);
-    const urlExt = exts.find((e) => e.source === 'url');
+    const urlExt = exts.find((e) => e.source === 'decoded-url');
     expect(urlExt?.decoded).toBe(inner);
   });
 
   it('rejects URL candidates with fewer than 2 percent-escapes', () => {
     // "a%20bcdefghijklmnopqrstuvwxyz" has only 1 escape.
     const exts = extractEncoded('a%20bcdefghijklmnopqrstuvwxyz');
-    const urlExt = exts.find((e) => e.source === 'url');
+    const urlExt = exts.find((e) => e.source === 'decoded-url');
     expect(urlExt).toBeUndefined();
   });
 
@@ -221,7 +221,7 @@ describe('normalize() pipeline end-to-end', () => {
     const inner = 'api_key=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     const b64 = Buffer.from(inner).toString('base64');
     const r = normalize(`payload: ${b64}`);
-    expect(r.decodedExtractions.some((e) => e.decoded === inner && e.source === 'base64')).toBe(true);
+    expect(r.decodedExtractions.some((e) => e.decoded === inner && e.source === 'decoded-base64')).toBe(true);
     expect(r.steps.find((s) => s.transform === 'decode-base64')).toBeDefined();
   });
 

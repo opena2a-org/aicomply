@@ -28,7 +28,12 @@ import type {
   NanoMindGuardVerifyOptions,
 } from '../../arp/types';
 
-const guardClient = new GuardClient();
+// The Guard client is constructed lazily inside classifyDualLayer (not
+// at module-top) so process.env.MOCK_GUARD_SOCKET is read at call time
+// rather than at import time. A module-top singleton would freeze
+// whatever env value happened to be set when this file was first
+// required — silently routing every classify() to that path for the
+// lifetime of the process, even after the env var changes.
 
 export interface DualLayerOptions {
   guardVerifyOptions?: NanoMindGuardVerifyOptions;
@@ -164,8 +169,9 @@ export async function classifyDualLayer(
       };
     }
   } else {
-    // Attempt Guard classifier via IPC (V1: always returns null)
-    const guardResult = await guardClient.classify(content);
+    // Attempt Guard classifier via IPC. Construct per-call so the env
+    // var read happens at classify time, not at module load time.
+    const guardResult = await new GuardClient().classify(content);
 
     const allViolations: Violation[] = [...regexResult.violations];
     if (guardResult) {
@@ -210,10 +216,19 @@ export async function classifyDualLayer(
     result = applyPolicyPack(result, options.policyPack);
   }
 
-  // Attach normalization metadata to every result so consumers have an
-  // audit trail of what canonicalization the input went through.
-  result.originalContent = norm.originalContent;
-  result.normalizedContent = norm.normalizedContent;
+  // Attach normalization metadata so consumers have an audit trail of
+  // what canonicalization the input went through. On the parse-to-deny
+  // (invalid Guard signature) path we deliberately omit originalContent
+  // and normalizedContent: the input may be attacker-controlled bytes
+  // and downstream log pipelines should not echo them back into
+  // operator dashboards without redaction. The structured
+  // `normalizations` array is safe to keep — it carries counts, not raw
+  // bytes — and lets auditors see which transforms ran.
+  const isParseToDeny = result.signatureValid === false;
+  if (!isParseToDeny) {
+    result.originalContent = norm.originalContent;
+    result.normalizedContent = norm.normalizedContent;
+  }
   result.normalizations = norm.steps;
 
   return result;
@@ -243,19 +258,15 @@ function scanAllViews(norm: ReturnType<typeof normalize>): ClassifierResult {
   }
 
   for (const ext of norm.decodedExtractions) {
-    const viewTag: ViolationView =
-      ext.source === 'base64' ? 'decoded-base64' : 'decoded-url';
-    // The compact-form view (whitespace-stripped) is also carried as a
-    // DecodedExtraction with source='url'; distinguish by checking
-    // whether the decoded text contains percent-escapes the original
-    // would have had. Compact form has no percent-escapes; URL-decoded
-    // content does (otherwise tryUrlDecode would have rejected it).
-    const isCompactForm = ext.source === 'url' && !ext.decoded.includes('%');
-    const taggedView: ViolationView = isCompactForm ? 'compact' : viewTag;
-
+    // ext.source matches ViolationView 1:1 — use it directly. When
+    // ext.offsetMap is present (compact view), classifyWithRegex projects
+    // each match back to its precise original range; otherwise it falls
+    // back to the whole-token originalAnchor (decoded-base64 / decoded-url).
     const scan = classifyWithRegex(ext.decoded, {
-      view: taggedView,
-      originalAnchor: { start: ext.originalStart, end: ext.originalEnd },
+      view: ext.source,
+      ...(ext.offsetMap !== undefined
+        ? { offsetMap: ext.offsetMap }
+        : { originalAnchor: { start: ext.originalStart, end: ext.originalEnd } }),
     });
     for (const v of scan.violations) {
       const key = `${v.type}@${v.originalStart}-${v.originalEnd}`;

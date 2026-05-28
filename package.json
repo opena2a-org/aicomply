@@ -16,8 +16,8 @@
     "lint": "tsc --noEmit",
     "smoke-test": "node scripts/smoke-test.mjs",
     "accuracy:generate": "node bench/generate.mjs",
-    "accuracy:measure": "node bench/measure.mjs",
-    "accuracy:update-baseline": "node bench/measure.mjs --update-baseline"
+    "accuracy:measure": "npm run build && node bench/measure.mjs",
+    "accuracy:update-baseline": "npm run build && node bench/measure.mjs --update-baseline"
   },
   "repository": {
     "type": "git",

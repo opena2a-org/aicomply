@@ -46,6 +46,62 @@ describe('comply() under adversarial mutations (v1.0 normalization)', () => {
     expect(finding?.originalEnd).toBe('payload: '.length + b64.length);
   });
 
+  it('detects a URL-encoded credential and tags it `decoded-url` (not `compact`)', async () => {
+    // Regression: code-review surfaced an inverted heuristic that
+    // mistagged URL-decoded findings as `compact` because decoded
+    // payloads typically don't contain a literal `%`. Fixed by carrying
+    // the view tag on DecodedExtraction.source directly.
+    const inner = 'secret = ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const enc = encodeURIComponent(inner);
+    const r = await comply({ content: `query: ${enc}` });
+    expect(r.verdict).toBe('VIOLATION');
+    const finding = r.violations.find((v) => v.view === 'decoded-url');
+    expect(finding).toBeDefined();
+    expect(r.violations.find((v) => v.view === 'compact' && v.type === 'CREDENTIAL')).toBeUndefined();
+  });
+
+  it('does NOT double-report mixed-injection: one SSN whitespace-injected + one canonical', async () => {
+    // Regression: code-review found the compact-view dedup was broken
+    // because compact findings inherited a whole-extraction anchor that
+    // never matched the per-finding offsets from the normalized scan.
+    // Fixed by carrying a per-character offsetMap on the compact view.
+    const r = await comply({
+      content: 'first 1 2 3-45-6789 then 555-12-3456 confidential',
+    });
+    expect(r.verdict).toBe('VIOLATION');
+    const ssnHits = r.violations.filter((v) => v.type === 'SSN');
+    // Two distinct SSNs, two violations — neither double-reported.
+    expect(ssnHits).toHaveLength(2);
+    // The whitespace-injected one surfaces via the compact view; the
+    // un-injected one via the normalized view.
+    const views = new Set(ssnHits.map((v) => v.view));
+    expect(views).toContain('normalized');
+    expect(views).toContain('compact');
+  });
+
+  it('omits originalContent and normalizedContent on parse-to-deny (untrusted bytes)', async () => {
+    // Regression: code-review flagged that the invalid-Guard-signature
+    // path echoed attacker-controlled input back via originalContent,
+    // allowing log-injection / ANSI-escape attacks in downstream
+    // operator dashboards. Fix omits raw byte fields on parse-to-deny
+    // but keeps the structured `normalizations` array for auditors.
+    const { classifyDualLayer } = await import('../index');
+    const helpers = await import('../../../arp/__tests__/test-helpers');
+    const signer = helpers.generateTestKeyPair();
+    const verifier = helpers.generateTestKeyPair();
+    const content = 'attacker content with X escape';
+    const guardResult = helpers.signGuardResult(signer, 'documentation', content);
+    const r = await classifyDualLayer(content, {
+      guardResult,
+      guardVerifyOptions: helpers.makeVerifyOptions(verifier),
+    });
+    expect(r.signatureValid).toBe(false);
+    expect(r.verdict).toBe('DENY');
+    expect(r.originalContent).toBeUndefined();
+    expect(r.normalizedContent).toBeUndefined();
+    expect(Array.isArray(r.normalizations)).toBe(true);
+  });
+
   it('preserves originalContent + sets normalizedContent + records normalization steps', async () => {
     const r = await comply({ content: '１２３-４５-６７８９' });
     expect(r.originalContent).toBe('１２３-４５-６７８９');
@@ -74,8 +130,12 @@ describe('comply() under adversarial mutations (v1.0 normalization)', () => {
   it('handles empty content without normalization metadata (early return)', async () => {
     const r = await comply({ content: '' });
     expect(r.verdict).toBe('CLEAN');
-    // Early-return path in comply() does not run normalize(); these
-    // fields are undefined, which is acceptable for the empty-input case.
-    expect(r.originalContent).toBeUndefined();
+    // Empty input still populates the audit fields per the types.ts
+    // contract — originalContent / normalizedContent / normalizations
+    // are always defined on v1.0+ results so consumers can rely on
+    // them without `??`-guarding every access.
+    expect(r.originalContent).toBe('');
+    expect(r.normalizedContent).toBe('');
+    expect(r.normalizations).toEqual([]);
   });
 });

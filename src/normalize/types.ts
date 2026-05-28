@@ -27,22 +27,42 @@ export interface NormalizationStep {
 }
 
 /**
- * A segment of decoded content extracted from the original (Base64 or
- * percent-encoded). Scanned in addition to the main normalized stream so
- * regex findings inside the decoded form attribute back to the source
- * token in the original content.
+ * An additional view of the content scanned alongside the canonical
+ * normalized stream. Each view carries its own anchoring back to the
+ * original content so findings attribute correctly.
+ *
+ * The `source` tag matches `ViolationView` 1:1 (minus `'normalized'`),
+ * so the dual-layer can use it as the view tag directly without
+ * heuristic re-derivation.
  */
 export interface DecodedExtraction {
-  /** The decoded text (ASCII-printable; non-printable decodes are rejected upstream). */
+  /** The view's text (ASCII-printable; non-printable decodes are rejected upstream). */
   decoded: string;
-  /** Where the source token starts in the ORIGINAL content. */
+  /** Where the view's source range starts in the ORIGINAL content. */
   originalStart: number;
-  /** Where the source token ends in the ORIGINAL content (exclusive). */
+  /** Where the view's source range ends in the ORIGINAL content (exclusive). */
   originalEnd: number;
-  /** Which encoding produced this extraction. */
-  source: 'base64' | 'url';
-  /** Recursion depth (1 = decoded directly from original; 2 = decoded from a depth-1 result). */
+  /**
+   * Which view this is. `'compact'` = whitespace-stripped form of the
+   * normalized stream. `'decoded-base64'` / `'decoded-url'` = decoded
+   * payload from an encoded blob in the original.
+   */
+  source: 'compact' | 'decoded-base64' | 'decoded-url';
+  /**
+   * Recursion depth for decoded views (1 = decoded directly from
+   * original; 2 = decoded from a depth-1 result). Always 1 for
+   * `'compact'`.
+   */
   depth: number;
+  /**
+   * Per-character map from `decoded[i]` back to the corresponding
+   * position in the ORIGINAL content. Present for `'compact'` (where
+   * we know the projection precisely); absent for `'decoded-base64'`
+   * / `'decoded-url'` (where the decoded payload's chars don't have
+   * a meaningful sub-position inside the encoded blob — findings are
+   * anchored to the whole encoded token via originalStart/End).
+   */
+  offsetMap?: number[];
 }
 
 export interface NormalizationResult {
