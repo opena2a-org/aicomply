@@ -18,10 +18,20 @@ we will agree on a public advisory date with the reporter.
 
 ## Supported versions
 
-`@opena2a/aicomply` is pre-1.0 and ships from a single supported line.
-Security fixes target the latest published minor; older minors do not receive
-backports. Pin exact versions in production (`"@opena2a/aicomply": "0.1.0"`)
-and consume security fixes by bumping.
+Starting at `1.0.0`, `@opena2a/aicomply` follows [semantic versioning](https://semver.org/):
+
+- **Patch** (`1.0.x`): security and bug fixes; no API surface changes.
+- **Minor** (`1.x.0`): additive features; existing exports remain backwards-compatible.
+- **Major** (`x.0.0`): breaking changes to `comply()` / `ClassificationSession` /
+  result shape, accompanied by a migration note in the release.
+
+Security fixes target the **latest two minor lines** for 90 days after a new
+minor ships, and the latest major line indefinitely. Pre-1.0 lines (`0.x`)
+are no longer supported as of `1.0.0`. Pin exact versions in production
+(`"@opena2a/aicomply": "1.0.0"`, no caret) and consume fixes by bumping.
+
+Breaking changes are announced via the `0.x` -> `1.0.0` transition note in
+the release and re-stated in CHANGELOG entries when subsequent majors arrive.
 
 ## What this package is and isn't
 
@@ -39,26 +49,72 @@ posture — not a complete control.
 - Registry intelligence cache integrity (cache-miss treated as unknown, not clean —
   contract AC-002)
 
-### Out of threat model scope (V1)
-- **Adversarial mutation of regex inputs.** V1 does not normalize Unicode
-  homoglyphs (for example, Cyrillic small letter e at U+0435 visually
-  resembles Latin small letter e at U+0065), strip whitespace injection
-  (`1 2 3-4 5-6 7 8 9`), decode encoded forms (Base64, URL-encoded, HTML
-  entities), or handle obfuscation. Treat the regex layer as a
-  deterministic-format check, not a semantic detector.
-- **Accuracy guarantees.** V1 ships without a measured precision/recall
-  baseline against a published PII corpus. False positive and false negative
-  rates on your data are not characterized. Do not rely on this package as a
-  sole detection control where adversarial users can craft inputs.
-- **Side-channel resistance.** Timing of `comply()` may leak coarse information
-  about input length and pattern density. Not designed against timing attacks.
-- **Registry availability.** L2 logic (fleet anomaly threshold, supply-chain
-  hard block) is best-effort and depends on the configured Registry endpoint.
-  Cache miss does not fail closed; it surfaces signals so callers decide.
-- **Guard classifier (V2).** The `GuardClient` ships as a stub in V1 and
-  always reports unavailable. Any V2 guarantees about neural classification
-  (semantic context, intent detection) apply only after the NanoMind-Guard
-  daemon ships and is reachable.
+### Adversarial-mutation handling (covered in 1.0)
+
+A pre-regex normalization layer canonicalizes input before patterns run.
+Covered mutation classes:
+
+- **Unicode homoglyphs** via NFKC compatibility composition (fullwidth
+  digits `１２３` → `123`, math-alphanumerics, ligatures `ﬃ` → `ffi`).
+- **Zero-width / bidi control injection** (U+200B–200F, U+202A–202E,
+  U+2060, U+2066–2069, U+FEFF) — stripped from the canonical stream.
+- **Intra-token whitespace injection** (`1 2 3 - 4 5 - 6 7 8 9`) — scanned
+  as a compact view in addition to the canonical stream. Whitespace is
+  only collapsed between digit/separator characters so prose word
+  boundaries are preserved.
+- **Base64 / URL-encoded wrapping** of sensitive payloads — extracted as
+  decoded views (bounded depth 2, length ≥ 24 chars, ASCII-printable
+  round-trip gate).
+
+Findings carry a `view` field (`normalized` / `compact` / `decoded-base64`
+/ `decoded-url`) and original-content anchoring so consumers can audit
+which canonicalization surfaced each match.
+
+### Measured accuracy (1.0 baseline)
+
+Per-class precision / recall / F1 are measured against the synthetic
+corpus at `bench/corpus/*.jsonl` (200 positives + 200 hard-negatives per
+class, 3200 records total). The corpus deliberately includes adversarial
+variants so the baseline reflects normalization coverage:
+
+| Class      | Precision | Recall | F1   |
+|------------|-----------|--------|------|
+| SSN        | 1.000     | 1.000  | 1.00 |
+| PAN        | 1.000     | 1.000  | 1.00 |
+| IBAN       | 0.990     | 1.000  | 0.995 |
+| NPI        | 1.000     | 1.000  | 1.00 |
+| CUI        | 1.000     | 1.000  | 1.00 |
+| CREDENTIAL | 1.000     | 1.000  | 1.00 |
+| PASSPORT   | 1.000     | 1.000  | 1.00 |
+| MRN        | 1.000     | 1.000  | 1.00 |
+
+These are baseline numbers on the synthetic corpus, not field-rate
+guarantees. Real-world inputs may differ; treat the baseline as a CI
+regression gate rather than an SLA. The corpus and harness are public
+(`bench/`) so consumers can regenerate against their own data.
+
+### Still out of threat model scope (1.0)
+
+- **Steganography, language translation, adversarial LLM rephrasing.**
+  These require the Guard semantic layer; the regex tier is a syntactic
+  detector by design.
+- **Cyrillic / Greek look-alikes that are not NFKC-equivalent** (e.g.
+  Cyrillic small letter а at U+0430 vs Latin a at U+0061). NFKC does not
+  fold these because they are separate semantic letters. Document-level
+  defense requires the Guard layer.
+- **Soft hyphen and combining marks.** Not stripped — deferred to v1.1.
+- **Side-channel resistance.** Timing of `comply()` may leak coarse
+  information about input length and pattern density. Not designed
+  against timing attacks.
+- **Registry availability.** L2 logic (fleet anomaly threshold,
+  supply-chain hard block) is best-effort and depends on the configured
+  Registry endpoint. Cache miss does not fail closed; it surfaces signals
+  so callers decide.
+- **NanoMind-Guard semantic classifier.** The IPC client is wired and
+  testable as of 1.0, but the real Guard binary depends on NanoMind
+  Phase 2b training (external to this repo). Until that ships, `comply()`
+  falls back to regex-only — which is sufficient for the syntactic
+  classes above but does not provide semantic context detection.
 
 ### Out of repo scope
 - Vulnerabilities in the Registry server backend (`opena2a-registry` repo).
@@ -73,6 +129,12 @@ posture — not a complete control.
   implemented via [`@noble/post-quantum`](https://www.npmjs.com/package/@noble/post-quantum).
   This is **not** a FIPS-validated implementation. Do not use this package in
   contexts that require a FIPS 140-3 boundary.
+- **FIPS roadmap (post-1.0).** A FIPS-validated backend is planned as a
+  pluggable verifier option for consumers under FIPS 140-3 obligations.
+  Target: 1.1 with an opt-in option (`{ crypto: 'fips' }`) backed by a
+  validated library (AWS LC, BoringSSL FIPS, or equivalent). Until then,
+  the only validated path is to verify ARP signatures out-of-band before
+  passing classifications to AIComply.
 - **Algorithm choice.** ML-DSA-44 (NIST FIPS 204, Dilithium) is the
   AIComply-side verify target. The signer (HMA / ARP issuer) uses ML-DSA-44 as
   well to match. AIM / ATX use ML-DSA-65 for issuer signatures — they are
@@ -84,18 +146,25 @@ posture — not a complete control.
 
 ## Known limitations affecting security posture
 
-1. **Stub Guard means single-layer in V1.** Until the NanoMind-Guard daemon
-   ships, the "dual-layer" classifier is effectively single-layer (regex). The
-   dual-layer merge logic is correct; the second layer is absent.
-2. **No corpus-validated FP rate.** A determined attacker can probably find
-   regex bypasses by inspecting `src/classifier/regex/patterns.ts`. The
-   patterns are not secret and not designed to be.
+1. **Single-layer until Guard ships.** The IPC client is wired and testable,
+   but no NanoMind-Guard binary is published yet. Phase 2b training is the
+   external gate. Until then `comply()` is regex-only.
+2. **Pattern source is public.** A determined attacker can find regex
+   bypasses by inspecting `src/classifier/regex/patterns.ts`. The patterns
+   are not secret and not designed to be — they are designed to be reviewed
+   and tuned for your context. Combine with the Guard layer (when ready)
+   and your own controls for adversarial-input scenarios.
 3. **Network endpoints default to `api.oa2a.org`.** Callers using L2 logic
    should configure their own `baseUrl` if they require an air-gapped or
    self-hosted Registry; otherwise traffic egresses to the OpenA2A backend.
-4. **Telemetry.** V1 does not emit telemetry from this package directly.
-   The Registry cache *fetches* from the Registry — the Registry sees those
+4. **Telemetry.** This package does not emit telemetry directly. The
+   Registry cache *fetches* from the Registry — the Registry sees those
    reads. No PII content is transmitted from `comply()`.
+5. **Synthetic-corpus baseline is not a field SLA.** The accuracy numbers
+   in this document are measured against `bench/corpus/*.jsonl`, which is
+   designed-attacker-aware but not exhaustive of real-world adversarial
+   input. Regression-gating is in CI; field accuracy is a separate
+   investment.
 
 ## Hardening checklist for consumers
 

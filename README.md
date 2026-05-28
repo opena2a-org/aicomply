@@ -1,6 +1,6 @@
 # @opena2a/aicomply
 
-[![Status: beta](https://img.shields.io/badge/status-beta-yellow)](./STATUS.md)
+[![Status: stable](https://img.shields.io/badge/status-stable-brightgreen)](./STATUS.md)
 
 Inline content classifier for AI agent I/O. Detects PII, credentials, regulated data, and other sensitive content before your agent ships it to a cloud LLM.
 
@@ -31,24 +31,53 @@ console.log(result.violations);  // [{ type: 'SSN', confidence: 0.95, value: '12
 
 Drop it into your agent's tool-result handler, your message-egress wrapper, or anywhere content crosses a trust boundary.
 
-## What it detects (V1)
+## What it detects
 
-| Class | Examples |
-|---|---|
-| PII | SSN, passport numbers, medical record numbers, NPI |
-| Financial | PAN (Luhn-validated), IBAN |
-| Credentials | AWS keys, GitHub tokens, Bearer tokens, generic `api_key=` |
-| Government markings | CUI, FOUO, CONTROLLED |
+| Class      | Examples                                                       |
+|------------|----------------------------------------------------------------|
+| PII        | SSN, passport numbers, medical record numbers, NPI             |
+| Financial  | PAN (Luhn-validated), IBAN (mod-97-validated)                  |
+| Credentials| AWS keys, GitHub tokens, Bearer tokens, generic `api_key=` |
+| Government | CUI, FOUO, CONTROLLED markings                                 |
 
 Pattern source lives at [`src/classifier/regex/patterns.ts`](https://github.com/opena2a-org/aicomply/blob/main/src/classifier/regex/patterns.ts) — not secret, designed to be reviewed and tuned for your context.
 
-## What V1 does NOT do
+## Adversarial-mutation handling
 
-Stated plainly because false confidence is worse than known gaps. Full disclosure in [SECURITY.md](./SECURITY.md).
+Inputs are canonicalized before patterns run:
 
-- **No adversarial-mutation handling.** Unicode homoglyphs, whitespace injection, encoded forms (Base64, URL-encoded) are not normalized in V1. Treat the regex layer as a format check, not a semantic detector.
-- **No semantic classifier.** V1 is regex-only. The neural layer (NanoMind-Guard) ships in V2 — the `GuardClient` export is a stub that always reports unavailable until then.
-- **No measured accuracy claim.** No published precision/recall against a labeled corpus. Don't use this as a sole control for adversarial inputs.
+- **Unicode homoglyphs** are folded via NFKC (`１２３-４５-６７８９` → `123-45-6789`).
+- **Zero-width and bidi-control characters** are stripped (`1​2​3-4​5-6​7​8​9` → `123-45-6789`).
+- **Whitespace-injected** values are scanned in a compact view that strips spaces only between digit/separator characters, so prose word boundaries stay intact (`1 2 3 - 4 5 - 6 7 8 9` matches; `My SSN is 123-45-6789` still works).
+- **Base64 / URL-encoded** payloads are extracted and scanned in addition to the canonical stream (bounded recursion, length-gated, ASCII-printable round-trip required).
+
+Every finding carries a `view` field (`normalized` / `compact` / `decoded-base64` / `decoded-url`) and best-effort original-content anchoring so you can audit which canonicalization surfaced each match.
+
+## Measured accuracy
+
+Per-class precision and recall against the synthetic corpus at [`bench/corpus/`](./bench/corpus) (200 positives + 200 hard-negatives per class, including adversarial variants):
+
+| Class      | Precision | Recall | F1    |
+|------------|-----------|--------|-------|
+| SSN        | 1.000     | 1.000  | 1.000 |
+| PAN        | 1.000     | 1.000  | 1.000 |
+| IBAN       | 0.990     | 1.000  | 0.995 |
+| NPI        | 1.000     | 1.000  | 1.000 |
+| CUI        | 1.000     | 1.000  | 1.000 |
+| CREDENTIAL | 1.000     | 1.000  | 1.000 |
+| PASSPORT   | 1.000     | 1.000  | 1.000 |
+| MRN        | 1.000     | 1.000  | 1.000 |
+
+These are baseline numbers on a deterministic synthetic corpus, not a field SLA. Regenerate against your own data: `npm run accuracy:generate && npm run accuracy:measure`. CI fails on any > 2pp drop vs `bench/baseline.json`.
+
+## What this package does NOT detect
+
+For full threat-model scope see [SECURITY.md](./SECURITY.md). The honest list:
+
+- **Semantic / contextual violations.** A request to "summarize all our user emails" is not a regex hit. The semantic layer ([NanoMind-Guard](./src/classifier/guard-client)) is wired but its model binary depends on external training that has not shipped — the IPC client falls back silently to regex-only when no socket is reachable.
+- **Cyrillic / Greek look-alikes that are not NFKC-equivalent** (e.g. Cyrillic `а` vs Latin `a`). Those are separate semantic letters; NFKC does not fold them.
+- **Soft hyphen and combining marks.** Out of scope for 1.0, deferred to 1.1.
+- **Steganography and natural-language paraphrasing of sensitive content.** Requires the semantic layer.
 
 ## Session-scoped use (optional)
 
@@ -81,10 +110,23 @@ Every result also carries a `classifierResults` mirror with each layer's raw ver
 const result = await comply({ content });
 
 result.classifierResults.regex; // { classifier: 'regex', verdict, violations }
-result.classifierResults.guard; // undefined in V1 (Guard ships in V2)
+result.classifierResults.guard; // defined when GuardClient was reachable
 ```
 
-Treat `verdict` and `violations` as the contract; `classifierResults` is an introspection hook, not part of the stable API shape.
+Treat `verdict` and `violations` as the stable contract; `classifierResults`, `originalContent`, `normalizedContent`, and `normalizations` are introspection hooks.
+
+## Audit trail
+
+`comply()` preserves the input and the canonical form alongside the verdict:
+
+```typescript
+const result = await comply({ content: 'SSN:１２３-４５-６７８９' });
+
+result.originalContent;     // 'SSN:１２３-４５-６７８９'
+result.normalizedContent;   // 'SSN:123-45-6789'
+result.normalizations;      // [{ transform: 'nfkc', count: 9 }]
+result.violations[0].view;  // 'normalized'
+```
 
 ## License
 

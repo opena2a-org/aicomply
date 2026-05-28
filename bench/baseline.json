@@ -15,9 +15,9 @@
     "f1": 0.995
   },
   "MRN": {
-    "precision": 0.5602,
+    "precision": 1,
     "recall": 1,
-    "f1": 0.7181
+    "f1": 1
   },
   "NPI": {
     "precision": 1,

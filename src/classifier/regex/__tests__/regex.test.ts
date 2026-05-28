@@ -193,6 +193,30 @@ describe('MRN patterns', () => {
     const mrns = matches.filter(m => m.type === 'MRN');
     expect(mrns).toHaveLength(0);
   });
+
+  it('does NOT match prose-mention "MRN" followed by an English word (no digit)', () => {
+    // Suppresses the v0.x false positive on prose like
+    // "MRN system was updated", "MRN audit logs", "MRN training". The
+    // digit-required lookahead in the MRN regex closes this gap.
+    const cases = [
+      'The MRN system was updated last Tuesday.',
+      'See section 4.2 of the MRN handbook.',
+      'MRN training is required for new admits.',
+      'Patient charts are accessible via the MRN portal.',
+    ];
+    for (const c of cases) {
+      const matches = scanPatterns(c);
+      expect(matches.filter((m) => m.type === 'MRN')).toHaveLength(0);
+    }
+  });
+
+  it('still matches alphanumeric MRNs that include at least one digit', () => {
+    const cases = ['MRN: ABC123XY', 'MRN-X1Y2Z3', 'MRN#42AB56CD'];
+    for (const c of cases) {
+      const matches = scanPatterns(c);
+      expect(matches.some((m) => m.type === 'MRN')).toBe(true);
+    }
+  });
 });
 
 describe('NPI patterns', () => {

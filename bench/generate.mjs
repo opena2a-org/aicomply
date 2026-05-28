@@ -374,8 +374,14 @@ function passportNegatives(rng, n) {
 function generateValidMrn(rng) {
   const prefix = pick(rng, ['MRN: ', 'MRN ', 'MRN#', 'MRN-', 'mrn: ']);
   const len = randInt(rng, 6, 12);
+  // Real-world MRNs always contain at least one digit. Force one in a
+  // random position so synthetic positives match the regex's tightened
+  // shape (digit-required, see patterns.ts MRN entry).
   let body = '';
-  for (let i = 0; i < len; i += 1) body += pick(rng, '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''));
+  for (let i = 0; i < len; i += 1) body += pick(rng, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split(''));
+  const digitPos = randInt(rng, 0, len - 1);
+  const digit = String(randInt(rng, 0, 9));
+  body = body.slice(0, digitPos) + digit + body.slice(digitPos + 1);
   return `${prefix}${body}`;
 }
 
