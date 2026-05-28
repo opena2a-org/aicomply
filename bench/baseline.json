@@ -1,0 +1,42 @@
+{
+  "CREDENTIAL": {
+    "precision": 1,
+    "recall": 1,
+    "f1": 1
+  },
+  "CUI": {
+    "precision": 1,
+    "recall": 1,
+    "f1": 1
+  },
+  "IBAN": {
+    "precision": 0.9901,
+    "recall": 1,
+    "f1": 0.995
+  },
+  "MRN": {
+    "precision": 0.5602,
+    "recall": 1,
+    "f1": 0.7181
+  },
+  "NPI": {
+    "precision": 1,
+    "recall": 1,
+    "f1": 1
+  },
+  "PAN": {
+    "precision": 1,
+    "recall": 1,
+    "f1": 1
+  },
+  "PASSPORT": {
+    "precision": 1,
+    "recall": 1,
+    "f1": 1
+  },
+  "SSN": {
+    "precision": 1,
+    "recall": 1,
+    "f1": 1
+  }
+}
