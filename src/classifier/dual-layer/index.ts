@@ -217,15 +217,17 @@ export async function classifyDualLayer(
   }
 
   // Attach normalization metadata so consumers have an audit trail of
-  // what canonicalization the input went through. On the parse-to-deny
-  // (invalid Guard signature) path we deliberately omit originalContent
-  // and normalizedContent: the input may be attacker-controlled bytes
-  // and downstream log pipelines should not echo them back into
-  // operator dashboards without redaction. The structured
-  // `normalizations` array is safe to keep — it carries counts, not raw
-  // bytes — and lets auditors see which transforms ran.
-  const isParseToDeny = result.signatureValid === false;
-  if (!isParseToDeny) {
+  // what canonicalization the input went through. On ANY DENY verdict
+  // (parse-to-deny on invalid signature, Registry supply-chain block,
+  // policy-pack DENY) we omit originalContent and normalizedContent:
+  // by definition the input has been flagged as harmful, may carry
+  // attacker-controlled bytes (ANSI escapes, log-injection newlines,
+  // null bytes), and downstream log pipelines should not echo it back
+  // into operator dashboards without redaction. The structured
+  // `normalizations` array is safe to keep — it carries counts, not
+  // raw bytes — and lets auditors see which transforms ran.
+  const isDeny = result.verdict === 'DENY';
+  if (!isDeny) {
     result.originalContent = norm.originalContent;
     result.normalizedContent = norm.normalizedContent;
   }
@@ -268,8 +270,20 @@ function scanAllViews(norm: ReturnType<typeof normalize>): ClassifierResult {
         ? { offsetMap: ext.offsetMap }
         : { originalAnchor: { start: ext.originalStart, end: ext.originalEnd } }),
     });
+    // Dedup key:
+    //  - For findings with a precise offsetMap (compact + normalized
+    //    views): the originalStart/End pair uniquely identifies the
+    //    finding. Cross-view dedup against the normalized scan works.
+    //  - For decoded views (originalAnchor): every match in the same
+    //    encoded blob shares the same originalStart/End, so we must
+    //    also include the in-view start/end (and the view source) to
+    //    keep multiple credentials inside one blob from collapsing
+    //    onto a single dedup key.
+    const hasOffsetMap = ext.offsetMap !== undefined;
     for (const v of scan.violations) {
-      const key = `${v.type}@${v.originalStart}-${v.originalEnd}`;
+      const key = hasOffsetMap
+        ? `${v.type}@${v.originalStart}-${v.originalEnd}`
+        : `${v.type}@${v.originalStart}-${v.originalEnd}#${v.view}:${v.start}-${v.end}`;
       if (seen.has(key)) continue;
       seen.add(key);
       all.push(v);

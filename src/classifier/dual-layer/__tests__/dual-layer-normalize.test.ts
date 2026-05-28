@@ -79,6 +79,73 @@ describe('comply() under adversarial mutations (v1.0 normalization)', () => {
     expect(views).toContain('compact');
   });
 
+  it('detects credentials wrapped in TWO layers of Base64 (depth-2 recursion)', async () => {
+    // Regression: adversarial review found the depth-2 recursion path was
+    // unit-tested but not exercised end-to-end through comply(). Stack
+    // two base64 wrappers around a credential payload and assert it
+    // surfaces with view='decoded-base64'.
+    const inner = 'token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const layer1 = Buffer.from(inner).toString('base64');
+    const layer2 = Buffer.from(layer1).toString('base64');
+    const r = await comply({ content: `wrapped: ${layer2}` });
+    expect(r.verdict).toBe('VIOLATION');
+    expect(r.violations.some((v) => v.view === 'decoded-base64')).toBe(true);
+  });
+
+  it('detects PII with COMBINED zero-width + whitespace injection (mixed adversarial)', async () => {
+    // Regression: tests covered each mutation in isolation but not the
+    // realistic blend of "attacker injects whatever Unicode chars they
+    // can while also breaking up digits with ASCII whitespace".
+    // U+200B between every char + spaces sprinkled in the digit run.
+    const r = await comply({
+      content: 'SSN:1​ 2​ 3​-​4 5​-​6 7 8 9',
+    });
+    expect(r.verdict).toBe('VIOLATION');
+    expect(r.violations.some((v) => v.type === 'SSN')).toBe(true);
+  });
+
+  it('surfaces multiple distinct credentials inside ONE Base64 blob (no dedup collapse)', async () => {
+    // Regression: adversarial review found that decoded-view findings
+    // were dedup'd on a whole-blob anchor, so two credentials inside
+    // one Base64 payload collapsed to a single violation. Fix carries
+    // the in-view start/end in the dedup key for non-offsetMap views.
+    const t1 = 'ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    const t2 = 'ghp_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+    const payload = `token1=${t1};token2=${t2}`;
+    const b64 = Buffer.from(payload).toString('base64');
+    const r = await comply({ content: `data: ${b64}` });
+    const creds = r.violations.filter((v) => v.view === 'decoded-base64' && v.type === 'CREDENTIAL');
+    expect(creds.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('redacts originalContent on supply-chain DENY too (not just parse-to-deny)', async () => {
+    // Regression: the original parse-to-deny fix gated redaction on
+    // signatureValid===false, missing the supply-chain DENY and
+    // policy-pack DENY paths. Fix gates on verdict==='DENY'.
+    const { warmRegistryCache } = await import('../../../index');
+    const fakeCache = await import('../../../registry/index').then((m) => {
+      const c = new m.RegistryIntelligenceCache({ baseUrl: 'http://localhost' });
+      // Inject a supply-chain alert without hitting the network.
+      (c as unknown as { supplyChainIndex: Map<string, unknown[]> }).supplyChainIndex = new Map([
+        ['my-agent', [{ id: 'fake-alert-1', name: 'my-agent' }]],
+      ]);
+      (c as unknown as { lastSupplyChainFetch: number }).lastSupplyChainFetch = Date.now();
+      (c as unknown as { fleetIndex: Map<string, unknown> }).fleetIndex = new Map();
+      (c as unknown as { lastFleetFetch: number }).lastFleetFetch = Date.now();
+      return c;
+    });
+    expect(warmRegistryCache).toBeDefined();
+    const r = await comply({
+      content: 'attacker [2J wipescreen content',
+      sourcePackage: 'my-agent',
+      registryCache: fakeCache,
+    });
+    expect(r.verdict).toBe('DENY');
+    expect(r.registrySignals?.supplyChainBlock).toBe(true);
+    expect(r.originalContent).toBeUndefined();
+    expect(r.normalizedContent).toBeUndefined();
+  });
+
   it('omits originalContent and normalizedContent on parse-to-deny (untrusted bytes)', async () => {
     // Regression: code-review flagged that the invalid-Guard-signature
     // path echoed attacker-controlled input back via originalContent,

@@ -76,7 +76,9 @@ For full threat-model scope see [SECURITY.md](./SECURITY.md). The honest list:
 
 - **Semantic / contextual violations.** A request to "summarize all our user emails" is not a regex hit. The semantic layer ([NanoMind-Guard](./src/classifier/guard-client)) is wired but its model binary depends on external training that has not shipped — the IPC client falls back silently to regex-only when no socket is reachable.
 - **Cyrillic / Greek look-alikes that are not NFKC-equivalent** (e.g. Cyrillic `а` vs Latin `a`). Those are separate semantic letters; NFKC does not fold them.
-- **Soft hyphen and combining marks.** Out of scope for 1.0, deferred to 1.1.
+- **Soft hyphen (U+00AD) and combining marks.** Out of scope for 1.0, deferred to 1.1. An attacker can still hide PII by injecting these characters between digits.
+- **Encodings other than Base64 and URL.** Hex, base32, ROT13, HTML entities, quoted-printable are not decoded.
+- **All-letter alphanumeric MRN identifiers** (e.g. UK NHS ULN-style). The MRN regex requires at least one digit, trading recall on all-letter clinical identifiers for precision on prose mentions ("MRN system was updated"). Custom regex needed for those domains.
 - **Steganography and natural-language paraphrasing of sensitive content.** Requires the semantic layer.
 
 ## Session-scoped use (optional)

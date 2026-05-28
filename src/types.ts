@@ -10,13 +10,14 @@ export type { NormalizationStep, NormalizationTransform, DecodedExtraction } fro
 export type Verdict = 'CLEAN' | 'VIOLATION' | 'DENY';
 
 /**
- * Where a regex match was found. Findings from the canonical normalized
- * stream are tagged `normalized`; findings from a compact (whitespace-
- * removed) view or a Base64/URL-decoded payload are tagged accordingly
- * so callers can distinguish a raw match from one that required
- * normalization to surface.
+ * Where a regex match was found. Derived structurally from
+ * `DecodedExtraction['source']` so that adding a new view type (e.g.
+ * `'decoded-hex'` in a future release) updates this union in lockstep
+ * without a manual edit. `'normalized'` is the canonical view; the
+ * others mirror the discriminated set of extra content views.
  */
-export type ViolationView = 'normalized' | 'compact' | 'decoded-base64' | 'decoded-url';
+import type { DecodedExtraction as DecodedExtractionT } from './normalize/types';
+export type ViolationView = 'normalized' | DecodedExtractionT['source'];
 
 export interface Violation {
   type: string;

@@ -102,7 +102,31 @@ regression gate rather than an SLA. The corpus and harness are public
   Cyrillic small letter а at U+0430 vs Latin a at U+0061). NFKC does not
   fold these because they are separate semantic letters. Document-level
   defense requires the Guard layer.
-- **Soft hyphen and combining marks.** Not stripped — deferred to v1.1.
+- **Soft hyphen (U+00AD) and combining marks (U+0300–U+036F).** Not
+  stripped from the normalized stream — deferred to v1.1. An attacker
+  can hide PII by injecting soft hyphens between digits.
+- **HTML entities, hex-encoded payloads, base32, ROT13.** Only Base64
+  and URL (percent) encoding are decoded in 1.0. Other encodings pass
+  through unchanged.
+- **Adjacent-prefix Base64 alignment evasion.** v1.0 attempts up to 3
+  leading-character trims to align candidate Base64 runs. A more
+  sophisticated wrapper (e.g. `wrapper://abcd//<base64>` where `abcd`
+  is itself a base64-charset run) may still escape detection.
+- **All-letter alphanumeric MRN identifiers.** The MRN regex requires
+  at least one digit in the captured group. Some clinical systems
+  (e.g. UK NHS ULN-style learner numbers used as MRN aliases, certain
+  legacy Epic department-prefix MRNs) use all-letter identifiers and
+  will NOT be detected. Tradeoff documented: precision on prose
+  ("MRN system was updated") prioritized over recall on all-letter
+  MRNs. Customers in those domains should supply a custom regex or
+  scan with a dedicated pattern.
+- **Guard fallback observability.** When the GuardClient cannot reach
+  the socket (missing, EACCES, ECONNREFUSED, ENOTSOCK, EISDIR), it
+  silently falls back to regex-only. The library does not log these
+  conditions (no library should write to stderr without consent); the
+  Guard is treated as a defense-in-depth layer whose presence is
+  optional. Operators who need observability should health-check the
+  socket out-of-band before relying on Guard for compliance gates.
 - **Side-channel resistance.** Timing of `comply()` may leak coarse
   information about input length and pattern density. Not designed
   against timing attacks.

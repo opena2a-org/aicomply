@@ -51,7 +51,7 @@ function isAsciiPrintable(s: string): boolean {
   return printable / s.length >= PRINTABLE_MIN_RATIO;
 }
 
-function tryBase64Decode(candidate: string): string | null {
+function tryBase64DecodeAligned(candidate: string): string | null {
   if (candidate.length < MIN_CANDIDATE_LENGTH) return null;
   if (candidate.length % 4 !== 0) return null;
   try {
@@ -66,6 +66,24 @@ function tryBase64Decode(candidate: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Attempt Base64 decoding allowing for length misalignment caused by
+ * adjacent base64-charset bytes (e.g. `//` glued onto the front of a
+ * Base64 token when the wrapper used `wrapper://...`). Try the candidate
+ * as-is, then with 1, 2, 3 leading chars stripped, until one aligns and
+ * round-trips. Bounded to MAX_LEFT_TRIM iterations.
+ */
+const MAX_LEFT_TRIM = 4;
+function tryBase64Decode(candidate: string): string | null {
+  for (let trim = 0; trim < MAX_LEFT_TRIM; trim += 1) {
+    const trimmed = candidate.slice(trim);
+    if (trimmed.length < MIN_CANDIDATE_LENGTH) return null;
+    const result = tryBase64DecodeAligned(trimmed);
+    if (result !== null) return result;
+  }
+  return null;
 }
 
 function tryUrlDecode(candidate: string): string | null {
