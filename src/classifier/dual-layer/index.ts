@@ -21,13 +21,19 @@ import { GuardClient } from '../guard-client';
 import { verifyClassification } from '../../arp/verify';
 import { RegistryIntelligenceCache } from '../../registry';
 import { assembleRiskContext } from '../../risk';
-import type { ClassifierResult, ComplyResult, PolicyPack, RiskContext, Violation } from '../../types';
+import { normalize } from '../../normalize';
+import type { ClassifierResult, ComplyResult, PolicyPack, RiskContext, Violation, ViolationView } from '../../types';
 import type {
   NanoMindGuardResult,
   NanoMindGuardVerifyOptions,
 } from '../../arp/types';
 
-const guardClient = new GuardClient();
+// The Guard client is constructed lazily inside classifyDualLayer (not
+// at module-top) so process.env.MOCK_GUARD_SOCKET is read at call time
+// rather than at import time. A module-top singleton would freeze
+// whatever env value happened to be set when this file was first
+// required — silently routing every classify() to that path for the
+// lifetime of the process, even after the env var changes.
 
 export interface DualLayerOptions {
   guardVerifyOptions?: NanoMindGuardVerifyOptions;
@@ -101,8 +107,11 @@ export async function classifyDualLayer(
   content: string,
   options?: DualLayerOptions,
 ): Promise<ComplyResult> {
-  // Always run regex classifier
-  const regexResult = classifyWithRegex(content);
+  // Pre-regex adversarial normalization (CHIEF-CSR 2026-05-28).
+  // NFKC + zero-width strip produce normalizedContent; the compact form
+  // and any Base64/URL-decoded segments are scanned in addition.
+  const norm = normalize(content);
+  const regexResult = scanAllViews(norm);
 
   let baseResult: Omit<ComplyResult, 'registrySignals'>;
 
@@ -160,8 +169,9 @@ export async function classifyDualLayer(
       };
     }
   } else {
-    // Attempt Guard classifier via IPC (V1: always returns null)
-    const guardResult = await guardClient.classify(content);
+    // Attempt Guard classifier via IPC. Construct per-call so the env
+    // var read happens at classify time, not at module load time.
+    const guardResult = await new GuardClient().classify(content);
 
     const allViolations: Violation[] = [...regexResult.violations];
     if (guardResult) {
@@ -206,7 +216,85 @@ export async function classifyDualLayer(
     result = applyPolicyPack(result, options.policyPack);
   }
 
+  // Attach normalization metadata so consumers have an audit trail of
+  // what canonicalization the input went through. On ANY DENY verdict
+  // (parse-to-deny on invalid signature, Registry supply-chain block,
+  // policy-pack DENY) we omit originalContent and normalizedContent:
+  // by definition the input has been flagged as harmful, may carry
+  // attacker-controlled bytes (ANSI escapes, log-injection newlines,
+  // null bytes), and downstream log pipelines should not echo it back
+  // into operator dashboards without redaction. The structured
+  // `normalizations` array is safe to keep — it carries counts, not
+  // raw bytes — and lets auditors see which transforms ran.
+  const isDeny = result.verdict === 'DENY';
+  if (!isDeny) {
+    result.originalContent = norm.originalContent;
+    result.normalizedContent = norm.normalizedContent;
+  }
+  result.normalizations = norm.steps;
+
   return result;
+}
+
+/**
+ * Run the regex classifier across every content view produced by the
+ * normalization pipeline: the canonical normalized stream, the compact
+ * whitespace-removed view, and any Base64/URL-decoded extractions.
+ *
+ * Findings are tagged with the view they came from. Duplicates are
+ * suppressed when a match in a non-normalized view points at the same
+ * (type, originalStart, originalEnd) range as one already found in
+ * the normalized view — avoids double-reporting the same SSN that's
+ * detected both raw and via the compact-form pass.
+ */
+function scanAllViews(norm: ReturnType<typeof normalize>): ClassifierResult {
+  const normalizedScan = classifyWithRegex(norm.normalizedContent, {
+    view: 'normalized',
+    offsetMap: norm.offsetMap,
+  });
+
+  const all: Violation[] = [...normalizedScan.violations];
+  const seen = new Set<string>();
+  for (const v of all) {
+    seen.add(`${v.type}@${v.originalStart}-${v.originalEnd}`);
+  }
+
+  for (const ext of norm.decodedExtractions) {
+    // ext.source matches ViolationView 1:1 — use it directly. When
+    // ext.offsetMap is present (compact view), classifyWithRegex projects
+    // each match back to its precise original range; otherwise it falls
+    // back to the whole-token originalAnchor (decoded-base64 / decoded-url).
+    const scan = classifyWithRegex(ext.decoded, {
+      view: ext.source,
+      ...(ext.offsetMap !== undefined
+        ? { offsetMap: ext.offsetMap }
+        : { originalAnchor: { start: ext.originalStart, end: ext.originalEnd } }),
+    });
+    // Dedup key:
+    //  - For findings with a precise offsetMap (compact + normalized
+    //    views): the originalStart/End pair uniquely identifies the
+    //    finding. Cross-view dedup against the normalized scan works.
+    //  - For decoded views (originalAnchor): every match in the same
+    //    encoded blob shares the same originalStart/End, so we must
+    //    also include the in-view start/end (and the view source) to
+    //    keep multiple credentials inside one blob from collapsing
+    //    onto a single dedup key.
+    const hasOffsetMap = ext.offsetMap !== undefined;
+    for (const v of scan.violations) {
+      const key = hasOffsetMap
+        ? `${v.type}@${v.originalStart}-${v.originalEnd}`
+        : `${v.type}@${v.originalStart}-${v.originalEnd}#${v.view}:${v.start}-${v.end}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      all.push(v);
+    }
+  }
+
+  return {
+    classifier: 'regex',
+    verdict: all.length === 0 ? 'CLEAN' : 'VIOLATION',
+    violations: all,
+  };
 }
 
 /**

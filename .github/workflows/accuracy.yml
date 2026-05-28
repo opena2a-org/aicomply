@@ -1,0 +1,57 @@
+name: Accuracy
+
+# Runs the regex-classifier accuracy harness against the synthetic corpus
+# at bench/corpus/*.jsonl and fails if precision or recall regress by more
+# than 2 percentage points vs the committed bench/baseline.json.
+#
+# The corpus is deterministic; regenerate with `npm run accuracy:generate`
+# if a pattern is added or tightened. Update the baseline with
+# `npm run accuracy:update-baseline` after intentional improvements.
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'bench/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/accuracy.yml'
+  push:
+    branches:
+      - main
+
+jobs:
+  measure:
+    name: Measure precision and recall
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify corpus is up to date with generator
+        run: |
+          npm run accuracy:generate
+          if ! git diff --quiet bench/corpus; then
+            echo "::error::bench/corpus is out of sync with bench/generate.mjs."
+            echo "Run 'npm run accuracy:generate' locally and commit the result."
+            git diff --stat bench/corpus
+            exit 1
+          fi
+
+      - name: Measure
+        run: npm run accuracy:measure

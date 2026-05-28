@@ -168,12 +168,10 @@ export class RegistryIntelligenceCache {
 
   private async _fetchFleet(): Promise<void> {
     const url = `${this.baseUrl}/api/v1/registry/fleet/anomaly-signal`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       const res = await fetch(url, { signal: controller.signal });
-      clearTimeout(timer);
-
       if (!res.ok) {
         return; // leave lastFleetFetch at 0 so callers know data is unavailable
       }
@@ -191,16 +189,19 @@ export class RegistryIntelligenceCache {
       this.lastFleetFetch = Date.now();
     } catch {
       // Network/timeout error — leave lastFleetFetch unchanged
+    } finally {
+      // Always clear the abort timer so it doesn't keep the event loop alive
+      // when fetch resolves successfully OR when it rejects/aborts.
+      clearTimeout(timer);
     }
   }
 
   private async _fetchSupplyChain(): Promise<void> {
     const url = `${this.baseUrl}/api/v1/intelligence/alerts?type=supply_chain`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       const res = await fetch(url, { signal: controller.signal });
-      clearTimeout(timer);
 
       if (!res.ok) {
         return;
@@ -221,6 +222,8 @@ export class RegistryIntelligenceCache {
       this.lastSupplyChainFetch = Date.now();
     } catch {
       // Network/timeout error — leave lastSupplyChainFetch unchanged
+    } finally {
+      clearTimeout(timer);
     }
   }
 }
