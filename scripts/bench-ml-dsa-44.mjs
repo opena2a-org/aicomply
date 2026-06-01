@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ML-DSA-44 VERIFY p99 microbenchmark (AIComply AC-016).
 //
-// AIComply's production crypto path only VERIFIES — the sign happens upstream
+// AIComply's production crypto path only VERIFIES - the sign happens upstream
 // in hackmyagent/src/arp/. This bench measures the verify budget (D17: p99
 // < 1.5ms).
 //

@@ -79,7 +79,7 @@ export class RegistryIntelligenceCache {
   /**
    * Look up Registry intelligence for a package.
    *
-   * Returns a typed result — callers MUST handle the 'miss' and 'error'
+   * Returns a typed result - callers MUST handle the 'miss' and 'error'
    * cases as elevated risk, not as clean (AC-002).
    *
    * This method is intentionally synchronous after warm-start (cache read).
@@ -97,7 +97,7 @@ export class RegistryIntelligenceCache {
     // Check if fleet data is available but package is simply not in the index
     const fleetDataLoaded = this.lastFleetFetch > 0;
     if (!fleetDataLoaded) {
-      // Cache was never warmed — report as error so caller elevates risk
+      // Cache was never warmed - report as error so caller elevates risk
       return { status: 'error', reason: 'registry cache not warmed' };
     }
 
@@ -121,7 +121,7 @@ export class RegistryIntelligenceCache {
 
   /**
    * Trigger a background refresh if the cache is stale.
-   * Does not block — returns immediately. Safe to call after lookup()
+   * Does not block - returns immediately. Safe to call after lookup()
    * reveals a cache miss or stale entry.
    */
   refreshIfStale(): void {
@@ -188,7 +188,7 @@ export class RegistryIntelligenceCache {
       this.fleetIndex = index;
       this.lastFleetFetch = Date.now();
     } catch {
-      // Network/timeout error — leave lastFleetFetch unchanged
+      // Network/timeout error - leave lastFleetFetch unchanged
     } finally {
       // Always clear the abort timer so it doesn't keep the event loop alive
       // when fetch resolves successfully OR when it rejects/aborts.
@@ -221,7 +221,7 @@ export class RegistryIntelligenceCache {
       this.supplyChainIndex = index;
       this.lastSupplyChainFetch = Date.now();
     } catch {
-      // Network/timeout error — leave lastSupplyChainFetch unchanged
+      // Network/timeout error - leave lastSupplyChainFetch unchanged
     } finally {
       clearTimeout(timer);
     }

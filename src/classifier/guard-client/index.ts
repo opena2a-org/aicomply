@@ -19,7 +19,7 @@
  * tests and local development the path can be overridden via the
  * `MOCK_GUARD_SOCKET` env var or the `socketPath` constructor option.
  *
- * The real Guard binary is intentionally NOT shipped with v1.0 — this
+ * The real Guard binary is intentionally NOT shipped with v1.0 - this
  * is a stub-with-real-IPC, not a stub-with-fake-classification. Until
  * a NanoMind model is trained and released, no socket exists and
  * everything degrades to regex-only.
@@ -67,7 +67,7 @@ export class GuardClient {
 
   /**
    * Classify content via Guard. Returns null when Guard is unavailable,
-   * unreachable, times out, or returns a malformed payload — in which
+   * unreachable, times out, or returns a malformed payload - in which
    * case the dual-layer classifier silently falls back to regex-only.
    * Returns a valid ClassifierResult on a successful round-trip.
    */

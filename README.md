@@ -6,9 +6,9 @@ Inline content classifier for AI agent I/O. Detects PII, credentials, regulated 
 
 ## Why this exists
 
-Every agent that calls a hosted LLM (Anthropic, OpenAI, Bedrock, Vertex, …) copies the conversation — system prompt, tool outputs, retrieved documents, user input — into a third party's logs. If your agent reads a support ticket containing an SSN, that SSN goes to the provider. If your agent reads `.env` to summarize it, your AWS key goes too. Most agent stacks have no inline check between "tool returned content" and "send to model."
+Every agent that calls a hosted LLM (Anthropic, OpenAI, Bedrock, Vertex, …) copies the conversation - system prompt, tool outputs, retrieved documents, user input - into a third party's logs. If your agent reads a support ticket containing an SSN, that SSN goes to the provider. If your agent reads `.env` to summarize it, your AWS key goes too. Most agent stacks have no inline check between "tool returned content" and "send to model."
 
-`aicomply` is that check. It runs inline, sub-millisecond, with no external calls of its own. You hand it the content; it returns a verdict (`CLEAN` / `VIOLATION` / `DENY`) and structured findings. You decide what to do next — block, redact, log, or pass.
+`aicomply` is that check. It runs inline, sub-millisecond, with no external calls of its own. You hand it the content; it returns a verdict (`CLEAN` / `VIOLATION` / `DENY`) and structured findings. You decide what to do next - block, redact, log, or pass.
 
 ## Install
 
@@ -40,7 +40,7 @@ Drop it into your agent's tool-result handler, your message-egress wrapper, or a
 | Credentials| AWS keys, GitHub tokens, Bearer tokens, generic `api_key=` |
 | Government | CUI, FOUO, CONTROLLED markings                                 |
 
-Pattern source lives at [`src/classifier/regex/patterns.ts`](https://github.com/opena2a-org/aicomply/blob/main/src/classifier/regex/patterns.ts) — not secret, designed to be reviewed and tuned for your context.
+Pattern source lives at [`src/classifier/regex/patterns.ts`](https://github.com/opena2a-org/aicomply/blob/main/src/classifier/regex/patterns.ts) - not secret, designed to be reviewed and tuned for your context.
 
 ## Adversarial-mutation handling
 
@@ -74,7 +74,7 @@ These are baseline numbers on a deterministic synthetic corpus, not a field SLA.
 
 For full threat-model scope see [SECURITY.md](./SECURITY.md). The honest list:
 
-- **Semantic / contextual violations.** A request to "summarize all our user emails" is not a regex hit. The semantic layer ([NanoMind-Guard](./src/classifier/guard-client)) is wired but its model binary depends on external training that has not shipped — the IPC client falls back silently to regex-only when no socket is reachable.
+- **Semantic / contextual violations.** A request to "summarize all our user emails" is not a regex hit. The semantic layer ([NanoMind-Guard](./src/classifier/guard-client)) is wired but its model binary depends on external training that has not shipped - the IPC client falls back silently to regex-only when no socket is reachable.
 - **Cyrillic / Greek look-alikes that are not NFKC-equivalent** (e.g. Cyrillic `а` vs Latin `a`). Those are separate semantic letters; NFKC does not fold them.
 - **Soft hyphen (U+00AD) and combining marks.** Out of scope for 1.0, deferred to 1.1. An attacker can still hide PII by injecting these characters between digits.
 - **Encodings other than Base64 and URL.** Hex, base32, ROT13, HTML entities, quoted-printable are not decoded.
@@ -132,7 +132,7 @@ result.violations[0].view;  // 'normalized'
 
 ## License
 
-Apache-2.0 — see [LICENSE](./LICENSE).
+Apache-2.0 - see [LICENSE](./LICENSE).
 
 ## Security
 

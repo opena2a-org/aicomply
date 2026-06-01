@@ -32,7 +32,7 @@ import type {
 // at module-top) so process.env.MOCK_GUARD_SOCKET is read at call time
 // rather than at import time. A module-top singleton would freeze
 // whatever env value happened to be set when this file was first
-// required — silently routing every classify() to that path for the
+// required - silently routing every classify() to that path for the
 // lifetime of the process, even after the env var changes.
 
 export interface DualLayerOptions {
@@ -72,16 +72,16 @@ const THRESHOLD_DELTA = -0.15;
  * Map a Registry trust tier (0–4) to an anomaly-score sensitivity multiplier.
  *
  * A higher multiplier means the effective anomaly score is amplified before
- * comparison against the threshold — making classification more sensitive
+ * comparison against the threshold - making classification more sensitive
  * for lower-trust tiers. A lower multiplier dampens the score for
  * well-verified packages.
  *
  * trustLevel 0 (Blocked): ARP's responsibility; L2 defers → 1.00
- * trustLevel 1 (Warning): 1.35  — heightened sensitivity
- * trustLevel 2 (Listed):  1.15  — mildly elevated
- * trustLevel 3 (Scanned): 1.00  — baseline (current behaviour)
- * trustLevel 4 (Verified): 0.80 — verified packages get a grace margin
- * Out-of-range / missing:  1.00  — safe default
+ * trustLevel 1 (Warning): 1.35  - heightened sensitivity
+ * trustLevel 2 (Listed):  1.15  - mildly elevated
+ * trustLevel 3 (Scanned): 1.00  - baseline (current behaviour)
+ * trustLevel 4 (Verified): 0.80 - verified packages get a grace margin
+ * Out-of-range / missing:  1.00  - safe default
  */
 function sensitivityMultiplier(trustLevel: number | undefined): number {
   switch (trustLevel) {
@@ -132,7 +132,7 @@ export async function classifyDualLayer(
         verifyError: { code: verifyResult.code, reason: verifyResult.reason },
       };
     } else {
-      // Signature valid — build Guard classifier result from the verified classification
+      // Signature valid - build Guard classifier result from the verified classification
       const guardClassifierResult: ClassifierResult = {
         classifier: 'guard',
         verdict: verifyResult.classification === 'documentation' ||
@@ -193,7 +193,7 @@ export async function classifyDualLayer(
 
   // ---------------------------------------------------------------------------
   // Registry L2 threshold/block logic (Section 3.1, lines 239-263)
-  // AC-005: synchronous cache lookup only — never fetch in the hot path.
+  // AC-005: synchronous cache lookup only - never fetch in the hot path.
   // ---------------------------------------------------------------------------
   let result: ComplyResult;
   if (options?.registryCache && options?.sourcePackage) {
@@ -213,7 +213,7 @@ export async function classifyDualLayer(
   // ---------------------------------------------------------------------------
   // Policy pack enforcement: DENY rules hard-block, WARN rules add violations.
   // Applied after Registry L2 so policy sees the fully-resolved verdict.
-  // REDACT is out of scope in V1 — skipped silently.
+  // REDACT is out of scope in V1 - skipped silently.
   // ---------------------------------------------------------------------------
   if (options?.policyPack) {
     result = applyPolicyPack(result, options.policyPack);
@@ -227,8 +227,8 @@ export async function classifyDualLayer(
   // attacker-controlled bytes (ANSI escapes, log-injection newlines,
   // null bytes), and downstream log pipelines should not echo it back
   // into operator dashboards without redaction. The structured
-  // `normalizations` array is safe to keep — it carries counts, not
-  // raw bytes — and lets auditors see which transforms ran.
+  // `normalizations` array is safe to keep - it carries counts, not
+  // raw bytes - and lets auditors see which transforms ran.
   const isDeny = result.verdict === 'DENY';
   if (!isDeny) {
     result.originalContent = norm.originalContent;
@@ -247,7 +247,7 @@ export async function classifyDualLayer(
  * Findings are tagged with the view they came from. Duplicates are
  * suppressed when a match in a non-normalized view points at the same
  * (type, originalStart, originalEnd) range as one already found in
- * the normalized view — avoids double-reporting the same SSN that's
+ * the normalized view - avoids double-reporting the same SSN that's
  * detected both raw and via the compact-form pass.
  */
 function scanAllViews(norm: ReturnType<typeof normalize>): ClassifierResult {
@@ -263,7 +263,7 @@ function scanAllViews(norm: ReturnType<typeof normalize>): ClassifierResult {
   }
 
   for (const ext of norm.decodedExtractions) {
-    // ext.source matches ViolationView 1:1 — use it directly. When
+    // ext.source matches ViolationView 1:1 - use it directly. When
     // ext.offsetMap is present (compact view), classifyWithRegex projects
     // each match back to its precise original range; otherwise it falls
     // back to the whole-token originalAnchor (decoded-base64 / decoded-url).
@@ -305,7 +305,7 @@ function scanAllViews(norm: ReturnType<typeof normalize>): ClassifierResult {
  *
  *   - Hard block (DENY) if any active supply-chain alert exists for the package.
  *   - Fleet anomaly score > 0.30 lowers the effective classification threshold
- *     by 0.15 — implemented here as: if the current verdict is CLEAN but the
+ *     by 0.15 - implemented here as: if the current verdict is CLEAN but the
  *     anomaly score is elevated, re-evaluate with the lowered threshold and
  *     promote to VIOLATION.
  *   - Cache miss / error => treat as unknown, not clean (AC-002). We do NOT
@@ -342,7 +342,7 @@ function applyRegistryL2(
   const hasSupplyChainAlert = activeAlerts.length > 0;
 
   // Hard block: any active supply-chain alert => DENY regardless of prior verdict.
-  // The sensitivity multiplier does not apply here — supply-chain blocks are absolute.
+  // The sensitivity multiplier does not apply here - supply-chain blocks are absolute.
   if (hasSupplyChainAlert) {
     const effectiveScore = fleetScore !== null ? fleetScore * mult : null;
     const blockViolation: Violation = {
@@ -416,7 +416,7 @@ function applyRegistryL2(
  *     and a POLICY_DENY violation is appended for auditability.
  *   - WARN rule: if any detected violation type matches a rule pattern → a POLICY_WARN
  *     violation is appended; verdict is not escalated by WARN alone.
- *   - REDACT rule: out of scope in V1 — skipped silently.
+ *   - REDACT rule: out of scope in V1 - skipped silently.
  *
  * Policy is applied after Registry L2 so it sees the fully-resolved verdict and
  * violation set (including SUPPLY_CHAIN_ALERT and FLEET_ANOMALY_ELEVATED entries).

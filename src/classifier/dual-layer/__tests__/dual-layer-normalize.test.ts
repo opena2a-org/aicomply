@@ -70,7 +70,7 @@ describe('comply() under adversarial mutations (v1.0 normalization)', () => {
     });
     expect(r.verdict).toBe('VIOLATION');
     const ssnHits = r.violations.filter((v) => v.type === 'SSN');
-    // Two distinct SSNs, two violations — neither double-reported.
+    // Two distinct SSNs, two violations - neither double-reported.
     expect(ssnHits).toHaveLength(2);
     // The whitespace-injected one surfaces via the compact view; the
     // un-injected one via the normalized view.
@@ -198,7 +198,7 @@ describe('comply() under adversarial mutations (v1.0 normalization)', () => {
     const r = await comply({ content: '' });
     expect(r.verdict).toBe('CLEAN');
     // Empty input still populates the audit fields per the types.ts
-    // contract — originalContent / normalizedContent / normalizations
+    // contract - originalContent / normalizedContent / normalizations
     // are always defined on v1.0+ results so consumers can rely on
     // them without `??`-guarding every access.
     expect(r.originalContent).toBe('');

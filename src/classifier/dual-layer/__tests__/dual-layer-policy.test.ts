@@ -57,7 +57,7 @@ const REDACT_PACK: PolicyPack = {
     {
       id: 'redact-ssn',
       name: 'Redact SSN',
-      description: 'REDACT is V1 out-of-scope — skipped silently',
+      description: 'REDACT is V1 out-of-scope - skipped silently',
       patterns: ['SSN'],
       action: 'REDACT',
       severity: 'critical',
@@ -154,7 +154,7 @@ describe('Policy pack: WARN rule', () => {
 });
 
 // ---------------------------------------------------------------------------
-// REDACT rule (V1 out-of-scope — skipped silently)
+// REDACT rule (V1 out-of-scope - skipped silently)
 // ---------------------------------------------------------------------------
 
 describe('Policy pack: REDACT rule (V1 no-op)', () => {

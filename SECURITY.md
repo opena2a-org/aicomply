@@ -38,15 +38,15 @@ the release and re-stated in CHANGELOG entries when subsequent majors arrive.
 `@opena2a/aicomply` is a **content classifier**. It inspects strings (agent
 inputs, tool outputs) and returns a verdict (`CLEAN` / `VIOLATION` / `DENY`)
 plus structured violation records. It is one input to your compliance
-posture — not a complete control.
+posture - not a complete control.
 
 ### In threat model scope
 - Correctness of the dual-layer merge (`CLEAN` only when both layers are clean;
   `DENY` overrides everything; supply-chain hard block always DENY)
 - Signature verification of Guard classifier results (Ed25519 + ML-DSA-44 hybrid,
-  parse-to-deny on invalid signatures — contract CR-001)
+  parse-to-deny on invalid signatures - contract CR-001)
 - Session vault key isolation (AES-256-GCM, keys never persisted to disk)
-- Registry intelligence cache integrity (cache-miss treated as unknown, not clean —
+- Registry intelligence cache integrity (cache-miss treated as unknown, not clean -
   contract AC-002)
 
 ### Adversarial-mutation handling (covered in 1.0)
@@ -57,12 +57,12 @@ Covered mutation classes:
 - **Unicode homoglyphs** via NFKC compatibility composition (fullwidth
   digits `１２３` → `123`, math-alphanumerics, ligatures `ﬃ` → `ffi`).
 - **Zero-width / bidi control injection** (U+200B–200F, U+202A–202E,
-  U+2060, U+2066–2069, U+FEFF) — stripped from the canonical stream.
-- **Intra-token whitespace injection** (`1 2 3 - 4 5 - 6 7 8 9`) — scanned
+  U+2060, U+2066–2069, U+FEFF) - stripped from the canonical stream.
+- **Intra-token whitespace injection** (`1 2 3 - 4 5 - 6 7 8 9`) - scanned
   as a compact view in addition to the canonical stream. Whitespace is
   only collapsed between digit/separator characters so prose word
   boundaries are preserved.
-- **Base64 / URL-encoded wrapping** of sensitive payloads — extracted as
+- **Base64 / URL-encoded wrapping** of sensitive payloads - extracted as
   decoded views (bounded depth 2, length ≥ 24 chars, ASCII-printable
   round-trip gate).
 
@@ -103,7 +103,7 @@ regression gate rather than an SLA. The corpus and harness are public
   fold these because they are separate semantic letters. Document-level
   defense requires the Guard layer.
 - **Soft hyphen (U+00AD) and combining marks (U+0300–U+036F).** Not
-  stripped from the normalized stream — deferred to v1.1. An attacker
+  stripped from the normalized stream - deferred to v1.1. An attacker
   can hide PII by injecting soft hyphens between digits.
 - **HTML entities, hex-encoded payloads, base32, ROT13.** Only Base64
   and URL (percent) encoding are decoded in 1.0. Other encodings pass
@@ -137,7 +137,7 @@ regression gate rather than an SLA. The corpus and harness are public
 - **NanoMind-Guard semantic classifier.** The IPC client is wired and
   testable as of 1.0, but the real Guard binary depends on NanoMind
   Phase 2b training (external to this repo). Until that ships, `comply()`
-  falls back to regex-only — which is sufficient for the syntactic
+  falls back to regex-only - which is sufficient for the syntactic
   classes above but does not provide semantic context detection.
 
 ### Out of repo scope
@@ -161,7 +161,7 @@ regression gate rather than an SLA. The corpus and harness are public
   passing classifications to AIComply.
 - **Algorithm choice.** ML-DSA-44 (NIST FIPS 204, Dilithium) is the
   AIComply-side verify target. The signer (HMA / ARP issuer) uses ML-DSA-44 as
-  well to match. AIM / ATX use ML-DSA-65 for issuer signatures — they are
+  well to match. AIM / ATX use ML-DSA-65 for issuer signatures - they are
   separate domains; do not assume one signature verifies in the other system.
 - **Session vault.** AES-256-GCM with a per-session 256-bit key derived in
   memory only. Keys are never persisted; process exit destroys the key.
@@ -175,14 +175,14 @@ regression gate rather than an SLA. The corpus and harness are public
    external gate. Until then `comply()` is regex-only.
 2. **Pattern source is public.** A determined attacker can find regex
    bypasses by inspecting `src/classifier/regex/patterns.ts`. The patterns
-   are not secret and not designed to be — they are designed to be reviewed
+   are not secret and not designed to be - they are designed to be reviewed
    and tuned for your context. Combine with the Guard layer (when ready)
    and your own controls for adversarial-input scenarios.
 3. **Network endpoints default to `api.oa2a.org`.** Callers using L2 logic
    should configure their own `baseUrl` if they require an air-gapped or
    self-hosted Registry; otherwise traffic egresses to the OpenA2A backend.
 4. **Telemetry.** This package does not emit telemetry directly. The
-   Registry cache *fetches* from the Registry — the Registry sees those
+   Registry cache *fetches* from the Registry - the Registry sees those
    reads. No PII content is transmitted from `comply()`.
 5. **Synthetic-corpus baseline is not a field SLA.** The accuracy numbers
    in this document are measured against `bench/corpus/*.jsonl`, which is

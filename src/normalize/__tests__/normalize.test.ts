@@ -102,7 +102,7 @@ describe('Compact-form view (whitespace-injection defense)', () => {
     expect(r.offsetMap).toEqual([0, 2, 4]);
   });
 
-  it('preserves whitespace between letters — does NOT collapse prose word boundaries', () => {
+  it('preserves whitespace between letters - does NOT collapse prose word boundaries', () => {
     const r = buildCompactForm('My SSN is 1 2 3');
     // "My SSN is" prose stays whitespaced; "1 2 3" digit run collapses
     // because both neighbors of each space are token chars.

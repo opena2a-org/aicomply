@@ -3,7 +3,7 @@
 // the public API as a real consumer would. Catches packaging bugs (missing
 // files in dist/, broken exports, missing runtime deps) that unit tests can't.
 //
-// Network endpoints (Registry L2) are intentionally skipped — those require
+// Network endpoints (Registry L2) are intentionally skipped - those require
 // ClassificationSession.create() / warmRegistryCache() which hit api.oa2a.org.
 // The smoke gate is "does the artifact install and classify offline-safe
 // content correctly," not "is the Registry up."

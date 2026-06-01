@@ -84,7 +84,7 @@ export interface ComplyOptions {
   sourcePackage?: string;
   /**
    * Pre-warmed Registry intelligence cache. Must be warmed before calling
-   * comply() — use ClassificationSession or warmRegistryCache() to ensure
+   * comply() - use ClassificationSession or warmRegistryCache() to ensure
    * warm() has completed (AC-005: no network I/O in the hot path).
    */
   registryCache?: RegistryIntelligenceCache;

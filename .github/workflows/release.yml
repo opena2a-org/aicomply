@@ -1,7 +1,7 @@
 name: Release
 
 # Publishes @opena2a/aicomply to npm via Trusted Publishing (OIDC).
-# Triggered by pushing a v* tag (e.g. v0.1.0). No NPM_TOKEN secret is used —
+# Triggered by pushing a v* tag (e.g. v0.1.0). No NPM_TOKEN secret is used -
 # the npm registry exchanges GitHub's OIDC token for short-lived publish
 # credentials. One-time setup required on npmjs.com:
 #   Package settings → Publishing access → Trusted Publisher → GitHub Actions
@@ -67,7 +67,7 @@ jobs:
           PKG_VERSION=$(node -p "require('./package.json').version")
           if npm view "@opena2a/aicomply@$PKG_VERSION" version >/dev/null 2>&1; then
             echo "already=true" >> "$GITHUB_OUTPUT"
-            echo "Version $PKG_VERSION already on npm — skipping publish"
+            echo "Version $PKG_VERSION already on npm - skipping publish"
           else
             echo "already=false" >> "$GITHUB_OUTPUT"
           fi

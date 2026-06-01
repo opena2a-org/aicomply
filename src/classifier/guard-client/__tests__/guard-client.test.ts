@@ -12,7 +12,7 @@
  * Maps to CHIEF-CDS decision 2026-05-28: Guard stays a stub until
  * Phase 2b training ships, but the IPC layer is fully wired and
  * testable so the day the real binary lands all that's needed is a
- * deployed socket — no code change.
+ * deployed socket - no code change.
  */
 
 import { createServer, Socket } from 'node:net';

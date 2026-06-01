@@ -36,7 +36,7 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// comply() — no registry options
+// comply() - no registry options
 // ---------------------------------------------------------------------------
 
 describe('comply(): input validation (v1.0 hardening)', () => {
@@ -87,7 +87,7 @@ describe('comply(): no registry options', () => {
 });
 
 // ---------------------------------------------------------------------------
-// comply() — supply-chain hard block
+// comply() - supply-chain hard block
 // ---------------------------------------------------------------------------
 
 describe('comply(): supply-chain hard block via L2', () => {
@@ -123,7 +123,7 @@ describe('comply(): supply-chain hard block via L2', () => {
 });
 
 // ---------------------------------------------------------------------------
-// comply() — fleet anomaly threshold promotion
+// comply() - fleet anomaly threshold promotion
 // ---------------------------------------------------------------------------
 
 describe('comply(): fleet anomaly threshold via L2', () => {
@@ -189,7 +189,7 @@ describe('comply(): fleet anomaly threshold via L2', () => {
 });
 
 // ---------------------------------------------------------------------------
-// comply() — cache miss (AC-002)
+// comply() - cache miss (AC-002)
 // ---------------------------------------------------------------------------
 
 describe('comply(): cache miss handling', () => {
@@ -223,7 +223,7 @@ describe('comply(): cache miss handling', () => {
 });
 
 // ---------------------------------------------------------------------------
-// comply() — dualLayerOptions pass-through (no regression)
+// comply() - dualLayerOptions pass-through (no regression)
 // ---------------------------------------------------------------------------
 
 describe('comply(): dualLayerOptions not overwritten by registry threading', () => {
@@ -238,7 +238,7 @@ describe('comply(): dualLayerOptions not overwritten by registry threading', () 
       },
     });
 
-    // No guardResult / guardVerifyOptions supplied — just verify L2 runs normally
+    // No guardResult / guardVerifyOptions supplied - just verify L2 runs normally
     const result = await comply(
       { content: SAFE_CONTENT, sourcePackage: 'agent-x', registryCache: cache },
       { /* empty DualLayerOptions */ },

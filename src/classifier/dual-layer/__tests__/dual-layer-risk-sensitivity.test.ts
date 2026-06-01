@@ -171,7 +171,7 @@ describe('sensitivityMultiplier: supply-chain hard block ignores multiplier', ()
         fleetAnomalySignal: {
           name: 'blocked-agent',
           type: 'mcp_server',
-          anomalyScore: 0.10, // low raw anomaly — would be CLEAN without supply-chain alert
+          anomalyScore: 0.10, // low raw anomaly - would be CLEAN without supply-chain alert
           eventCount: 1,
           lastSeenAt: '2026-04-14T00:00:00Z',
           formulaVersion: '1.0',

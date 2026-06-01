@@ -73,7 +73,7 @@ export function classifyWithRegex(
 }
 
 /**
- * Redact matched value for safe logging — show first 4 and last 2 chars
+ * Redact matched value for safe logging - show first 4 and last 2 chars
  * when the value is long enough that the prefix/suffix don't reveal the
  * full secret. Threshold of 6 chars (down from 8) ensures shorter MRNs
  * (typically 6-12 chars) get the same partial-redaction treatment as

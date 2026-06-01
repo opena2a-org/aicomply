@@ -208,7 +208,7 @@ export const PATTERNS: PatternDefinition[] = [
     // Medical Record Number: MRN prefix followed by 6-12 alphanumeric
     // chars that include at least one digit. The digit requirement
     // suppresses the common prose-mention false positive ("MRN system",
-    // "MRN audit logs", "MRN training") — real MRNs are numeric or
+    // "MRN audit logs", "MRN training") - real MRNs are numeric or
     // alphanumeric with a numeric component, never an English word.
     regex: /\bMRN[:\s#-]*(?=[A-Z0-9]*\d)([A-Z0-9]{6,12})\b/gi,
     confidence: 0.9,

@@ -86,7 +86,7 @@ export function normalize(content: string): NormalizationResult {
   // Base64 / URL decoded payloads from the original input. These views
   // have no meaningful per-character mapping into the original (the
   // decoded chars don't correspond to sub-positions of the encoded
-  // blob), so they ship without an offsetMap — findings get anchored
+  // blob), so they ship without an offsetMap - findings get anchored
   // to the whole encoded token via originalStart/End.
   const encoded = extractEncoded(content);
   let base64Count = 0;

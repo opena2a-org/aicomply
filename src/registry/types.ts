@@ -33,7 +33,7 @@ export interface RegistryIntelligence {
   packageName: string;
   /**
    * Fleet anomaly signal. null means the package was not found in the
-   * fleet index — treat as "unknown", not clean (AC-002).
+   * fleet index - treat as "unknown", not clean (AC-002).
    */
   fleetAnomalySignal: FleetAnomalySignal | null;
   /**
