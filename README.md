@@ -2,7 +2,12 @@
 
 [![Status: stable](https://img.shields.io/badge/status-stable-brightgreen)](./STATUS.md)
 
-Inline content classifier for AI agent I/O. Detects PII, credentials, regulated data, and other sensitive content before your agent ships it to a cloud LLM.
+Inline content classifier for AI agent I/O. Detects PII, credentials, regulated data, prompt-injection attempts, and other sensitive content before your agent ships it to a cloud LLM.
+
+Two detection layers run in parallel:
+
+- A deterministic **regex layer** with adversarial-mutation handling (NFKC homoglyph folding, zero-width strip, targeted whitespace compaction, bounded Base64/URL decode). Always on, ~sub-ms.
+- An optional **semantic Guard layer** powered by [NanoMind](https://huggingface.co/opena2a/nanomind-security-classifier). Catches prompt-injection, tool-misuse, data-extraction, and exfiltration patterns the regex layer can't see. Active when `@nanomind/daemon` is running locally; silently falls back to regex-only otherwise.
 
 ## Why this exists
 
@@ -33,6 +38,8 @@ Drop it into your agent's tool-result handler, your message-egress wrapper, or a
 
 ## What it detects
 
+### Regex layer (always on)
+
 | Class      | Examples                                                       |
 |------------|----------------------------------------------------------------|
 | PII        | SSN, passport numbers, medical record numbers, NPI             |
@@ -41,6 +48,30 @@ Drop it into your agent's tool-result handler, your message-egress wrapper, or a
 | Government | CUI, FOUO, CONTROLLED markings                                 |
 
 Pattern source lives at [`src/classifier/regex/patterns.ts`](https://github.com/opena2a-org/aicomply/blob/main/src/classifier/regex/patterns.ts) - not secret, designed to be reviewed and tuned for your context.
+
+### Semantic Guard layer (when nanomind-daemon is running)
+
+| AttackClass            | Catches                                                       |
+|------------------------|---------------------------------------------------------------|
+| `prompt_injection`     | "Ignore previous instructions", role-switching, override prompts |
+| `exfiltration_pattern` | Requests crafted to siphon data via tool outputs              |
+| `tool_misuse`          | Inputs that pressure the agent into unsanctioned tool calls   |
+| `data_extraction`      | Bulk-readout requests targeting sensitive fields              |
+
+When the Guard fires above its confidence threshold, the finding surfaces with `view: undefined`, `classifier: 'guard'`, and `type` equal to the attack class. Block per AIM FGA Step 5: `attackClass !== '' && confidence > 0.8`.
+
+## Enabling the semantic Guard
+
+The Guard is opt-in via `@nanomind/daemon`. Install and run it alongside aicomply:
+
+```bash
+npm install @nanomind/daemon
+npx nanomind-daemon &   # listens on http://127.0.0.1:47200
+```
+
+aicomply auto-detects the daemon on the default URL. Override with `MOCK_NANOMIND_URL` (development) or pass `baseUrl` to `classifyWithNanoMindDaemon()` directly. No code change required in the consumer: as long as the daemon is reachable, `comply()` returns `classifierResults.guard` populated alongside the regex result.
+
+If the daemon is not installed, not running, or unreachable, aicomply silently falls back to regex-only - the v1.0 behavior. The Guard is a defense-in-depth layer, not a gate.
 
 ## Adversarial-mutation handling
 

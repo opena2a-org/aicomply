@@ -4,6 +4,10 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
   testMatch: ['**/__tests__/**/*.test.ts'],
+  // Isolate every test from any nanomind daemon a developer happens to
+  // be running locally. Tests that specifically want the adapter to
+  // succeed point baseUrl at their own mock server via options.
+  setupFiles: ['<rootDir>/jest.setup.js'],
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/__tests__/**',
