@@ -64,7 +64,7 @@ export type { DualLayerOptions } from './classifier/dual-layer';
  *
  * When sourcePackage and registryCache are set on options, Registry L2 logic
  * runs after classification (fleet anomaly threshold + supply-chain hard block).
- * The cache must be warmed before calling comply() — use ClassificationSession
+ * The cache must be warmed before calling comply() - use ClassificationSession
  * or warmRegistryCache() to ensure this (AC-005: no network I/O in the hot path).
  *
  * @param options - Content to classify and optional policy/risk context
@@ -167,7 +167,7 @@ export class ClassificationSession {
 
   /**
    * Run compliance classification, applying L2 registry logic when sourcePackage
-   * is provided. Uses the session's warmed cache — no network I/O in the hot path.
+   * is provided. Uses the session's warmed cache - no network I/O in the hot path.
    */
   async comply(
     options: ComplyOptions,
@@ -182,7 +182,7 @@ export class ClassificationSession {
 
   /**
    * Trigger a background refresh of the registry cache if stale.
-   * Non-blocking — returns immediately and does not affect in-flight classifies.
+   * Non-blocking - returns immediately and does not affect in-flight classifies.
    */
   refreshCache(): void {
     this.cache.refreshIfStale();

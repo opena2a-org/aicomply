@@ -10,7 +10,7 @@
  * Unicode homoglyphs (NFKC), zero-width / bidi controls, intra-token
  * whitespace injection, and bounded Base64 / URL-encoded forms.
  * Out-of-scope: steganography, language translation, adversarial LLM
- * rephrasing — those require the Guard semantic layer.
+ * rephrasing - those require the Guard semantic layer.
  */
 
 export type NormalizationTransform =
@@ -59,7 +59,7 @@ export interface DecodedExtraction {
    * position in the ORIGINAL content. Present for `'compact'` (where
    * we know the projection precisely); absent for `'decoded-base64'`
    * / `'decoded-url'` (where the decoded payload's chars don't have
-   * a meaningful sub-position inside the encoded blob — findings are
+   * a meaningful sub-position inside the encoded blob - findings are
    * anchored to the whole encoded token via originalStart/End).
    */
   offsetMap?: number[];

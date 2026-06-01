@@ -7,7 +7,7 @@
  * patterns like SSN rely on word boundaries ("My SSN" → "MySSN"
  * eliminates `\b` before the digits). Instead we strip whitespace
  * only when BOTH neighbors are in the set {digit, '-', '_', '/', '.',
- * ':'} — characters that appear inside SSNs, PANs, IBANs, MRNs, NPIs,
+ * ':'} - characters that appear inside SSNs, PANs, IBANs, MRNs, NPIs,
  * passport numbers. The boundary characters around such a run remain
  * intact, so the regex's word boundaries still fire.
  *

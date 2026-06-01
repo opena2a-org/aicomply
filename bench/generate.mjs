@@ -151,11 +151,11 @@ function ssnNegatives(rng, n) {
     () => `${pad(randInt(rng, 1, 665), 3)}-${pad(randInt(rng, 1, 99), 2)}-0000`,
     // Phone number look-alike (10 digits, not SSN format)
     () => `(${randInt(rng, 200, 999)}) ${randInt(rng, 200, 999)}-${randInt(rng, 1000, 9999)}`,
-    // Missing a digit — does not match \d{3}-\d{2}-\d{4}
+    // Missing a digit - does not match \d{3}-\d{2}-\d{4}
     () => `${pad(randInt(rng, 1, 665), 3)}-${pad(randInt(rng, 1, 99), 2)}-${pad(randInt(rng, 1, 999), 3)}`,
     // Date sequence YYYY-MM-DD (4-2-2 doesn't match 3-2-4 SSN shape)
     () => `${randInt(rng, 1900, 2030)}-${pad(randInt(rng, 1, 12), 2)}-${pad(randInt(rng, 1, 28), 2)}`,
-    // 4-2-4 (book/part code shape) — first group is 4 digits, not 3, so SSN regex won't match.
+    // 4-2-4 (book/part code shape) - first group is 4 digits, not 3, so SSN regex won't match.
     () => `${randInt(rng, 1000, 9999)}-${randInt(rng, 10, 99)}-${randInt(rng, 1000, 9999)} CODE`,
   ];
   for (let i = 0; i < n; i += 1) {
@@ -297,7 +297,7 @@ function cuiNegatives(rng, n) {
   const lines = [
     'The legal department maintains a controlled access list.',
     'Use of the CUI Registry by federal agencies is voluntary.',
-    'For official channels only — see the procurement memo.',
+    'For official channels only - see the procurement memo.',
     'Information classification is governed by E.O. 13526.',
     'This document is unclassified and may be shared freely.',
   ];
@@ -413,7 +413,7 @@ function buildPositives(klass, rng, count, generateFn, supportsBase64 = false) {
     const sentence = `Record: ${core}.`;
     out.push({ class: klass, label: 'positive', text: sentence, variant: 'canonical' });
   }
-  // 50% adversarial — interleaved variants
+  // 50% adversarial - interleaved variants
   const variants = ['nfkc', 'zero-width', 'whitespace'];
   if (supportsBase64) variants.push('base64', 'url-encoded');
   for (let i = 0; i < advCount; i += 1) {

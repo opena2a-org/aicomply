@@ -3,7 +3,7 @@
  *
  * Tests the full verification pipeline: schema, algorithm gate, key sizes,
  * hybrid signature (Ed25519+ML-DSA-44), freshness, and tier rejection matrix.
- * Uses real crypto operations — no mocks.
+ * Uses real crypto operations - no mocks.
  */
 
 import { verifyClassification, CLASSIFICATION_MIN_TIER, ABSOLUTE_DENY_CLASSES } from '../verify';
@@ -70,7 +70,7 @@ describe('verifyClassification', () => {
   it('rejects signature from a different key pair', async () => {
     const otherKeys = generateTestKeyPair();
     const result = signGuardResult(otherKeys, 'documentation', 'test');
-    // Verify with original keys — should fail
+    // Verify with original keys - should fail
     const out = await verifyClassification(result, makeVerifyOptions(keys));
     expect(out.valid).toBe(false);
     if (!out.valid) expect(out.code).toBe('SIGNATURE_INVALID');

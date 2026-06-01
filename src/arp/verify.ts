@@ -206,7 +206,7 @@ export async function verifyClassification(
     return invalid('KEY_FORMAT_ERROR', `ml-dsa-44 signature has wrong length: ${mldsaSig.length}`);
   }
 
-  // 4. Hybrid signature verification — both halves must pass
+  // 4. Hybrid signature verification - both halves must pass
   const canonical = canonicalize(result as unknown as Record<string, unknown>);
 
   let ed25519Valid: boolean;

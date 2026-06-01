@@ -122,7 +122,7 @@ async function main() {
   try {
     baseline = JSON.parse(readFileSync(BASELINE_PATH, 'utf8'));
   } catch {
-    console.log('\nno baseline.json found — run with --update-baseline to create one.');
+    console.log('\nno baseline.json found - run with --update-baseline to create one.');
     process.exit(0);
   }
 

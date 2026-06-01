@@ -2,7 +2,7 @@
  * Strip zero-width and bidi-control characters that are commonly used to
  * defeat naive regex matching (e.g. inserting U+200B between digits of an
  * SSN). These characters carry no semantic content for our detection
- * patterns — stripping them is lossless for our purposes.
+ * patterns - stripping them is lossless for our purposes.
  *
  * In-scope:
  *   - U+200B ZERO WIDTH SPACE
@@ -16,8 +16,8 @@
  *   - U+FEFF BYTE ORDER MARK / ZERO WIDTH NO-BREAK SPACE
  *
  * NOT stripped:
- *   - U+00AD SOFT HYPHEN — visible in some renderers, deferred to v1.1.
- *   - Combining marks (U+0300–U+036F) — would break legitimate accented prose.
+ *   - U+00AD SOFT HYPHEN - visible in some renderers, deferred to v1.1.
+ *   - Combining marks (U+0300–U+036F) - would break legitimate accented prose.
  */
 
 const STRIP_CODE_POINTS: ReadonlySet<number> = new Set([
