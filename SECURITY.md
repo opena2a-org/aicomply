@@ -93,7 +93,55 @@ guarantees. Real-world inputs may differ; treat the baseline as a CI
 regression gate rather than an SLA. The corpus and harness are public
 (`bench/`) so consumers can regenerate against their own data.
 
-### Still out of threat model scope (1.0)
+### Semantic Guard layer (added in 2.0)
+
+When `@nanomind/daemon` is reachable on the configured URL, aicomply
+runs every input through the daemon's `/v1/infer` endpoint in addition
+to the regex layer. The daemon hosts a Mamba TME classifier
+(`nanomind-security-classifier` v0.5.0) and returns a canonical
+`attackClass` plus confidence. aicomply maps any `attackClass !== '' &&
+confidence > 0.8` to a Guard violation per AIM FGA Step 5.
+
+New attack classes detectable when the Guard is armed:
+`prompt_injection`, `exfiltration_pattern`, `tool_misuse`,
+`data_extraction`. These are detection categories the regex layer
+cannot see by design - they are semantic intents, not syntactic
+patterns.
+
+### Trust boundary: the daemon process
+
+The daemon runs as a separate process and its responses are an attack
+surface in the same sense Guard's ARP-signed responses are. The
+adapter validates every field on the daemon response (canonical
+`attackClass` enum, confidence in [0,1], non-empty modelVersion,
+non-negative latencyMs); any schema violation falls back to
+regex-only.
+
+**Mitigations baked into the adapter:**
+
+- The daemon's `evidence` and `remediation` strings are NEVER copied
+  into `Violation.value`. Those fields may reflect attacker-influenced
+  bytes (ANSI escapes, log-injection newlines) and could poison
+  downstream operator dashboards. Only the canonical attack-class
+  enum becomes the violation type. Regression test covers ANSI escape
+  + shell-payload bytes in those fields.
+- The adapter never writes daemon output to stdout/stderr.
+- Per-call timeout (default 5000ms) bounds the impact of a slow
+  daemon.
+
+**Operator responsibilities (NOT enforced by the library):**
+
+- Run the daemon as a separate user.
+- Socket / port permissions: `chmod 0600` on the IPC path; bind HTTP
+  to `127.0.0.1` only (the daemon already enforces this).
+- Pin the daemon version (`@nanomind/daemon@0.2.0`) — a daemon at a
+  different wire-format version will fail validation and fall back
+  silently. There is no automatic upgrade signaling today.
+- Health-check the daemon out-of-band (e.g. probe `/health`) if Guard
+  presence is a compliance requirement; `comply()` will not surface
+  daemon-down conditions as errors.
+
+### Still out of threat model scope (2.0)
 
 - **Steganography, language translation, adversarial LLM rephrasing.**
   These require the Guard semantic layer; the regex tier is a syntactic
@@ -120,11 +168,12 @@ regression gate rather than an SLA. The corpus and harness are public
   ("MRN system was updated") prioritized over recall on all-letter
   MRNs. Customers in those domains should supply a custom regex or
   scan with a dedicated pattern.
-- **Guard fallback observability.** When the GuardClient cannot reach
-  the socket (missing, EACCES, ECONNREFUSED, ENOTSOCK, EISDIR), it
-  silently falls back to regex-only. The library does not log these
-  conditions (no library should write to stderr without consent); the
-  Guard is treated as a defense-in-depth layer whose presence is
+- **Guard fallback observability.** When the nanomind-daemon adapter
+  cannot reach `http://127.0.0.1:47200/v1/infer` (connection refused,
+  timeout, non-2xx, malformed response), it silently falls back to
+  regex-only. The library does not log these conditions (no library
+  should write to stderr without consent); the Guard is treated as a
+  defense-in-depth layer whose presence is
   optional. Operators who need observability should health-check the
   socket out-of-band before relying on Guard for compliance gates.
 - **Side-channel resistance.** Timing of `comply()` may leak coarse
