@@ -1,0 +1,49 @@
+name: Real-daemon integration
+
+# Regression gate for the v2.0 dual-layer claim. Installs the actual
+# @nanomind/daemon (a devDependency), spawns it on a non-default port,
+# runs the four canonical comply() calls from the README's "Live
+# validation" section, and asserts the verdicts match what we ship to
+# consumers.
+#
+# Auto-skips when the daemon binary can't be resolved (defensive, but
+# devDependencies will pull it in here). Set
+# SKIP_REAL_DAEMON_TEST=1 in the env to skip explicitly.
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/real-daemon.yml'
+  push:
+    branches:
+      - main
+
+jobs:
+  real-daemon:
+    name: Real nanomind-daemon round-trip
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run real-daemon integration test
+        run: npx jest nanomind-real-daemon --testTimeout=180000
