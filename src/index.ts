@@ -26,6 +26,22 @@ export { normalize } from './normalize';
 export { classifyWithRegex } from './classifier/regex';
 export { classifyDualLayer } from './classifier/dual-layer';
 export { GuardClient } from './classifier/guard-client';
+export {
+  classifyWithNanoMindDaemon,
+  isNanoMindDaemonAvailable,
+  mapInferResponseToClassifierResult,
+  DEFAULT_NANOMIND_DAEMON_URL,
+  DEFAULT_NANOMIND_TIMEOUT_MS,
+  NANOMIND_INFER_ENDPOINT,
+  NANOMIND_DEFAULT_INTENT,
+} from './classifier/guard-client/nanomind-adapter';
+export type { NanoMindAdapterOptions } from './classifier/guard-client/nanomind-adapter';
+export type {
+  NanoMindAttackClass,
+  NanoMindInferRequest,
+  NanoMindInferResponse,
+  NanoMindErrorResponse,
+} from './classifier/guard-client/types';
 export { SessionVault } from './vault';
 export { loadPolicyPack, validatePolicyConfig } from './policy';
 export { assembleRiskContext } from './risk';

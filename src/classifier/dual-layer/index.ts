@@ -17,7 +17,7 @@
  */
 
 import { classifyWithRegex } from '../regex';
-import { GuardClient } from '../guard-client';
+import { classifyWithNanoMindDaemon } from '../guard-client/nanomind-adapter';
 import { verifyClassification } from '../../arp/verify';
 import { RegistryIntelligenceCache } from '../../registry';
 import { assembleRiskContext } from '../../risk';
@@ -28,12 +28,11 @@ import type {
   NanoMindGuardVerifyOptions,
 } from '../../arp/types';
 
-// The Guard client is constructed lazily inside classifyDualLayer (not
-// at module-top) so process.env.MOCK_GUARD_SOCKET is read at call time
-// rather than at import time. A module-top singleton would freeze
-// whatever env value happened to be set when this file was first
-// required - silently routing every classify() to that path for the
-// lifetime of the process, even after the env var changes.
+// The Guard layer is invoked via the nanomind-daemon adapter
+// (classifyWithNanoMindDaemon). The adapter is a stateless function so
+// nothing is constructed at module-top — the daemon base URL is
+// resolved at call time so process.env.MOCK_NANOMIND_URL takes effect
+// even when it changes between classify() calls.
 
 export interface DualLayerOptions {
   guardVerifyOptions?: NanoMindGuardVerifyOptions;
@@ -169,9 +168,11 @@ export async function classifyDualLayer(
       };
     }
   } else {
-    // Attempt Guard classifier via IPC. Construct per-call so the env
-    // var read happens at classify time, not at module load time.
-    const guardResult = await new GuardClient().classify(content);
+    // Attempt Guard classification via the nanomind-daemon adapter.
+    // Returns null when the daemon is unreachable, the response is
+    // malformed, or the response times out — silent fallback to
+    // regex-only is the documented contract.
+    const guardResult = await classifyWithNanoMindDaemon(content);
 
     const allViolations: Violation[] = [...regexResult.violations];
     if (guardResult) {
