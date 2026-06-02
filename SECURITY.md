@@ -134,7 +134,7 @@ regex-only.
 - Run the daemon as a separate user.
 - Socket / port permissions: `chmod 0600` on the IPC path; bind HTTP
   to `127.0.0.1` only (the daemon already enforces this).
-- Pin the daemon version (`@nanomind/daemon@0.2.0`) — a daemon at a
+- Pin the daemon version (`@nanomind/daemon@0.3.0`) — a daemon at a
   different wire-format version will fail validation and fall back
   silently. There is no automatic upgrade signaling today.
 - Health-check the daemon out-of-band (e.g. probe `/health`) if Guard

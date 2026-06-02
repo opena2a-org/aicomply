@@ -80,7 +80,7 @@ Reproducing the dual-layer end-to-end against the published 2.0.0 + daemon 0.2.0
 ```bash
 mkdir aicomply-demo && cd aicomply-demo
 npm init -y
-npm install @opena2a/aicomply@2.0.0 @nanomind/daemon@0.2.0
+npm install @opena2a/aicomply@2.0.0 @nanomind/daemon@0.3.0
 npx nanomind-daemon start
 ```
 
