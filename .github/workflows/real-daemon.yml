@@ -45,27 +45,18 @@ jobs:
       - name: Build
         run: npm run build
 
-      # The daemon does NOT auto-download the model artifact; it expects
-      # the ONNX weights + tokenizer pre-staged at ~/.nanomind/models/.
-      # Cache the directory across runs (keyed on the pinned model
-      # version) so the heavy download only happens on a cache miss.
+      # Since @nanomind/daemon 0.3.0 the daemon auto-downloads the
+      # v0.5.0 ONNX + tokenizer from the canonical HuggingFace bucket
+      # on first run and SHA-256 verifies each file before binding HTTP.
+      # We keep actions/cache on ~/.nanomind/models so the daemon's
+      # first-run download populates the cache; subsequent CI runs
+      # restore from cache and the daemon's auto-download step becomes
+      # a no-op.
       - name: Cache nanomind model
-        id: model-cache
         uses: actions/cache@v4
         with:
           path: ~/.nanomind/models
           key: nanomind-security-classifier-v0.5.0
-
-      - name: Download nanomind-security-classifier v0.5.0 from HuggingFace
-        if: steps.model-cache.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ~/.nanomind/models
-          BASE="https://huggingface.co/opena2a/nanomind-security-classifier/resolve/main"
-          for f in nanomind-tme.onnx nanomind-tme.onnx.data tokenizer.json; do
-            echo "Downloading $f..."
-            curl -fsSL -o "$HOME/.nanomind/models/$f" "$BASE/$f"
-          done
-          ls -la ~/.nanomind/models
 
       - name: Run real-daemon integration test
         run: npx jest nanomind-real-daemon --testTimeout=180000
