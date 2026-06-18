@@ -1,9 +1,31 @@
 {
   "name": "@opena2a/aicomply",
-  "version": "2.0.0",
-  "description": "Dual-layer compliance classifier for AI agent communications",
+  "version": "2.1.0",
+  "description": "Inline PII, credential, and regulated-data classifier for AI agent I/O. Dual-layer: deterministic regex + optional semantic Guard. Library + CLI.",
+  "keywords": [
+    "pii",
+    "pii-detection",
+    "compliance",
+    "redaction",
+    "credentials",
+    "secret-detection",
+    "data-loss-prevention",
+    "dlp",
+    "llm",
+    "llm-security",
+    "ai-agent",
+    "ai-safety",
+    "prompt-injection",
+    "guardrails",
+    "hipaa",
+    "pci",
+    "gdpr"
+  ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "aicomply": "dist/cli.js"
+  },
   "files": [
     "dist",
     "README.md",

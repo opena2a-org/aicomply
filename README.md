@@ -15,6 +15,36 @@ Every agent that calls a hosted LLM (Anthropic, OpenAI, Bedrock, Vertex, …) co
 
 `aicomply` is that check. It runs inline, sub-millisecond, with no external calls of its own. You hand it the content; it returns a verdict (`CLEAN` / `VIOLATION` / `DENY`) and structured findings. You decide what to do next - block, redact, log, or pass.
 
+## Try it (CLI, no integration code)
+
+Evaluate aicomply against real content in one command, before writing any code:
+
+```bash
+# scan a file
+npx @opena2a/aicomply scan ./support-ticket.txt
+
+# pipe content
+echo "My SSN is 123-45-6789, please update the record." | npx @opena2a/aicomply scan
+```
+
+```
+  VIOLATION  (stdin)   1 finding
+    SSN          123-•••89          confidence 0.95  layer regex
+
+Verdict: VIOLATION  ·  block, redact, or log before this content reaches an LLM.
+```
+
+Detected values are masked in output, so the CLI never prints a full secret to your
+terminal or logs. Exit code is `0` for CLEAN and `1` when anything is flagged, so it
+drops straight into CI:
+
+```bash
+cat transcript.log | npx @opena2a/aicomply scan --json   # machine-readable
+git diff --cached | npx @opena2a/aicomply scan -q || echo "sensitive content staged"
+```
+
+The CLI is a try-path. The library API below is the production surface.
+
 ## Install
 
 ```bash

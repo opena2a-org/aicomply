@@ -23,3 +23,4 @@ The semantic Guard layer is wired but its model binary depends on NanoMind Phase
 |---|---|---|
 | 2026-05-24 | beta   | initial STATUS.md. v0.1.0 first release; v2 readiness gate open. |
 | 2026-05-28 | stable | v1.0.0 ships: adversarial normalization, measured accuracy baseline, Guard IPC wired. Semver applies. |
+| 2026-06-18 | stable | v2.1.0: adds an `aicomply` CLI (`scan` over files/stdin, `--json`/`--quiet`, masked output, CI exit codes) as a zero-integration try-path. Library API unchanged. npm keywords added for discovery. |
