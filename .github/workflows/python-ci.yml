@@ -1,0 +1,55 @@
+name: Python CI
+
+# Lint + type-check + test the Python port, and run the CROSS-LANGUAGE PARITY
+# GATE: the Python comply() must reproduce the TS-produced golden in
+# bench/baseline.json against the shared bench/corpus. A TS pattern/threshold
+# change that updates baseline.json will fail this job unless the Python port is
+# updated in lockstep (org Registry-change-propagation discipline).
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'python/**'
+      - 'bench/**'        # shared golden corpus + baseline drive parity
+      - 'src/**'          # a TS pattern change must update Python in the same PR
+      - '.github/workflows/python-ci.yml'
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Lint, type-check, test, parity
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.12']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install (editable + dev tools)
+        run: pip install -e '.[dev]'
+
+      - name: Ruff
+        run: ruff check src tests bench
+
+      - name: Mypy
+        run: mypy src/aicomply --ignore-missing-imports
+
+      - name: Pytest (includes parity gate)
+        run: python -m pytest -q
+
+      - name: Cross-language parity harness vs TS baseline
+        run: python bench/measure.py
