@@ -50,6 +50,9 @@ __all__ = [
     "is_nanomind_daemon_available",
     "NanoMindAdapterOptions",
     "DEFAULT_NANOMIND_DAEMON_URL",
+    "guard_io",
+    "guard_output",
+    "ComplianceViolation",
     "__version__",
 ]
 
@@ -92,3 +95,12 @@ def comply(
     return classify_dual_layer(
         content, DualLayerOptions(use_guard=use_guard, guard_options=guard_options)
     )
+
+
+# Re-export the framework decorators at the top level so they are discoverable
+# as `from aicomply import guard_io, guard_output` (matching how the package is
+# advertised). Imported here, after `comply` is defined, because the decorator
+# module imports `comply` from this package — a top-of-file import would be a
+# circular import. `aicomply.integrations.decorator` pulls in no optional deps
+# (the LangChain integration is imported separately and stays optional).
+from .integrations import ComplianceViolation, guard_io, guard_output  # noqa: E402

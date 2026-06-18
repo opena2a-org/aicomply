@@ -71,6 +71,16 @@ class NormalizationStep:
 
 @dataclass
 class ComplyResult:
+    """Result of a ``comply()`` call: the verdict plus structured findings.
+
+    Surfaced finding values (``Violation.value``) are masked. Note that
+    ``original_content`` and ``normalized_content`` retain the **raw** input you
+    passed in (they exist to map finding offsets back to the source) — so if you
+    log or serialize a ``ComplyResult`` wholesale, those two fields carry the
+    unmasked content. Log ``violations`` (or ``to_dict()`` selectively), not the
+    whole result, when the input may contain secrets.
+    """
+
     verdict: Verdict
     violations: list[Violation]
     classifier_results: dict[str, ClassifierResult]

@@ -7,6 +7,17 @@ import pytest
 from aicomply.integrations import ComplianceViolation, guard_io, guard_output
 
 
+def test_decorators_are_reexported_at_top_level():
+    """`from aicomply import guard_io, ...` works and yields the same objects."""
+    import aicomply
+
+    assert aicomply.guard_io is guard_io
+    assert aicomply.guard_output is guard_output
+    assert aicomply.ComplianceViolation is ComplianceViolation
+    for name in ("guard_io", "guard_output", "ComplianceViolation"):
+        assert name in aicomply.__all__
+
+
 def test_guard_output_raises_on_pii():
     @guard_output()  # default on_violation="raise"
     def answer() -> str:
