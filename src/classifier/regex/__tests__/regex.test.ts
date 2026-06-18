@@ -174,6 +174,17 @@ describe('credential patterns', () => {
     expect(scanPatterns('sk-' + 'e'.repeat(12)).filter(m => m.type === 'CREDENTIAL')).toHaveLength(0);
   });
 
+  it('catches a specific provider key prefixed by an adjacent word char (no \\b evasion)', () => {
+    // an attacker prepending '_' must not let an Anthropic key slip past
+    const matches = scanPatterns('_sk-ant-api03-' + 'A'.repeat(95));
+    expect(matches.some(m => m.type === 'CREDENTIAL')).toBe(true);
+  });
+
+  it('does not flag English words ending in -sk before a long token (legacy \\b)', () => {
+    expect(scanPatterns('risk-' + 'A'.repeat(50)).filter(m => m.type === 'CREDENTIAL')).toHaveLength(0);
+    expect(scanPatterns('disk-' + 'B'.repeat(50)).filter(m => m.type === 'CREDENTIAL')).toHaveLength(0);
+  });
+
   it('does not match short tokens', () => {
     const matches = scanPatterns('Bearer short');
     const creds = matches.filter(m => m.type === 'CREDENTIAL');

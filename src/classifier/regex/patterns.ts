@@ -170,29 +170,36 @@ export const PATTERNS: PatternDefinition[] = [
     type: 'CREDENTIAL',
     // Anthropic API key (sk-ant-apiNN-...). Provider keys appear bare in tool
     // output and transcripts, not only in `key=` assignments, so they need a
-    // dedicated rule. Mirrors the @opena2a/credential-patterns canonical forms.
-    regex: /\b(sk-ant-api\d{2}-[A-Za-z0-9_-]{20,})/g,
+    // dedicated rule. Adapted from the @opena2a/credential-patterns canonical
+    // forms. The distinctive 'sk-ant-api' prefix is FP-proof on its own, so no
+    // leading \b — that lets a key survive an adjacent word char (e.g. a stray
+    // '_sk-ant-...' an attacker prepends to dodge a word-boundary anchor).
+    regex: /(sk-ant-api\d{2}-[A-Za-z0-9_-]{20,})/g,
     confidence: 0.98,
   },
   {
     type: 'CREDENTIAL',
-    // OpenAI project-scoped key (sk-proj-...)
-    regex: /\b(sk-proj-[A-Za-z0-9_-]{20,})/g,
+    // OpenAI project-scoped key (sk-proj-...). Char class widened to [_-] vs the
+    // canonical [A-Za-z0-9]{20,}: real project keys carry '-'/'_' separators.
+    regex: /(sk-proj-[A-Za-z0-9_-]{20,})/g,
     confidence: 0.98,
   },
   {
     type: 'CREDENTIAL',
     // OpenRouter key (sk-or-v1-...)
-    regex: /\b(sk-or-v1-[A-Za-z0-9]{48,})/g,
+    regex: /(sk-or-v1-[A-Za-z0-9]{48,})/g,
     confidence: 0.98,
   },
   {
     type: 'CREDENTIAL',
-    // OpenAI legacy secret key (sk- followed by 48+ alnum). Broader, so a
-    // slightly lower confidence. The early '-' in sk-ant-/sk-proj-/sk-or-v1-
-    // means those are caught by their specific rules above, never this one.
+    // OpenAI legacy secret key (sk- followed by 48+ alnum). Broadest rule, so
+    // the lowest confidence: a 48-char hash/ID prefixed with 'sk-' can false-
+    // positive. Unlike the specific rules above it KEEPS a leading \b — that
+    // suppresses the common English-word FPs (risk-/disk-/task- + long token).
+    // The early '-' in sk-ant-/sk-proj-/sk-or-v1- means those are caught by
+    // their specific rules above, never this one.
     regex: /\b(sk-[A-Za-z0-9]{48,})/g,
-    confidence: 0.95,
+    confidence: 0.85,
   },
   {
     type: 'CREDENTIAL',

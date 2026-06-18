@@ -340,7 +340,7 @@ function credentialNegatives(rng, n) {
   for (let i = 0; i < n; i += 1) {
     const variant = pick(rng, [
       'short-bearer', 'akia-short', 'ghp-short', 'docs-mention', 'placeholder',
-      'sk-ant-short', 'sk-legacy-short',
+      'sk-ant-short', 'sk-legacy-short', 'sk-word-prefix',
     ]);
     let text;
     if (variant === 'short-bearer') text = `Bearer X`;
@@ -351,6 +351,10 @@ function credentialNegatives(rng, n) {
     else if (variant === 'sk-ant-short') text = `sk-ant-api03-${randAlnum(rng, 6)}`;
     // bare sk- with a too-short suffix (<48) must not match the legacy rule.
     else if (variant === 'sk-legacy-short') text = `sk-${randAlnum(rng, 12)}`;
+    // English words ending in -sk ('risk-'/'disk-'/'task-') before a 48-char
+    // token embed the literal 'sk-'; the legacy rule's leading \b must suppress
+    // these (no word boundary inside 'risk-').
+    else if (variant === 'sk-word-prefix') text = `${pick(rng, ['risk', 'disk', 'task'])}-${randAlnum(rng, 50)}`;
     else text = 'Use placeholder ${API_KEY} during local development.';
     out.push({ class: 'CREDENTIAL', label: 'negative', text, variant });
   }

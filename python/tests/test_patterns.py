@@ -53,6 +53,11 @@ def test_provider_api_keys():
     # near-miss negatives: too-short suffixes must not match
     assert "CREDENTIAL" not in _types("sk-ant-api03-abc")
     assert "CREDENTIAL" not in _types("sk-" + "e" * 12)
+    # an adjacent word char must not let a specific key evade (no leading \b)
+    assert "CREDENTIAL" in _types("_sk-ant-api03-" + "A" * 95)
+    # English words ending in -sk before a long token must not false-positive
+    assert "CREDENTIAL" not in _types("risk-" + "A" * 50)
+    assert "CREDENTIAL" not in _types("disk-" + "B" * 50)
 
 
 def test_cui():
