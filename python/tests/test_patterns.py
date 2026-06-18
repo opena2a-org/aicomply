@@ -42,6 +42,19 @@ def test_credentials():
     assert "CREDENTIAL" not in _types("AKIA9OK6Q4TR")  # akia-short
 
 
+def test_provider_api_keys():
+    # Bare provider keys as they appear in tool output / transcripts, not in a
+    # key= assignment (parity with the TS patterns.ts CREDENTIAL block).
+    anthropic = "sk-ant-api03-" + "A" * 95
+    assert "CREDENTIAL" in _types(f"The agent returned {anthropic} in its summary.")
+    assert "CREDENTIAL" in _types("sk-proj-" + "B" * 48)
+    assert "CREDENTIAL" in _types("sk-or-v1-" + "c" * 48)
+    assert "CREDENTIAL" in _types("sk-" + "d" * 48)  # OpenAI legacy
+    # near-miss negatives: too-short suffixes must not match
+    assert "CREDENTIAL" not in _types("sk-ant-api03-abc")
+    assert "CREDENTIAL" not in _types("sk-" + "e" * 12)
+
+
 def test_cui():
     assert "CUI" in _types("Document marked CUI//BASIC here.")
     assert "CUI" in _types("CONTROLLED UNCLASSIFIED INFORMATION applies.")

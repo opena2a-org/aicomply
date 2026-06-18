@@ -24,7 +24,7 @@ import { comply } from './index';
 import { DEFAULT_NANOMIND_DAEMON_URL } from './classifier/guard-client/nanomind-adapter';
 import type { ComplyResult, Violation } from './types';
 
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 
 /**
  * A recoverable usage error (exit code 2). Thrown rather than calling

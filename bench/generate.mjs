@@ -320,23 +320,37 @@ function randAlnum(rng, n, upper = false) {
 }
 
 function generateValidCredential(rng) {
-  const variant = randInt(rng, 0, 4);
+  const variant = randInt(rng, 0, 8);
   if (variant === 0) return `AKIA${randAlnum(rng, 16, true)}`;
   if (variant === 1) return `ghp_${randAlnum(rng, 36)}`;
   if (variant === 2) return `github_pat_${randAlnum(rng, 82)}`;
   if (variant === 3) return `Bearer ${randAlnum(rng, 32)}`;
+  // Provider API keys appear bare in tool output / transcripts, not only in
+  // key= assignments. sk-ant (Anthropic), sk-proj (OpenAI project),
+  // sk-or-v1 (OpenRouter), sk- (OpenAI legacy).
+  if (variant === 5) return `sk-ant-api03-${randAlnum(rng, 95)}`;
+  if (variant === 6) return `sk-proj-${randAlnum(rng, 48)}`;
+  if (variant === 7) return `sk-or-v1-${randAlnum(rng, 48)}`;
+  if (variant === 8) return `sk-${randAlnum(rng, 48)}`;
   return `api_key=${randAlnum(rng, 24)}`;
 }
 
 function credentialNegatives(rng, n) {
   const out = [];
   for (let i = 0; i < n; i += 1) {
-    const variant = pick(rng, ['short-bearer', 'akia-short', 'ghp-short', 'docs-mention', 'placeholder']);
+    const variant = pick(rng, [
+      'short-bearer', 'akia-short', 'ghp-short', 'docs-mention', 'placeholder',
+      'sk-ant-short', 'sk-legacy-short',
+    ]);
     let text;
     if (variant === 'short-bearer') text = `Bearer X`;
     else if (variant === 'akia-short') text = `AKIA${randAlnum(rng, 8, true)}`;
     else if (variant === 'ghp-short') text = `ghp_${randAlnum(rng, 12)}`;
     else if (variant === 'docs-mention') text = 'Set api_key to your actual key in production.';
+    // sk-ant-apiNN- with a too-short suffix (<20) must not match.
+    else if (variant === 'sk-ant-short') text = `sk-ant-api03-${randAlnum(rng, 6)}`;
+    // bare sk- with a too-short suffix (<48) must not match the legacy rule.
+    else if (variant === 'sk-legacy-short') text = `sk-${randAlnum(rng, 12)}`;
     else text = 'Use placeholder ${API_KEY} during local development.';
     out.push({ class: 'CREDENTIAL', label: 'negative', text, variant });
   }

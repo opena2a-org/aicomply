@@ -168,6 +168,34 @@ export const PATTERNS: PatternDefinition[] = [
   },
   {
     type: 'CREDENTIAL',
+    // Anthropic API key (sk-ant-apiNN-...). Provider keys appear bare in tool
+    // output and transcripts, not only in `key=` assignments, so they need a
+    // dedicated rule. Mirrors the @opena2a/credential-patterns canonical forms.
+    regex: /\b(sk-ant-api\d{2}-[A-Za-z0-9_-]{20,})/g,
+    confidence: 0.98,
+  },
+  {
+    type: 'CREDENTIAL',
+    // OpenAI project-scoped key (sk-proj-...)
+    regex: /\b(sk-proj-[A-Za-z0-9_-]{20,})/g,
+    confidence: 0.98,
+  },
+  {
+    type: 'CREDENTIAL',
+    // OpenRouter key (sk-or-v1-...)
+    regex: /\b(sk-or-v1-[A-Za-z0-9]{48,})/g,
+    confidence: 0.98,
+  },
+  {
+    type: 'CREDENTIAL',
+    // OpenAI legacy secret key (sk- followed by 48+ alnum). Broader, so a
+    // slightly lower confidence. The early '-' in sk-ant-/sk-proj-/sk-or-v1-
+    // means those are caught by their specific rules above, never this one.
+    regex: /\b(sk-[A-Za-z0-9]{48,})/g,
+    confidence: 0.95,
+  },
+  {
+    type: 'CREDENTIAL',
     // GitHub personal access token (classic)
     regex: /\b(ghp_[A-Za-z0-9]{36})\b/g,
     confidence: 0.98,

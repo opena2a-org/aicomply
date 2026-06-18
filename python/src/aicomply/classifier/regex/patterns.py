@@ -147,6 +147,25 @@ PATTERNS: list[PatternDefinition] = [
         0.99,
     ),
     PatternDefinition("CREDENTIAL", re.compile(r"\b(AKIA[0-9A-Z]{16})\b", _A), 0.98),
+    # Anthropic API key (sk-ant-apiNN-...). Provider keys appear bare in tool
+    # output and transcripts, not only in `key=` assignments, so they need a
+    # dedicated rule. Mirrors the @opena2a/credential-patterns canonical forms
+    # and the TS patterns.ts CREDENTIAL block (parity).
+    PatternDefinition(
+        "CREDENTIAL", re.compile(r"\b(sk-ant-api\d{2}-[A-Za-z0-9_-]{20,})", _A), 0.98
+    ),
+    # OpenAI project-scoped key (sk-proj-...)
+    PatternDefinition(
+        "CREDENTIAL", re.compile(r"\b(sk-proj-[A-Za-z0-9_-]{20,})", _A), 0.98
+    ),
+    # OpenRouter key (sk-or-v1-...)
+    PatternDefinition(
+        "CREDENTIAL", re.compile(r"\b(sk-or-v1-[A-Za-z0-9]{48,})", _A), 0.98
+    ),
+    # OpenAI legacy secret key (sk- followed by 48+ alnum). Broader, slightly
+    # lower confidence. The early '-' in sk-ant-/sk-proj-/sk-or-v1- means those
+    # are caught by their specific rules above, never this one.
+    PatternDefinition("CREDENTIAL", re.compile(r"\b(sk-[A-Za-z0-9]{48,})", _A), 0.95),
     PatternDefinition("CREDENTIAL", re.compile(r"\b(ghp_[A-Za-z0-9]{36})\b", _A), 0.98),
     PatternDefinition(
         "CREDENTIAL", re.compile(r"\b(github_pat_[A-Za-z0-9_]{82})\b", _A), 0.98
