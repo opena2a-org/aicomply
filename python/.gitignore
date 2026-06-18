@@ -1,3 +1,14 @@
+# Secrets / credentials (defense-in-depth; this subtree ships no secrets)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+credentials.json
+
 # Python build / cache artifacts
 __pycache__/
 *.py[cod]

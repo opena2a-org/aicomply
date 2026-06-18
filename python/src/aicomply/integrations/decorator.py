@@ -49,21 +49,30 @@ def _redact_text(text: str, violations: list[Violation]) -> str:
     (e.g. guard-layer whole-content hits) fall back to leaving the text unchanged
     for that span - the verdict already tells the caller it was not CLEAN.
     """
-    spans = sorted(
+    raw_spans = sorted(
         (
             (v.original_start, v.original_end)
             for v in violations
             if v.original_start is not None
             and v.original_end is not None
-            and v.original_end > v.original_start
+            and 0 <= v.original_start < v.original_end <= len(text)
         ),
         key=lambda s: s[0],
-        reverse=True,
     )
+    # Merge overlapping/adjacent spans first. A right-to-left splice is only
+    # correct for disjoint spans; overlapping ranges would corrupt the output
+    # (stale offsets) or silently drop a finding. Coalescing guarantees disjoint,
+    # in-bounds spans before we splice.
+    merged: list[list[int]] = []
+    for start, end in raw_spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+
     redacted = text
-    for start, end in spans:
-        if 0 <= start < end <= len(redacted):
-            redacted = redacted[:start] + "[REDACTED]" + redacted[end:]
+    for start, end in reversed(merged):  # right-to-left keeps earlier offsets valid
+        redacted = redacted[:start] + "[REDACTED]" + redacted[end:]
     return redacted
 
 

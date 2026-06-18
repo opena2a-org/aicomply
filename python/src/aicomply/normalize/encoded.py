@@ -14,9 +14,11 @@ from __future__ import annotations
 import base64
 import binascii
 import re
-from urllib.parse import unquote
+from urllib.parse import unquote_to_bytes
 
 from .types import DecodedExtraction
+
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 MIN_CANDIDATE_LENGTH = 24
 MAX_DEPTH = 2
@@ -81,7 +83,29 @@ def _try_base64_decode(candidate: str) -> str | None:
 
 
 def _try_url_decode(candidate: str) -> str | None:
-    decoded = unquote(candidate, encoding="utf-8", errors="replace")
+    # Faithfully mirror JS decodeURIComponent, which the TS port relies on:
+    # it THROWS (-> caught -> null -> no decoded view) on (a) a malformed escape
+    # (a '%' not followed by exactly two hex digits) and (b) a percent-decoded
+    # byte sequence that is not valid UTF-8. Python's unquote(errors="replace")
+    # never raises, so a naive port would OVER-detect PII inside malformed input
+    # that the TS implementation reports CLEAN (a parity break). Reject both
+    # cases here so the Python verdict matches TS exactly.
+    i = 0
+    n = len(candidate)
+    while True:
+        j = candidate.find("%", i)
+        if j == -1:
+            break
+        # need candidate[j+1] and candidate[j+2] to both be hex digits
+        if j + 2 >= n or candidate[j + 1] not in _HEX_DIGITS or candidate[j + 2] not in _HEX_DIGITS:
+            return None  # malformed escape -> decodeURIComponent throws
+        i = j + 3
+
+    try:
+        decoded = unquote_to_bytes(candidate).decode("utf-8")  # strict (raises on bad UTF-8)
+    except UnicodeDecodeError:
+        return None  # invalid UTF-8 -> decodeURIComponent throws
+
     if decoded == candidate:
         return None
     if not _is_ascii_printable(decoded):

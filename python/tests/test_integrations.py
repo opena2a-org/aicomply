@@ -72,6 +72,26 @@ def test_compliance_violation_message_lists_types():
         pytest.fail("expected ComplianceViolation")
 
 
+def test_redact_text_handles_overlapping_spans():
+    from aicomply.integrations.decorator import _redact_text
+    from aicomply.types import Violation
+
+    def v(s, e):
+        return Violation(type="X", value="x", start=s, end=e, confidence=1.0,
+                         classifier="regex", original_start=s, original_end=e)
+
+    text = "0123456789ABCDEFGHIJ"
+    # overlapping spans [2,10) and [6,14) must coalesce to one [2,14) redaction,
+    # never produce debris like '[REDACTED]ACTED]' or drop a finding.
+    out = _redact_text(text, [v(2, 10), v(6, 14)])
+    assert out == "01[REDACTED]EFGHIJ"
+    assert out.count("[REDACTED]") == 1  # coalesced, no debris from a double splice
+    # identical spans collapse to a single redaction
+    assert _redact_text(text, [v(2, 6), v(2, 6)]) == "01[REDACTED]6789ABCDEFGHIJ"
+    # disjoint spans both redacted
+    assert _redact_text(text, [v(0, 2), v(18, 20)]) == "[REDACTED]23456789ABCDEFGH[REDACTED]"
+
+
 def test_langchain_handler_import_is_optional():
     # The factory must raise a clear, actionable error when langchain is absent,
     # NOT an obscure ImportError at module import time.

@@ -68,6 +68,28 @@ def test_base64_rejects_non_roundtrip_garbage():
     assert exts == []
 
 
+def test_url_decode_rejects_malformed_escape_matching_ts():
+    # decodeURIComponent throws on a bare/incomplete '%' -> TS yields no decoded
+    # view (CLEAN). The Python port must match, not over-detect via lenient unquote.
+    exts = extract_encoded("data %ZZ%20api_key%3Dabcdef1234567890ABCDEF more")
+    # the bare/invalid '%ZZ' makes the whole run a malformed-escape -> no url view
+    assert not any(e.source == "decoded-url" for e in exts)
+
+
+def test_url_decode_rejects_invalid_utf8_matching_ts():
+    # %E0%A4 is a syntactically-valid but incomplete UTF-8 sequence;
+    # decodeURIComponent throws -> TS CLEAN. Python must return no decoded-url view.
+    exts = extract_encoded("x %E0%A4api_key%3Dabcdef1234567890ABCDEF end")
+    assert not any(e.source == "decoded-url" for e in exts)
+
+
+def test_url_decode_accepts_well_formed():
+    raw = "record = 082-34-7249; type = sensitive data here"
+    encoded = quote(raw)
+    exts = extract_encoded(f"data: {encoded}")
+    assert any(e.source == "decoded-url" and "082-34-7249" in e.decoded for e in exts)
+
+
 def test_normalize_full_pipeline_through_comply_views():
     # End-to-end: an SSN hidden behind zero-width chars is caught on normalized view.
     res = normalize("SSN 5​1​6-​8​1-​3​0​8​6")
