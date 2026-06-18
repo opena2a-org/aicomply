@@ -51,6 +51,10 @@ The CLI is a try-path. The library API below is the production surface.
 npm install @opena2a/aicomply
 ```
 
+**Python?** `pip install aicomply` — same detection engine (regex + optional NanoMind
+Guard), parity-tested against the same corpus. Ships `@guard_io`/`@guard_output`
+decorators and a LangChain callback. See [`python/`](python/).
+
 ## Quickstart
 
 ```typescript

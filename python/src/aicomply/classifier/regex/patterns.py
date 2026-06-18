@@ -147,6 +147,30 @@ PATTERNS: list[PatternDefinition] = [
         0.99,
     ),
     PatternDefinition("CREDENTIAL", re.compile(r"\b(AKIA[0-9A-Z]{16})\b", _A), 0.98),
+    # Anthropic API key (sk-ant-apiNN-...). Provider keys appear bare in tool
+    # output and transcripts, not only in `key=` assignments, so they need a
+    # dedicated rule. Adapted from @opena2a/credential-patterns; parity with the
+    # TS patterns.ts CREDENTIAL block. No leading \b — the distinctive
+    # 'sk-ant-api' prefix is FP-proof on its own, and dropping the anchor stops
+    # a key surviving an adjacent word char (e.g. a prepended '_sk-ant-...').
+    PatternDefinition(
+        "CREDENTIAL", re.compile(r"(sk-ant-api\d{2}-[A-Za-z0-9_-]{20,})", _A), 0.98
+    ),
+    # OpenAI project-scoped key (sk-proj-...). Char class widened to [_-] vs the
+    # canonical [A-Za-z0-9]{20,}: real project keys carry '-'/'_' separators.
+    PatternDefinition(
+        "CREDENTIAL", re.compile(r"(sk-proj-[A-Za-z0-9_-]{20,})", _A), 0.98
+    ),
+    # OpenRouter key (sk-or-v1-...)
+    PatternDefinition(
+        "CREDENTIAL", re.compile(r"(sk-or-v1-[A-Za-z0-9]{48,})", _A), 0.98
+    ),
+    # OpenAI legacy secret key (sk- followed by 48+ alnum). Broadest rule, so the
+    # lowest confidence: a 48-char hash/ID prefixed with 'sk-' can false-positive.
+    # Unlike the specific rules above it KEEPS a leading \b to suppress the common
+    # English-word FPs (risk-/disk-/task- + long token). The early '-' in
+    # sk-ant-/sk-proj-/sk-or-v1- means those are caught by their specific rules.
+    PatternDefinition("CREDENTIAL", re.compile(r"\b(sk-[A-Za-z0-9]{48,})", _A), 0.85),
     PatternDefinition("CREDENTIAL", re.compile(r"\b(ghp_[A-Za-z0-9]{36})\b", _A), 0.98),
     PatternDefinition(
         "CREDENTIAL", re.compile(r"\b(github_pat_[A-Za-z0-9_]{82})\b", _A), 0.98

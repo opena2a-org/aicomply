@@ -150,6 +150,41 @@ describe('credential patterns', () => {
     expect(matches.some(m => m.type === 'CREDENTIAL')).toBe(true);
   });
 
+  it('detects a bare Anthropic key in tool output (not in a key= assignment)', () => {
+    const key = 'sk-ant-api03-' + 'A'.repeat(95);
+    const matches = scanPatterns(`The agent read .env and returned ${key} in its summary.`);
+    const creds = matches.filter(m => m.type === 'CREDENTIAL');
+    expect(creds).toHaveLength(1);
+    // classifyWithRegex redacts the value so the raw key never leaks into output
+    const result = classifyWithRegex(`The agent returned ${key} in its summary.`);
+    const v = result.violations.find(x => x.type === 'CREDENTIAL');
+    expect(v).toBeDefined();
+    expect(v!.value).not.toContain(key);
+    expect(v!.value).toContain('...');
+  });
+
+  it('detects OpenAI project, OpenRouter, and legacy keys', () => {
+    expect(scanPatterns('sk-proj-' + 'B'.repeat(48)).some(m => m.type === 'CREDENTIAL')).toBe(true);
+    expect(scanPatterns('sk-or-v1-' + 'c'.repeat(48)).some(m => m.type === 'CREDENTIAL')).toBe(true);
+    expect(scanPatterns('sk-' + 'd'.repeat(48)).some(m => m.type === 'CREDENTIAL')).toBe(true);
+  });
+
+  it('does not match too-short provider keys (near-miss negatives)', () => {
+    expect(scanPatterns('sk-ant-api03-abc').filter(m => m.type === 'CREDENTIAL')).toHaveLength(0);
+    expect(scanPatterns('sk-' + 'e'.repeat(12)).filter(m => m.type === 'CREDENTIAL')).toHaveLength(0);
+  });
+
+  it('catches a specific provider key prefixed by an adjacent word char (no \\b evasion)', () => {
+    // an attacker prepending '_' must not let an Anthropic key slip past
+    const matches = scanPatterns('_sk-ant-api03-' + 'A'.repeat(95));
+    expect(matches.some(m => m.type === 'CREDENTIAL')).toBe(true);
+  });
+
+  it('does not flag English words ending in -sk before a long token (legacy \\b)', () => {
+    expect(scanPatterns('risk-' + 'A'.repeat(50)).filter(m => m.type === 'CREDENTIAL')).toHaveLength(0);
+    expect(scanPatterns('disk-' + 'B'.repeat(50)).filter(m => m.type === 'CREDENTIAL')).toHaveLength(0);
+  });
+
   it('does not match short tokens', () => {
     const matches = scanPatterns('Bearer short');
     const creds = matches.filter(m => m.type === 'CREDENTIAL');
