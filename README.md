@@ -64,6 +64,15 @@ console.log(result.verdict);     // 'VIOLATION'
 console.log(result.violations);  // [{ type: 'SSN', confidence: 0.95, value: '123-...89', ... }]
 ```
 
+CommonJS works too (the package ships both):
+
+```javascript
+const { comply } = require('@opena2a/aicomply');
+
+const result = await comply({ content: 'My SSN is 123-45-6789.' });
+console.log(result.verdict); // 'VIOLATION'
+```
+
 Drop it into your agent's tool-result handler, your message-egress wrapper, or anywhere content crosses a trust boundary.
 
 ## What it detects

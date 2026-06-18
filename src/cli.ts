@@ -128,7 +128,7 @@ async function collectSources(files: string[]): Promise<Source[]> {
     try {
       sources.push({ label: file, content: readFileSync(file, 'utf8') });
     } catch {
-      throw new UsageError(`cannot read '${file}'`);
+      throw new UsageError(`cannot read '${file}' (check the path). Try 'aicomply --help'.`);
     }
   }
 
