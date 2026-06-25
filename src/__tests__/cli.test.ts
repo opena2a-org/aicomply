@@ -43,6 +43,18 @@ describe('aicomply CLI', () => {
     expect(cap.out.join('')).toMatch(/^\d+\.\d+\.\d+/);
   });
 
+  // Drift guard: the hardcoded CLI VERSION must match package.json. A version
+  // bump that forgets the constant would otherwise ship a CLI reporting the
+  // wrong version (caught at release 2.2.1).
+  it('--version matches package.json version', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const pkg = require('../../package.json') as { version: string };
+    const cap = capture();
+    await run(['--version']);
+    cap.restore();
+    expect(cap.out.join('').trim()).toBe(pkg.version);
+  });
+
   it('--help exits 0 and documents the scan command', async () => {
     const cap = capture();
     const code = await run(['--help']);

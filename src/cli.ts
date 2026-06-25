@@ -24,7 +24,8 @@ import { comply } from './index';
 import { DEFAULT_NANOMIND_DAEMON_URL } from './classifier/guard-client/nanomind-adapter';
 import type { ComplyResult, Violation } from './types';
 
-const VERSION = '2.2.0';
+// Keep in sync with package.json version on every release bump.
+const VERSION = '2.2.1';
 
 /**
  * A recoverable usage error (exit code 2). Thrown rather than calling
@@ -193,9 +194,10 @@ function renderHuman(sources: Source[], results: ComplyResult[]): void {
   // never a dead end (UX: empower, never shame).
   if (!anyGuard) {
     out.write(
-      `  Semantic Guard layer: inactive (no nanomind-daemon on ${DEFAULT_NANOMIND_DAEMON_URL}).\n` +
-        '  It catches prompt-injection / exfiltration the regex layer cannot see. Enable it:\n' +
-        '    npm i @nanomind/daemon && npx nanomind-daemon start\n\n',
+      `  Semantic Guard layer: inactive (preview; no nanomind-daemon on ${DEFAULT_NANOMIND_DAEMON_URL}).\n` +
+        '  It targets prompt-injection / exfiltration the regex layer cannot see, but the\n' +
+        '  current model over-flags benign text - preview only, not for production gating.\n' +
+        '  Try it: npm i @nanomind/daemon && npx nanomind-daemon start\n\n',
     );
   }
 

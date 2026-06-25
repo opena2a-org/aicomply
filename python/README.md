@@ -87,13 +87,21 @@ llm = ChatOpenAI(callbacks=[AIComplyCallbackHandler()])
 llm.invoke("Summarize this support ticket: ...")   # raises if the LLM emits PII
 ```
 
-## Semantic Guard layer
+## Semantic Guard layer (preview, not production-ready)
 
-The regex layer is deterministic and always on. For prompt-injection /
-exfiltration patterns that regex cannot see, run a local `nanomind-daemon`; when
-it is reachable on `127.0.0.1:47200` the dual-layer classifier consults it and
-merges the verdict (highest severity wins). Its absence never fails a request —
-the classifier silently falls back to regex-only.
+The regex layer is deterministic, always on, and is the production surface. The
+optional Guard layer targets prompt-injection / exfiltration patterns that regex
+cannot see, but the current model (`nanomind-security-classifier` tme-v0.5.0)
+over-flags benign text: measured 2026-06-25, 7 of 10 ordinary-benign sentences were
+flagged as an attack class at greater than 0.99 confidence at the default 0.8
+threshold. Treat it as a preview, not for production gating, until a recalibrated
+model ships.
+
+The daemon ships on **npm**, not PyPI (`npm i -g @nanomind/daemon && nanomind-daemon
+start`); it is a local HTTP server this Python client calls. When it is reachable on
+`127.0.0.1:47200` the dual-layer classifier consults it and merges the verdict
+(highest severity wins). Its absence never fails a request: the classifier falls
+back to regex-only.
 
 ## Detection classes
 
