@@ -100,7 +100,7 @@ model ships.
 The daemon ships on **npm**, not PyPI (`npm i -g @nanomind/daemon && nanomind-daemon
 start`); it is a local HTTP server this Python client calls. When it is reachable on
 `127.0.0.1:47200` the dual-layer classifier consults it and merges the verdict
-(highest severity wins). Its absence never fails a request — the classifier falls
+(highest severity wins). Its absence never fails a request: the classifier falls
 back to regex-only.
 
 ## Detection classes
