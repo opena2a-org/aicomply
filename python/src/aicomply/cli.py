@@ -185,11 +185,12 @@ def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
 
     if not any_guard:
         out.write(
-            f"  Semantic Guard layer: inactive (no nanomind-daemon on "
+            f"  Semantic Guard layer: inactive (preview; no nanomind-daemon on "
             f"{DEFAULT_NANOMIND_DAEMON_URL}).\n"
-            "  It catches prompt-injection / exfiltration the regex layer cannot see. "
-            "Enable it:\n"
-            "    pip install nanomind-daemon && nanomind-daemon start\n\n"
+            "  It targets prompt-injection / exfiltration the regex layer cannot see, but the\n"
+            "  current model over-flags benign text - preview only, not for production gating.\n"
+            "  The daemon ships on npm (not PyPI); it is a local HTTP server this client calls.\n"
+            "  Try it: npm i -g @nanomind/daemon && nanomind-daemon start\n\n"
         )
 
     if worst == "CLEAN":

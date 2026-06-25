@@ -193,9 +193,10 @@ function renderHuman(sources: Source[], results: ComplyResult[]): void {
   // never a dead end (UX: empower, never shame).
   if (!anyGuard) {
     out.write(
-      `  Semantic Guard layer: inactive (no nanomind-daemon on ${DEFAULT_NANOMIND_DAEMON_URL}).\n` +
-        '  It catches prompt-injection / exfiltration the regex layer cannot see. Enable it:\n' +
-        '    npm i @nanomind/daemon && npx nanomind-daemon start\n\n',
+      `  Semantic Guard layer: inactive (preview; no nanomind-daemon on ${DEFAULT_NANOMIND_DAEMON_URL}).\n` +
+        '  It targets prompt-injection / exfiltration the regex layer cannot see, but the\n' +
+        '  current model over-flags benign text - preview only, not for production gating.\n' +
+        '  Try it: npm i @nanomind/daemon && npx nanomind-daemon start\n\n',
     );
   }
 
