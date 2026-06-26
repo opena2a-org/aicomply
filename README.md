@@ -75,6 +75,9 @@ const { comply } = require('@opena2a/aicomply');
 
 const result = await comply({ content: 'My SSN is 123-45-6789.' });
 console.log(result.verdict); // 'VIOLATION'
+
+// A bare string is shorthand for { content: '...' }.
+await comply('My SSN is 123-45-6789.');
 ```
 
 Drop it into your agent's tool-result handler, your message-egress wrapper, or anywhere content crosses a trust boundary.
@@ -229,6 +232,13 @@ result.normalizedContent;   // 'SSN:123-45-6789'
 result.normalizations;      // [{ transform: 'nfkc', count: 9 }]
 result.violations[0].view;  // 'normalized'
 ```
+
+> Caution: `originalContent` and `normalizedContent` hold the raw input by
+> design, so a flagged result carries the very PII or credentials it detected.
+> Do not pass them to an audit log, trace, or error reporter unmasked. Log
+> `verdict` and the masked `violations` instead, or redact the raw fields before
+> persisting them. `violations[i].value` is also raw; mask it (see the CLI's
+> `maskValue`) before display.
 
 ## License
 

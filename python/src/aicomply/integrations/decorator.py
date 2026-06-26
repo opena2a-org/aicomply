@@ -18,7 +18,7 @@ non-CLEAN content is blocked (raises) or redacted, before it leaves the boundary
 from __future__ import annotations
 
 import functools
-from typing import Callable, Literal, TypeVar
+from typing import Callable, Literal, TypeVar, cast
 
 from .. import ComplyResult, comply
 from ..types import Violation
@@ -77,17 +77,27 @@ def _redact_text(text: str, violations: list[Violation]) -> str:
 
 
 def guard_output(
-    on_violation: OnViolation = "raise",
+    on_violation: OnViolation | F = "raise",
     *,
     use_guard: bool = True,
-) -> Callable[[F], F]:
+) -> Callable[[F], F] | F:
     """Decorate a function whose string return value should be compliance-checked.
+
+    Usable with or without parentheses: ``@guard_output`` behaves like
+    ``@guard_output()``.
 
     :param on_violation: ``"raise"`` (default) raises :class:`ComplianceViolation`;
         ``"redact"`` returns the masked string; ``"allow"`` returns unchanged
         (audit-only - inspect via logging hooks).
     :param use_guard: forwarded to :func:`aicomply.comply`.
     """
+    # Bare usage ``@guard_output`` (no parens): Python passes the decorated
+    # function as the first positional arg, so on_violation is a callable rather
+    # than a mode string. Re-dispatch with defaults instead of failing later
+    # with a cryptic TypeError when the wrapped function is called.
+    if callable(on_violation):
+        factory = cast("Callable[[F], F]", guard_output(use_guard=use_guard))
+        return factory(on_violation)
 
     def decorator(func: F) -> F:
         @functools.wraps(func)
@@ -110,16 +120,24 @@ def guard_output(
 
 
 def guard_io(
-    on_violation: OnViolation = "raise",
+    on_violation: OnViolation | F = "raise",
     *,
     use_guard: bool = True,
     check_inputs: bool = True,
-) -> Callable[[F], F]:
+) -> Callable[[F], F] | F:
     """Like :func:`guard_output` but also scans string positional/keyword inputs.
 
     Useful for wrapping a tool that both receives and returns text, so injected
-    PII is caught on the way in as well as on the way out.
+    PII is caught on the way in as well as on the way out. Usable with or without
+    parentheses: ``@guard_io`` behaves like ``@guard_io()``.
     """
+    # Bare usage ``@guard_io`` (no parens): re-dispatch with defaults. See
+    # guard_output for the rationale.
+    if callable(on_violation):
+        factory = cast(
+            "Callable[[F], F]", guard_io(use_guard=use_guard, check_inputs=check_inputs)
+        )
+        return factory(on_violation)
 
     def decorator(func: F) -> F:
         @functools.wraps(func)

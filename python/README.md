@@ -53,7 +53,15 @@ for v in result.violations:
   (omitted on `DENY`, where the input is treated as untrusted bytes)
 - `.to_dict()` — camelCase JSON wire-compatible with the npm package
 
-Empty string short-circuits to `CLEAN`; non-`str` input raises `TypeError`.
+Empty string short-circuits to `CLEAN`; `comply()` also accepts a bare string
+(`comply("text")` is shorthand for `comply(content="text")`); other non-`str`
+input raises `TypeError`.
+
+> Caution: `original_content` and `normalized_content` hold the raw input by
+> design, so a flagged result carries the very PII or credentials it detected.
+> Do not pass them to an audit log, trace, or error reporter unmasked. Log
+> `verdict` and the masked findings instead, or redact the raw fields before
+> persisting them.
 
 ## Guard an agent's output
 

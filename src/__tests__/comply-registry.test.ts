@@ -70,6 +70,37 @@ describe('comply(): input validation (v1.0 hardening)', () => {
     expect('guard' in r.classifierResults).toBe(false);
     expect(r.classifierResults.regex).toBeDefined();
   });
+
+  it('error message names the expected shape (comply({ content })), not "object"', async () => {
+    // A non-string, non-options value (e.g. a number) should fail with a message
+    // that tells the caller the actual shape, not the misleading "must be an object".
+    await expect(comply(123 as unknown as ComplyOptions)).rejects.toThrow(/content/);
+    await expect(comply(123 as unknown as ComplyOptions)).rejects.toThrow(TypeError);
+  });
+});
+
+describe('comply(): bare-string convenience overload', () => {
+  it('accepts a bare string and classifies it as if { content } were passed', async () => {
+    const r = await comply('SSN: 123-45-6789');
+    expect(r.verdict).toBe('VIOLATION');
+    expect(r.violations.some(v => v.type === 'SSN')).toBe(true);
+    expect(r.originalContent).toBe('SSN: 123-45-6789');
+  });
+
+  it('accepts a bare empty string and returns CLEAN', async () => {
+    const r = await comply('');
+    expect(r.verdict).toBe('CLEAN');
+    expect(r.violations).toHaveLength(0);
+    expect(r.originalContent).toBe('');
+  });
+
+  it('a clean bare string returns CLEAN with the same shape as the object form', async () => {
+    const bare = await comply('hello world');
+    const obj = await comply({ content: 'hello world' });
+    expect(bare.verdict).toBe('CLEAN');
+    expect(bare.verdict).toBe(obj.verdict);
+    expect('guard' in bare.classifierResults).toBe(false);
+  });
 });
 
 describe('comply(): no registry options', () => {

@@ -25,7 +25,7 @@ import { DEFAULT_NANOMIND_DAEMON_URL } from './classifier/guard-client/nanomind-
 import type { ComplyResult, Violation } from './types';
 
 // Keep in sync with package.json version on every release bump.
-const VERSION = '2.2.1';
+const VERSION = '2.2.2';
 
 /**
  * A recoverable usage error (exit code 2). Thrown rather than calling
@@ -94,6 +94,33 @@ EXAMPLES
   aicomply scan src/*.txt -q
 
 The library API is the production surface: https://github.com/opena2a-org/aicomply
+`;
+
+const SCAN_HELP = `aicomply scan -- scan files or piped stdin for sensitive content
+
+Runs the deterministic regex layer (PII, credentials, regulated data) over each
+input, plus the optional semantic Guard layer when a local nanomind-daemon is
+reachable. Prints a verdict per input and an overall verdict.
+
+USAGE
+  aicomply scan [file...]      Scan one or more files
+  aicomply scan -              Read content from stdin
+  echo "text" | aicomply scan  Pipe content from stdin
+
+OPTIONS
+  --json        Machine-readable JSON output (verdict + findings, values masked)
+  --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY)
+  --help, -h    This help
+
+EXIT CODES
+  0  CLEAN          no findings, safe to forward
+  1  VIOLATION/DENY findings present (usable as a CI gate)
+  2  usage error
+
+EXAMPLES
+  aicomply scan ./support-ticket.txt
+  cat transcript.log | aicomply scan --json
+  aicomply scan src/*.txt -q
 `;
 
 /** Mask a detected value so the CLI never prints a full secret to a terminal or log. */
@@ -244,6 +271,12 @@ async function runInner(argv: string[]): Promise<number> {
 
   if (args.version) {
     process.stdout.write(`${VERSION}\n`);
+    return 0;
+  }
+  // Scan-scoped help: `aicomply scan --help` documents the scan command and its
+  // flags, rather than falling through to the generic top-level banner.
+  if (args.command === 'scan' && args.help) {
+    process.stdout.write(SCAN_HELP);
     return 0;
   }
   if (args.help || args.command === undefined) {

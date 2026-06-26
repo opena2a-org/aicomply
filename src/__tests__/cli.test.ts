@@ -63,6 +63,29 @@ describe('aicomply CLI', () => {
     expect(cap.out.join('')).toContain('aicomply scan');
   });
 
+  it('scan --help exits 0 and shows scan-specific help, not the generic banner', async () => {
+    const cap = capture();
+    const code = await run(['scan', '--help']);
+    cap.restore();
+    expect(code).toBe(0);
+    const out = cap.out.join('');
+    // The scan help must lead with a scan-scoped synopsis, not the top-level
+    // "aicomply -- inline content classifier..." banner.
+    expect(out.trimStart().startsWith('aicomply scan')).toBe(true);
+    expect(out).toContain('--json');
+    expect(out).toContain('--quiet');
+    // Scan reads from files or stdin; the scan help must say so.
+    expect(out.toLowerCase()).toContain('stdin');
+  });
+
+  it('top-level --help leads with the generic banner, not the scan synopsis', async () => {
+    const cap = capture();
+    await run(['--help']);
+    cap.restore();
+    const out = cap.out.join('');
+    expect(out.trimStart().startsWith('aicomply --')).toBe(true);
+  });
+
   it('no command exits 2 (usage)', async () => {
     const cap = capture();
     const code = await run([]);

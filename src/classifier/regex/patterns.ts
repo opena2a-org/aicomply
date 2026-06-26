@@ -168,6 +168,16 @@ export const PATTERNS: PatternDefinition[] = [
   },
   {
     type: 'CREDENTIAL',
+    // AWS secret access key. The secret is a 40-char base64 string with no
+    // distinctive prefix (unlike the AKIA access-key id above), so matching it
+    // bare would flag every 40-char hash/id. Require an aws_secret_access_key
+    // keyword in an assignment context instead. Pairs with the AKIA rule so a
+    // leaked credentials block reports both the id and the secret.
+    regex: /(?:aws[_-]?)?secret[_-]?access[_-]?key["']?\s*[:=]\s*['"]?([A-Za-z0-9/+]{40})['"]?/gi,
+    confidence: 0.9,
+  },
+  {
+    type: 'CREDENTIAL',
     // Anthropic API key (sk-ant-apiNN-...). Provider keys appear bare in tool
     // output and transcripts, not only in `key=` assignments, so they need a
     // dedicated rule. Adapted from the @opena2a/credential-patterns canonical

@@ -14,7 +14,21 @@ def test_version(capsys):
 
 def test_help(capsys):
     assert run(["--help"]) == 0
-    assert "USAGE" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "USAGE" in out
+    # Top-level help leads with the generic banner, not the scan synopsis.
+    assert out.lstrip().startswith("aicomply --")
+
+
+def test_scan_help_is_scan_scoped(capsys):
+    assert run(["scan", "--help"]) == 0
+    out = capsys.readouterr().out
+    # Scan help must lead with a scan-scoped synopsis (parity with the TS CLI),
+    # not fall through to the generic top-level banner.
+    assert out.lstrip().startswith("aicomply scan")
+    assert "--json" in out
+    assert "--quiet" in out
+    assert "stdin" in out.lower()
 
 
 def test_no_command_prints_help_exit_2(capsys):

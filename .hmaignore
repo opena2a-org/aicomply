@@ -1,0 +1,24 @@
+# aicomply is a DLP / content-normalization library. Its normalization tests,
+# benchmark corpus + generator, and documentation MUST contain invisible-unicode
+# and homoglyph characters as fixtures and worked examples -- those characters
+# are the very inputs the normalize layer exists to fold (NFKC, zero-width strip,
+# homoglyph fold). HackMyAgent's UNICODE-STEGO-001 / UNICODE-STEGO-005 checks
+# fire on these intentional samples. This is the same situation HMA documents in
+# its own .hmaignore ("scanner contains the detection patterns that match the
+# threats it detects").
+#
+# Suppression is path-scoped, not a global check-ID disable, so UNICODE-STEGO
+# still fires on any NEW source file outside these intentional-fixture paths.
+
+# Normalization unit-test fixtures: zero-width, full-width, and homoglyph samples by design
+src/normalize/__tests__/
+src/classifier/dual-layer/__tests__/dual-layer-normalize.test.ts
+python/tests/test_normalize.py
+
+# Adversarial accuracy corpus + its generator: intentionally evasion-shaped inputs
+bench/
+
+# Docs demonstrate the invisible-unicode / homoglyph attack with literal examples
+# (e.g. the README audit-trail example normalizes full-width digits to ASCII)
+README.md
+SECURITY.md
