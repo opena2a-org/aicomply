@@ -93,6 +93,34 @@ The library API is the production surface: https://github.com/opena2a-org/aicomp
 """
 
 
+SCAN_HELP = """aicomply scan -- scan files or piped stdin for sensitive content
+
+Runs the deterministic regex layer (PII, credentials, regulated data) over each
+input, plus the optional semantic Guard layer when a local nanomind-daemon is
+reachable. Prints a verdict per input and an overall verdict.
+
+USAGE
+  aicomply scan [file...]      Scan one or more files
+  aicomply scan -              Read content from stdin
+  echo "text" | aicomply scan  Pipe content from stdin
+
+OPTIONS
+  --json        Machine-readable JSON output (verdict + findings, values masked)
+  --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY)
+  --help, -h    This help
+
+EXIT CODES
+  0  CLEAN          no findings, safe to forward
+  1  VIOLATION/DENY findings present (usable as a CI gate)
+  2  usage error
+
+EXAMPLES
+  aicomply scan ./support-ticket.txt
+  cat transcript.log | aicomply scan --json
+  aicomply scan src/*.txt -q
+"""
+
+
 def _mask_value(value: str) -> str:
     """Mask a detected value so the CLI never prints a full secret."""
     v = value or ""
@@ -240,6 +268,11 @@ def _run_inner(argv: list[str]) -> int:
 
     if args.version:
         sys.stdout.write(f"{__version__}\n")
+        return 0
+    # Scan-scoped help: `aicomply scan --help` documents the scan command and
+    # its flags rather than falling through to the generic top-level banner.
+    if args.command == "scan" and args.help:
+        sys.stdout.write(SCAN_HELP)
         return 0
     if args.help or args.command is None:
         sys.stdout.write(HELP)

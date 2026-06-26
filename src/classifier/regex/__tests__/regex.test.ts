@@ -135,6 +135,36 @@ describe('credential patterns', () => {
     expect(matches.some(m => m.type === 'CREDENTIAL')).toBe(true);
   });
 
+  // A synthetic 40-char secret-shaped value, built at runtime from a repeated
+  // chunk so no real-looking credential literal is committed (GitHub push
+  // protection flags 40-char AWS secrets in aws_secret_access_key context).
+  const awsSecret = 'Ab3dEf6h'.repeat(5); // 40 chars, all [A-Za-z0-9]
+
+  it('detects AWS secret access keys in an assignment context', () => {
+    // The secret (40-char base64) has no distinctive prefix, so it is matched
+    // only when an aws_secret_access_key keyword precedes it.
+    const matches = scanPatterns(`aws_secret_access_key = ${awsSecret}`);
+    const cred = matches.filter(m => m.type === 'CREDENTIAL');
+    expect(cred.length).toBeGreaterThanOrEqual(1);
+    expect(cred.some(m => m.value === awsSecret)).toBe(true);
+  });
+
+  it('reports both the AWS access key id and secret when both are present', () => {
+    const matches = scanPatterns(
+      `aws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = ${awsSecret}`,
+    );
+    const values = matches.filter(m => m.type === 'CREDENTIAL').map(m => m.value);
+    expect(values).toContain('AKIAIOSFODNN7EXAMPLE');
+    expect(values).toContain(awsSecret);
+  });
+
+  it('does not flag a bare 40-char base64 blob without an aws-secret keyword', () => {
+    // A 40-char base64 string is too generic to flag on its own (hashes, ids).
+    const matches = scanPatterns(`digest: ${awsSecret}`);
+    const cred = matches.filter(m => m.value === awsSecret);
+    expect(cred).toHaveLength(0);
+  });
+
   it('detects GitHub PATs', () => {
     const matches = scanPatterns('token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij');
     expect(matches.some(m => m.type === 'CREDENTIAL')).toBe(true);

@@ -83,27 +83,38 @@ export type { DualLayerOptions } from './classifier/dual-layer';
  * The cache must be warmed before calling comply() - use ClassificationSession
  * or warmRegistryCache() to ensure this (AC-005: no network I/O in the hot path).
  *
- * @param options - Content to classify and optional policy/risk context
+ * @param options - Either a bare string to classify, or an options object with
+ *   `content` plus optional policy/risk/registry context. `comply('text')` is
+ *   shorthand for `comply({ content: 'text' })`.
  * @param dualLayerOptions - Guard classification result and verification config
  * @returns Classification result with verdict and violations
  */
 export async function comply(
-  options: ComplyOptions,
+  options: ComplyOptions | string,
   dualLayerOptions?: DualLayerOptions,
 ): Promise<ComplyResult> {
-  // Reject non-string content explicitly so consumers can't silently
-  // bypass classification by passing a number, object, array, or missing
-  // key (`comply({})`). Empty string is allowed and short-circuits with
-  // a CLEAN result + populated audit fields.
-  if (options === null || typeof options !== 'object') {
-    throw new TypeError('comply: options must be an object');
-  }
-  if (options.content !== undefined && typeof options.content !== 'string') {
+  // Convenience overload: a bare string is treated as { content: <string> } so
+  // `comply('text')` works without wrapping. Anything that is neither a string
+  // nor an options object is a caller mistake; name the expected shape rather
+  // than the unhelpful "options must be an object".
+  const opts: ComplyOptions =
+    typeof options === 'string' ? { content: options } : (options as ComplyOptions);
+  if (opts === null || typeof opts !== 'object' || Array.isArray(opts)) {
+    const got = opts === null ? 'null' : Array.isArray(opts) ? 'array' : typeof opts;
     throw new TypeError(
-      `comply: options.content must be a string (got ${typeof options.content})`,
+      `comply: expected a string or an options object like comply({ content: '...' }), got ${got}`,
     );
   }
-  if (!options.content) {
+  // Reject non-string content explicitly so consumers can't silently bypass
+  // classification by passing a number, object, or array as content. Empty
+  // string and missing content are allowed and short-circuit with a CLEAN
+  // result + populated audit fields.
+  if (opts.content !== undefined && typeof opts.content !== 'string') {
+    throw new TypeError(
+      `comply: options.content must be a string (got ${typeof opts.content})`,
+    );
+  }
+  if (!opts.content) {
     // Empty / missing content. Populate the audit fields so consumers can
     // rely on `originalContent` / `normalizedContent` / `normalizations`
     // being present in the result type (per types.ts ComplyResult contract).
@@ -113,21 +124,21 @@ export async function comply(
       classifierResults: {
         regex: { classifier: 'regex', verdict: 'CLEAN', violations: [] },
       },
-      originalContent: options.content ?? '',
-      normalizedContent: options.content ?? '',
+      originalContent: opts.content ?? '',
+      normalizedContent: opts.content ?? '',
       normalizations: [],
     };
   }
 
   const mergedOptions: DualLayerOptions = {
     ...dualLayerOptions,
-    ...(options.sourcePackage !== undefined && { sourcePackage: options.sourcePackage }),
-    ...(options.registryCache !== undefined && { registryCache: options.registryCache }),
-    ...(options.policyPack !== undefined && { policyPack: loadPolicyPack(options.policyPack) }),
-    ...(options.riskContext !== undefined && { riskContext: options.riskContext }),
+    ...(opts.sourcePackage !== undefined && { sourcePackage: opts.sourcePackage }),
+    ...(opts.registryCache !== undefined && { registryCache: opts.registryCache }),
+    ...(opts.policyPack !== undefined && { policyPack: loadPolicyPack(opts.policyPack) }),
+    ...(opts.riskContext !== undefined && { riskContext: opts.riskContext }),
   };
 
-  return classifyDualLayer(options.content, mergedOptions);
+  return classifyDualLayer(opts.content, mergedOptions);
 }
 
 /**

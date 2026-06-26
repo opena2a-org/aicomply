@@ -147,6 +147,19 @@ PATTERNS: list[PatternDefinition] = [
         0.99,
     ),
     PatternDefinition("CREDENTIAL", re.compile(r"\b(AKIA[0-9A-Z]{16})\b", _A), 0.98),
+    # AWS secret access key. The secret is a 40-char base64 string with no
+    # distinctive prefix (unlike the AKIA id above), so it is matched only in an
+    # aws_secret_access_key assignment context to avoid flagging every 40-char
+    # hash/id. Parity with the TS patterns.ts AWS secret rule.
+    PatternDefinition(
+        "CREDENTIAL",
+        re.compile(
+            r"(?:aws[_-]?)?secret[_-]?access[_-]?key[\"']?\s*[:=]\s*"
+            r"['\"]?([A-Za-z0-9/+]{40})['\"]?",
+            _AI,
+        ),
+        0.9,
+    ),
     # Anthropic API key (sk-ant-apiNN-...). Provider keys appear bare in tool
     # output and transcripts, not only in `key=` assignments, so they need a
     # dedicated rule. Adapted from @opena2a/credential-patterns; parity with the

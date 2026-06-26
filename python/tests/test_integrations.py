@@ -61,6 +61,34 @@ def test_guard_output_ignores_non_string_return():
     assert numbers() == 42
 
 
+def test_guard_output_bare_usage_without_parens_raises_on_pii():
+    # @guard_output (no parens) must behave like @guard_output() rather than
+    # producing a cryptic TypeError when the wrapped function is called.
+    @guard_output
+    def answer() -> str:
+        return "Your SSN is 516-81-3086."
+
+    with pytest.raises(ComplianceViolation):
+        answer()
+
+
+def test_guard_output_bare_usage_allows_clean():
+    @guard_output
+    def answer() -> str:
+        return "All good, order 300843 shipped."
+
+    assert answer() == "All good, order 300843 shipped."
+
+
+def test_guard_io_bare_usage_without_parens_checks_inputs():
+    @guard_io
+    def tool(text: str) -> str:
+        return "ok"
+
+    with pytest.raises(ComplianceViolation):
+        tool("leak SSN 516-81-3086")
+
+
 def test_guard_io_checks_inputs():
     @guard_io(use_guard=False)
     def tool(text: str) -> str:

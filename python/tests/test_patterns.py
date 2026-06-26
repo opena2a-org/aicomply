@@ -42,6 +42,28 @@ def test_credentials():
     assert "CREDENTIAL" not in _types("AKIA9OK6Q4TR")  # akia-short
 
 
+def test_aws_secret_access_key():
+    # The AWS secret access key (40-char base64) has no distinctive prefix, so it
+    # is matched only in an aws_secret_access_key assignment context. Parity with
+    # the TS patterns.ts AWS secret rule. The value is a synthetic 40-char string
+    # built at runtime so no credential literal is committed (GitHub push
+    # protection flags 40-char AWS secret literals).
+    secret = "Ab3dEf6h" * 5  # 40 chars, all [A-Za-z0-9]
+    matches = scan_patterns(f"aws_secret_access_key = {secret}")
+    values = {m.value for m in matches if m.type == "CREDENTIAL"}
+    assert secret in values
+    # both the access key id and the secret are reported when both are present
+    both = scan_patterns(
+        f"aws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = {secret}"
+    )
+    both_values = {m.value for m in both if m.type == "CREDENTIAL"}
+    assert "AKIAIOSFODNN7EXAMPLE" in both_values
+    assert secret in both_values
+    # a bare 40-char base64 blob without the keyword must not be flagged
+    bare = scan_patterns(f"digest: {secret}")
+    assert secret not in {m.value for m in bare}
+
+
 def test_provider_api_keys():
     # Bare provider keys as they appear in tool output / transcripts, not in a
     # key= assignment (parity with the TS patterns.ts CREDENTIAL block).
