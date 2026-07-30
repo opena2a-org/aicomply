@@ -222,6 +222,89 @@ describe('credential patterns', () => {
   });
 });
 
+describe('environment-variable references are not credentials (opena2a#254)', () => {
+  // An env-var reference is the ABSENCE of a secret: it is the remediated form
+  // `opena2a protect` rewrites a hardcoded key into. Flagging it makes the two
+  // commands contradict each other and breaks CI on correctly-fixed code.
+
+  it('does not flag a bare process.env reference assigned to apiKey', () => {
+    // Verbatim repro from opena2a#254. Pre-fix this matched the generic
+    // api_key rule: `apiKey` satisfies /api[_-]?key/i and the value char class
+    // contains '.', so it captured the 26-char `process.env.OPENAI_API_KEY`.
+    const matches = scanPatterns('const apiKey = process.env.OPENAI_API_KEY;');
+    expect(matches.filter(m => m.type === 'CREDENTIAL')).toHaveLength(0);
+  });
+
+  it('does not flag the bracket, import.meta, python or java reference forms', () => {
+    const forms = [
+      "api_key = process.env['OPENAI_API_KEY']",
+      'api_key = process.env["OPENAI_API_KEY"]',
+      'apiKey: import.meta.env.VITE_OPENAI_API_KEY',
+      "api_key = os.environ['OPENAI_API_KEY']",
+      "api_key = os.environ.get('OPENAI_API_KEY')",
+      "api_key = os.getenv('OPENAI_API_KEY')",
+      'api_key = System.getenv("OPENAI_API_KEY")',
+    ];
+    // Collect offenders rather than asserting per-iteration: jest's expect
+    // takes no message argument, so a bare loop assertion would not say WHICH
+    // form regressed.
+    const flagged = forms.filter(
+      form => scanPatterns(form).some(m => m.type === 'CREDENTIAL'),
+    );
+    expect(flagged).toEqual([]);
+  });
+
+  it('does not flag the ${VAR} interpolation form protect emits into .mcp.json', () => {
+    const forms = [
+      '"apiKey": "${OPENAI_API_KEY}"',
+      '"api_key": "$OPENAI_API_KEY"',
+      '"access_token": "${env:OPENAI_API_KEY}"',
+    ];
+    const flagged = forms.filter(
+      form => scanPatterns(form).some(m => m.type === 'CREDENTIAL'),
+    );
+    expect(flagged).toEqual([]);
+  });
+
+  it('does not flag an env reference carried on a Bearer header', () => {
+    expect(
+      scanPatterns('Authorization: Bearer process.env.GITHUB_ACCESS_TOKEN'),
+    ).toHaveLength(0);
+  });
+
+  // ---- negative controls: the skip must not loosen real detection ----------
+  // A value-shape exclusion sits in front of every pattern, so each of these
+  // asserts what SURVIVES, not merely that something was suppressed.
+
+  it('still flags a real literal in the identical assignment shape', () => {
+    const matches = scanPatterns("const apiKey = 'sk-ant-api03-" + 'A'.repeat(95) + "';");
+    expect(matches.some(m => m.type === 'CREDENTIAL')).toBe(true);
+  });
+
+  it('still flags a real literal in an env-reference fallback expression', () => {
+    // The dangerous half of `process.env.X || '<literal>'` must survive: the
+    // line contains an env reference AND a hardcoded key.
+    const key = 'sk-ant-api03-' + 'B'.repeat(95);
+    const matches = scanPatterns(`const apiKey = process.env.OPENAI_API_KEY || '${key}';`);
+    const creds = matches.filter(m => m.type === 'CREDENTIAL');
+    expect(creds).toHaveLength(1);
+    expect(creds[0]!.value).toBe(key);
+  });
+
+  it('still flags a value that merely CONTAINS an env-looking substring', () => {
+    // `process.env`-prefixed but not a reference: an attacker cannot launder a
+    // literal by naming it after the accessor.
+    const matches = scanPatterns('api_key = process.envXOPENAI' + 'C'.repeat(40));
+    expect(matches.some(m => m.type === 'CREDENTIAL')).toBe(true);
+  });
+
+  it('still flags the AWS secret access key when the value is a literal', () => {
+    const awsSecret = 'Ab3dEf6h'.repeat(5);
+    const matches = scanPatterns(`aws_secret_access_key = ${awsSecret}`);
+    expect(matches.some(m => m.value === awsSecret)).toBe(true);
+  });
+});
+
 describe('IBAN patterns', () => {
   it('detects valid German IBAN', () => {
     const matches = scanPatterns('IBAN: DE89370400440532013000');

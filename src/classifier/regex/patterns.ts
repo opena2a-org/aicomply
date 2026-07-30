@@ -268,6 +268,43 @@ export const PATTERNS: PatternDefinition[] = [
 ];
 
 /**
+ * Reference forms that name a secret without containing one.
+ *
+ * `process.env.OPENAI_API_KEY` is the *remediated* shape — it is exactly what
+ * `opena2a protect` rewrites a hardcoded key into. Reporting it as a finding
+ * makes two commands in the same CLI contradict each other and breaks CI on
+ * correctly-fixed code (opena2a#254).
+ *
+ * Every form is anchored `^...$` against the captured value, so this suppresses
+ * a value that IS a reference and never one that merely contains a
+ * reference-shaped substring (`process.envXABC...` stays a finding). The guard
+ * sits in the shared match loop rather than in one pattern, because the same
+ * reference is capturable by any keyword rule — the generic api_key rule and
+ * the Bearer rule both matched it before this landed.
+ */
+const ENV_REFERENCE_FORMS: RegExp[] = [
+  // Dotted accessors: process.env.X, import.meta.env.VITE_X, Deno.env.X
+  /^(?:globalThis\.)?(?:process\.env|import\.meta\.env|Deno\.env)\.[A-Za-z_][A-Za-z0-9_]*$/,
+  // Bracket accessors: process.env['X'], os.environ["X"]
+  /^(?:globalThis\.)?(?:process\.env|import\.meta\.env|Deno\.env|os\.environ|ENV)\s*\[\s*['"][A-Za-z_][A-Za-z0-9_]*['"]\s*\]$/,
+  // Getter calls: os.environ.get('X'), os.getenv('X'), System.getenv("X")
+  /^(?:os\.environ\.get|os\.getenv|System\.getenv|Deno\.env\.get|std::env::var)\s*\(\s*['"][A-Za-z_][A-Za-z0-9_]*['"]\s*\)$/,
+  // Shell / config interpolation: $X, ${X}, ${env:X} — the form protect emits
+  // into .mcp.json and .env-consuming config.
+  /^\$\{?(?:env:)?[A-Za-z_][A-Za-z0-9_]*\}?$/,
+];
+
+/**
+ * True when the value is a reference to a credential rather than the
+ * credential itself. Exported so the dual-layer and any future non-regex
+ * consumer can apply one definition instead of restating it.
+ */
+export function isEnvVarReference(value: string): boolean {
+  const trimmed = value.trim();
+  return ENV_REFERENCE_FORMS.some((form) => form.test(trimmed));
+}
+
+/**
  * Scan content against all patterns and return validated matches.
  */
 export function scanPatterns(content: string): PatternMatch[] {
@@ -281,6 +318,13 @@ export function scanPatterns(content: string): PatternMatch[] {
     while ((match = pattern.regex.exec(content)) !== null) {
       const fullMatch = match[0];
       const capturedValue = match[1] || fullMatch;
+
+      // An env-var reference names a secret without carrying one. Skipping it
+      // here (not per-pattern) keeps the definition in one place; the anchored
+      // forms mean a literal sitting next to a reference still reports.
+      if (isEnvVarReference(capturedValue)) {
+        continue;
+      }
 
       // Run validator if present
       if (pattern.validate && !pattern.validate(capturedValue)) {
