@@ -1,6 +1,6 @@
 {
   "name": "@opena2a/aicomply",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "description": "Inline PII, credential, and regulated-data classifier for AI agent I/O. Dual-layer: deterministic regex + optional semantic Guard. Library + CLI.",
   "keywords": [
     "pii",

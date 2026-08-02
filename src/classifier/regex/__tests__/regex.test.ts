@@ -222,6 +222,59 @@ describe('credential patterns', () => {
   });
 });
 
+describe('a KEY=VALUE pair is not the VALUE of the key above it', () => {
+  // Found by the 2.2.3 release test. `OPENAI_API_KEY=` with an empty value
+  // absorbed the NEXT line as its value, because `=` sat in the value
+  // character class and `\s*` after the separator crosses a newline. The
+  // masked preview gave it away: `BAR=***re` -- it contained the next key's
+  // NAME. That is a false "hardcoded credential" on a `.env.example`, the
+  // canonical placeholder file people are supposed to commit, and it broke
+  // the documented `git diff --cached | aicomply scan -q` CI gate.
+  //
+  // Base64 padding `=` only ever appears at the END of a value, so a `=`
+  // followed by more characters means a second assignment, never a secret.
+
+  it('does not flag the next line when a key has an empty value', () => {
+    const matches = scanPatterns('OPENAI_API_KEY=\nBAR=your-key-here\n');
+    expect(matches.filter(m => m.type === 'CREDENTIAL')).toHaveLength(0);
+  });
+
+  it('does not flag a realistic .env.example template', () => {
+    const template = [
+      '# Copy to .env and fill in',
+      'NODE_ENV=development',
+      'PORT=3000',
+      'OPENAI_API_KEY=',
+      'ANTHROPIC_API_KEY=',
+      'DATABASE_URL=postgresql://localhost:5432/appdb',
+      'REDIS_URL=redis://localhost:6379',
+      '',
+    ].join('\n');
+    expect(scanPatterns(template).filter(m => m.type === 'CREDENTIAL')).toHaveLength(0);
+  });
+
+  // ---- controls: real credentials must survive the narrowed value class ----
+
+  it('still flags a same-line assigned secret', () => {
+    const matches = scanPatterns('api_key = Ab3dEf6hIj9kLm2nOp5q');
+    expect(matches.some(m => m.type === 'CREDENTIAL')).toBe(true);
+  });
+
+  it('still flags a value carrying base64 padding', () => {
+    // `=` as TRAILING padding is legitimate and must not be truncated away.
+    const padded = 'Ab3dEf6hIj9kLm2nOp5qRs8t==';
+    const matches = scanPatterns(`api_key = ${padded}`);
+    expect(matches.some(m => m.value === padded)).toBe(true);
+  });
+
+  it('still flags a genuine value on the line after its key', () => {
+    // A key whose value legitimately sits on the next line is a real
+    // exposure; only a NAME=VALUE pair must be rejected.
+    const matches = scanPatterns('api_key:\n  Ab3dEf6hIj9kLm2nOp5q\n');
+    expect(matches.some(m => m.type === 'CREDENTIAL')).toBe(true);
+  });
+});
+
 describe('environment-variable references are not credentials (opena2a#254)', () => {
   // An env-var reference is the ABSENCE of a secret: it is the remediated form
   // `opena2a protect` rewrites a hardcoded key into. Flagging it makes the two

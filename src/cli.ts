@@ -25,7 +25,7 @@ import { DEFAULT_NANOMIND_DAEMON_URL } from './classifier/guard-client/nanomind-
 import type { ComplyResult, Violation } from './types';
 
 // Keep in sync with package.json version on every release bump.
-const VERSION = '2.2.2';
+const VERSION = '2.2.3';
 
 /**
  * A recoverable usage error (exit code 2). Thrown rather than calling
@@ -179,7 +179,7 @@ function guardActive(result: ComplyResult): boolean {
   return result.classifierResults.guard !== undefined;
 }
 
-function renderHuman(sources: Source[], results: ComplyResult[]): void {
+export function renderHuman(sources: Source[], results: ComplyResult[]): void {
   const out = process.stdout;
   let anyGuard = false;
   let totalFindings = 0;
@@ -225,6 +225,18 @@ function renderHuman(sources: Source[], results: ComplyResult[]): void {
         '  It targets prompt-injection / exfiltration the regex layer cannot see, but the\n' +
         '  current model over-flags benign text - preview only, not for production gating.\n' +
         '  Try it: npm i @nanomind/daemon && npx nanomind-daemon start\n\n',
+    );
+  } else if (results.some(r => r.violations.some(v => v.classifier === 'guard'))) {
+    // The same caveat, on the surface where it actually matters. It used to
+    // appear ONLY when the Guard was inactive -- so the warning was shown when
+    // it was harmless and hidden the moment the Guard started deciding
+    // verdicts. A measured ~70% benign false-positive rate reaching a user as
+    // an unqualified `confidence 1.00` is the opposite of empowering.
+    out.write(
+      '  Semantic Guard layer: active (preview). It targets prompt-injection /\n' +
+        '  exfiltration the regex layer cannot see, but the current model over-flags\n' +
+        '  benign text - treat guard-layer findings as advisory, not production gating.\n' +
+        '  Regex-layer findings above are unaffected.\n\n',
     );
   }
 

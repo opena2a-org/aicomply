@@ -35,6 +35,56 @@ function fixture(name: string, content: string): string {
 }
 
 describe('aicomply CLI', () => {
+  // The Guard preview caveat used to print ONLY when the Guard was inactive,
+  // so it was shown when it was harmless and hidden the moment the Guard
+  // started deciding verdicts. With a measured ~70% benign false-positive
+  // rate, an unqualified `confidence 1.00` on plain English is the opposite
+  // of empowering. Both directions are pinned here.
+  function guardResult(classifier: 'guard' | 'regex') {
+    return {
+      verdict: 'VIOLATION' as const,
+      violations: [{
+        type: 'tool_misuse',
+        value: 'some benign sentence',
+        start: 0,
+        end: 20,
+        confidence: 1.0,
+        classifier,
+        view: 'normalized' as const,
+      }],
+      // Guard is ACTIVE in both cases. Only the finding's layer differs, so
+      // the control cannot pass merely because the Guard was absent.
+      classifierResults: { guard: { verdict: 'VIOLATION', violations: [] } },
+    } as unknown as import('../types').ComplyResult;
+  }
+
+  it('discloses the preview caveat when a guard-layer finding is present', async () => {
+    const { renderHuman } = await import('../cli');
+    const cap = capture();
+    try {
+      renderHuman([{ label: 'x.txt', content: 'c' } as never], [guardResult('guard')]);
+    } finally {
+      cap.restore();
+    }
+    const text = cap.out.join('');
+    expect(text).toMatch(/Semantic Guard layer: active \(preview\)/);
+    expect(text).toMatch(/over-flags/);
+    expect(text).toMatch(/advisory, not production gating/);
+  });
+
+  it('does not print the active caveat when every finding is regex-layer', async () => {
+    // Control: the caveat must attach to guard findings, not to any violation.
+    // Without this, the fix would spam the disclaimer on pure regex output.
+    const { renderHuman } = await import('../cli');
+    const cap = capture();
+    try {
+      renderHuman([{ label: 'x.txt', content: 'c' } as never], [guardResult('regex')]);
+    } finally {
+      cap.restore();
+    }
+    expect(cap.out.join('')).not.toMatch(/Semantic Guard layer: active/);
+  });
+
   it('--version prints version and exits 0', async () => {
     const cap = capture();
     const code = await run(['--version']);
