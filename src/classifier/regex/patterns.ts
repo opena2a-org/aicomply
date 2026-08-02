@@ -137,6 +137,21 @@ function validateNpi(match: string): boolean {
   return luhnCheck('80840' + cleaned);
 }
 
+/**
+ * True when the captured "value" is really the NEXT KEY of an empty
+ * assignment, e.g. `OPENAI_API_KEY=` on one line followed by
+ * `ANTHROPIC_API_KEY=` on the next.
+ *
+ * Keyed on UPPER_SNAKE plus a single trailing `=`, which is the environment
+ * variable naming convention and not a secret shape. Base64 values are
+ * mixed-case, so a legitimate value ending in one padding character
+ * (`Ab3dEf6hIj9kLm2nOp5qRs8=`) is untouched, and an all-caps hex secret
+ * (`DEADBEEFCAFEBABE1234`, no trailing `=`) still reports.
+ */
+function isEmptyAssignmentTarget(value: string): boolean {
+  return /^[A-Z][A-Z0-9_]*=$/.test(value);
+}
+
 export const PATTERNS: PatternDefinition[] = [
   {
     type: 'SSN',
@@ -232,8 +247,28 @@ export const PATTERNS: PatternDefinition[] = [
   {
     type: 'CREDENTIAL',
     // Generic API key patterns (key=..., api_key=..., apikey=...)
-    regex: /(?:api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*['"]?([A-Za-z0-9._~+/=-]{16,})['"]?/gi,
+    //
+    // An empty-valued key used to adopt the NEXT LINE as its value.
+    // `OPENAI_API_KEY=\nBAR=your-key-here` reported a CREDENTIAL whose masked
+    // preview was `BAR=***re`, and an .env.example reported
+    // `ANTHROPIC_API_KEY=` -- in both cases the captured "secret" was the next
+    // key's NAME. That fires on the placeholder file people are told to commit
+    // and broke the documented `git diff | aicomply scan -q` gate.
+    //
+    // `=` is admitted only as TRAILING base64 padding, never inside the body:
+    // a `=` followed by more characters is a second assignment, which is what
+    // let `BAR=your-key-here` be swallowed whole.
+    //
+    // The separator deliberately keeps `\s*` rather than horizontal-only
+    // whitespace. A value legitimately on the line below its key (YAML block
+    // style, `api_key:\n  <secret>`) is a real exposure, and narrowing to
+    // same-line silently dropped it -- the compact whitespace-removed view
+    // does NOT compensate, measured. The remaining `KEY=` case is rejected by
+    // the validator instead, which is precise about the thing that is actually
+    // wrong.
+    regex: /(?:api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*['"]?([A-Za-z0-9._~+/-]{16,}={0,2})['"]?/gi,
     confidence: 0.8,
+    validate: (value) => !isEmptyAssignmentTarget(value),
   },
   {
     type: 'IBAN',
