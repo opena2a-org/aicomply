@@ -15,11 +15,14 @@ name: Release (Python / PyPI)
 #     Workflow name:       release-python.yml
 #     Environment name:    (blank)
 
+# The tag push is the ONLY trigger. `workflow_dispatch` was removed 2026-08-18:
+# a publish trigger that is not the tag push means the release gate does not stand
+# in front of the publish at all -- anyone with write access could publish from any
+# branch state without cutting a tag, and this job holds `id-token: write`.
 on:
   push:
     tags:
       - 'python-v*'
-  workflow_dispatch:
 
 jobs:
   publish:
