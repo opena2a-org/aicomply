@@ -97,7 +97,6 @@ describe('aicomply CLI', () => {
   // bump that forgets the constant would otherwise ship a CLI reporting the
   // wrong version (caught at release 2.2.1).
   it('--version matches package.json version', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const pkg = require('../../package.json') as { version: string };
     const cap = capture();
     await run(['--version']);
