@@ -5,7 +5,7 @@ Runs every case in the repository's ``pack/conformance/*.jsonl`` against this
 package, writes ``conformance/python.json`` at the repository root, and exits
 non-zero unless ``passed == cases``. The record carries ``packSha256`` so a
 release can refuse to publish when the record was produced against a different
-pack than the one the package embeds.
+pack than the one the package embeds; that check is ``bench/release_gate.py``.
 
 Usage:
     python bench/conformance.py

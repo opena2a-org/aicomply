@@ -42,6 +42,7 @@
     "pack:check": "npm run build && node scripts/pack.mjs check",
     "pack:sync": "npm run build && node scripts/pack.mjs sync",
     "conformance": "npm run build && node scripts/conformance.mjs",
+    "release:gate": "node scripts/release-gate.mjs",
     "accuracy:generate": "node bench/generate.mjs",
     "accuracy:measure": "npm run build && node bench/measure.mjs",
     "accuracy:update-baseline": "npm run build && node bench/measure.mjs --update-baseline"
