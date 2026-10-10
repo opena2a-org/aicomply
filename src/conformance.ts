@@ -53,6 +53,8 @@ export interface ConformanceFailure {
 /** The record CI writes per runtime and the release workflows read. */
 export interface ConformanceRecord {
   runtime: string;
+  /** Version of this runtime's package (package.json `version`). */
+  runtimeVersion: string;
   packVersion: string;
   packSha256: string;
   cases: number;
@@ -115,6 +117,20 @@ function sameOutcome(a: ConformanceOutcome, b: ConformanceOutcome): boolean {
   });
 }
 
+/**
+ * The package version. From `src/` (tests) and from `dist/` (the published
+ * package) one level up is the package root, which carries package.json.
+ */
+function packageVersion(): string {
+  const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as {
+    version?: unknown;
+  };
+  if (typeof pkg.version !== 'string' || pkg.version === '') {
+    throw new Error('conformance: package.json has no version');
+  }
+  return pkg.version;
+}
+
 /** Run every case in `dir` against this runtime and build its record. */
 export function runConformance(dir: string): ConformanceRecord {
   const cases = loadConformanceCases(dir);
@@ -127,6 +143,7 @@ export function runConformance(dir: string): ConformanceRecord {
   }
   return {
     runtime: 'typescript',
+    runtimeVersion: packageVersion(),
     packVersion: PACK_VERSION,
     packSha256: PACK_SHA256,
     cases: cases.length,

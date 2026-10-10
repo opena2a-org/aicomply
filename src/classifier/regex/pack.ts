@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { VALIDATORS, type Validator } from './validators';
+import type { PackIdentity } from '../../types';
 
 export const PATTERN_TYPES = [
   'SSN',
@@ -209,3 +210,8 @@ export const PACK_VERSION: string = PACK.version;
 
 /** SHA-256 (hex) of the pattern pack bytes this build loaded. */
 export const PACK_SHA256: string = PACK.sha256;
+
+/** A fresh `{ version, sha256 }` for one result, so no two results share an object. */
+export function packIdentity(): PackIdentity {
+  return { version: PACK_VERSION, sha256: PACK_SHA256 };
+}

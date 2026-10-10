@@ -227,9 +227,13 @@ const result = await comply({ content });
 
 result.classifierResults.regex; // { classifier: 'regex', verdict, violations }
 result.classifierResults.guard; // defined when GuardClient was reachable
+result.layers;                  // ['normalize', 'regex'], plus 'guard' when a Guard result was accepted
+result.pack;                    // { version, sha256 }: the pattern pack the regex layer ran
 ```
 
-Treat `verdict` and `violations` as the stable contract; `classifierResults`, `originalContent`, `normalizedContent`, and `normalizations` are introspection hooks.
+`layers` never lists `guard` on the regex-only fallback or when a supplied Guard signature is rejected, and is `[]` for empty content. `pack` equals `{ version: PACK_VERSION, sha256: PACK_SHA256 }`.
+
+Treat `verdict` and `violations` as the stable contract; `classifierResults`, `originalContent`, `normalizedContent`, `normalizations`, `layers` and `pack` are introspection hooks.
 
 ## Audit trail
 

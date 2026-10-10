@@ -20,12 +20,14 @@ from .classifier.guard_client import (
     is_nanomind_daemon_available,
 )
 from .classifier.regex import classify_with_regex, luhn_check, scan_patterns
-from .classifier.regex.pack import PACK_SHA256, PACK_VERSION
+from .classifier.regex.pack import PACK_SHA256, PACK_VERSION, pack_identity
 from .normalize import normalize
 from .types import (
     ClassifierResult,
+    ComplyLayer,
     ComplyResult,
     NormalizationStep,
+    PackIdentity,
     Verdict,
     Violation,
     ViolationView,
@@ -36,6 +38,8 @@ __version__ = "0.3.1"
 __all__ = [
     "comply",
     "ComplyResult",
+    "ComplyLayer",
+    "PackIdentity",
     "Violation",
     "ClassifierResult",
     "Verdict",
@@ -93,6 +97,8 @@ def comply(
             original_content="",
             normalized_content="",
             normalizations=[],
+            pack=pack_identity(),
+            layers=[],
         )
 
     return classify_dual_layer(

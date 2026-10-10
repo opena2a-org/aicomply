@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from importlib.resources import files
 from typing import Literal, cast
 
+from ...types import PackIdentity
 from .validators import VALIDATORS, Validator
 
 PatternType = Literal["SSN", "PAN", "CUI", "CREDENTIAL", "IBAN", "PASSPORT", "MRN", "NPI"]
@@ -236,3 +237,8 @@ PACK_VERSION: str = PACK.version
 
 #: SHA-256 (hex) of the pattern pack bytes this install loaded.
 PACK_SHA256: str = PACK.sha256
+
+
+def pack_identity() -> PackIdentity:
+    """A fresh ``PackIdentity`` for one result, so no two results share an object."""
+    return PackIdentity(version=PACK_VERSION, sha256=PACK_SHA256)

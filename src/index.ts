@@ -8,6 +8,8 @@
 export type {
   ComplyOptions,
   ComplyResult,
+  ComplyLayer,
+  PackIdentity,
   ClassifierResult,
   Violation,
   ViolationView,
@@ -62,6 +64,7 @@ export type { PatternMatch, PatternType } from './classifier/regex/patterns';
 export { PACK_VERSION, PACK_SHA256 } from './classifier/regex/pack';
 
 import { classifyDualLayer } from './classifier/dual-layer';
+import { packIdentity } from './classifier/regex/pack';
 import { RegistryIntelligenceCache } from './registry';
 import { loadPolicyPack } from './policy';
 import type { DualLayerOptions } from './classifier/dual-layer';
@@ -128,6 +131,8 @@ export async function comply(
       originalContent: opts.content ?? '',
       normalizedContent: opts.content ?? '',
       normalizations: [],
+      pack: packIdentity(),
+      layers: [],
     };
   }
 

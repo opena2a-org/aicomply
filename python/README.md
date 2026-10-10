@@ -53,6 +53,10 @@ for v in result.violations:
   `view` (which content view caught it), and best-effort `original_start/end`
 - `original_content` / `normalized_content` / `normalizations` — an audit trail
   (omitted on `DENY`, where the input is treated as untrusted bytes)
+- `layers`: the layers that ran, in order, `["normalize", "regex"]` plus
+  `"guard"` only when the Guard daemon answered; `[]` for empty content
+- `pack`: `PackIdentity(version, sha256)`, the pattern pack the regex layer ran
+  (`PACK_VERSION` and `PACK_SHA256`)
 - `.to_dict()` — camelCase JSON wire-compatible with the npm package
 
 Empty string short-circuits to `CLEAN`; `comply()` also accepts a bare string

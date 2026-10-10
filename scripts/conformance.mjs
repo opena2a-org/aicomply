@@ -53,7 +53,7 @@ const record = runConformance(CASES_DIR);
 mkdirSync(dirname(RECORD_PATH), { recursive: true });
 writeFileSync(RECORD_PATH, JSON.stringify(record, null, 2) + '\n');
 
-console.log(`runtime:    ${record.runtime}`);
+console.log(`runtime:    ${record.runtime} ${record.runtimeVersion}`);
 console.log(`pack:       ${record.packVersion} sha256 ${record.packSha256}`);
 console.log(`cases:      ${record.cases}`);
 console.log(`passed:     ${record.passed}`);

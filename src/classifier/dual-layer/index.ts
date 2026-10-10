@@ -17,12 +17,13 @@
  */
 
 import { classifyWithRegex } from '../regex';
+import { packIdentity } from '../regex/pack';
 import { classifyWithNanoMindDaemon } from '../guard-client/nanomind-adapter';
 import { verifyClassification } from '../../arp/verify';
 import { RegistryIntelligenceCache } from '../../registry';
 import { assembleRiskContext } from '../../risk';
 import { normalize } from '../../normalize';
-import type { ClassifierResult, ComplyResult, PolicyPack, RiskContext, Violation, ViolationView } from '../../types';
+import type { ClassifierResult, ComplyLayer, ComplyResult, PolicyPack, RiskContext, Violation, ViolationView } from '../../types';
 import type {
   NanoMindGuardResult,
   NanoMindGuardVerifyOptions,
@@ -236,6 +237,14 @@ export async function classifyDualLayer(
     result.normalizedContent = norm.normalizedContent;
   }
   result.normalizations = norm.steps;
+
+  // Name the pack the regex layer ran and the layers that ran. Guard is
+  // listed only when its classification was accepted into classifierResults:
+  // a regex-only fallback or a rejected signature must not claim it ran.
+  const layers: ComplyLayer[] = ['normalize', 'regex'];
+  if (result.classifierResults.guard !== undefined) layers.push('guard');
+  result.pack = packIdentity();
+  result.layers = layers;
 
   return result;
 }

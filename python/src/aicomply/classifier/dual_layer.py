@@ -17,12 +17,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..normalize import NormalizationResult, normalize
-from ..types import ClassifierResult, ComplyResult, NormalizationStep, Verdict, Violation
+from ..types import (
+    ClassifierResult,
+    ComplyLayer,
+    ComplyResult,
+    NormalizationStep,
+    Verdict,
+    Violation,
+)
 from .guard_client.nanomind_adapter import (
     NanoMindAdapterOptions,
     classify_with_nanomind_daemon,
 )
 from .regex import ScanViewOptions, classify_with_regex
+from .regex.pack import pack_identity
 
 
 @dataclass
@@ -129,5 +137,14 @@ def classify_dual_layer(
         result.original_content = norm.original_content
         result.normalized_content = norm.normalized_content
     result.normalizations = steps
+
+    # Name the pack the regex layer ran and the layers that ran. Guard is
+    # listed only when its classification was accepted into classifier_results:
+    # a regex-only fallback must not claim it ran.
+    layers: list[ComplyLayer] = ["normalize", "regex"]
+    if "guard" in result.classifier_results:
+        layers.append("guard")
+    result.pack = pack_identity()
+    result.layers = layers
 
     return result
