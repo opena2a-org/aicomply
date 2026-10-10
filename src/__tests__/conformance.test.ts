@@ -12,6 +12,19 @@ const PACKAGE_VERSION = (
 ).version;
 
 /**
+ * Whether `c` claims a corpus origin. The seed script writes every origin as a
+ * string, so a missing, null or other non-string origin marks a case that was
+ * not seeded from the corpus.
+ */
+function isSeeded(c: ConformanceCase): c is ConformanceCase & { origin: string } {
+  return typeof c.origin === 'string' && c.origin.startsWith('bench/corpus/');
+}
+
+function seeded(cases: ConformanceCase[]): ConformanceCase[] {
+  return cases.filter(isSeeded);
+}
+
+/**
  * Every corpus-seeded case under `root` that no longer matches what
  * `scripts/conformance.mjs --seed` would write for it: a file not named
  * `<class>-cases.jsonl` after its corpus file, or text that differs from the
@@ -26,7 +39,7 @@ function seedDrift(root: string): string[] {
     for (const line of readFileSync(join(casesDir, file), 'utf8').split('\n')) {
       if (line.trim() === '') continue;
       const c = JSON.parse(line) as ConformanceCase;
-      if (!c.origin?.startsWith('bench/corpus/')) continue;
+      if (!isSeeded(c)) continue;
       const m = /^bench\/corpus\/([^/:]+)\.jsonl:(\d+)$/.exec(c.origin);
       if (m === null) {
         drift.push(`${c.id}: origin ${c.origin} does not name a corpus line`);
@@ -82,9 +95,9 @@ describe('pattern pack conformance suite', () => {
   it('marks every corpus-seeded case as FAKE fixture text', () => {
     // The seeded text carries token-shaped strings; the marker on the same
     // line is what lets a credential scan over the file pass them.
-    const seeded = loadConformanceCases(CASES_DIR).filter((c) => c.origin?.startsWith('bench/corpus/'));
-    expect(seeded).toHaveLength(3200);
-    expect(seeded.filter((c) => !/FAKE/.test(c.fixture ?? ''))).toEqual([]);
+    const corpusCases = seeded(loadConformanceCases(CASES_DIR));
+    expect(corpusCases).toHaveLength(3200);
+    expect(corpusCases.filter((c) => !/FAKE/.test(c.fixture ?? ''))).toEqual([]);
   });
 
   it('holds each corpus class in <class>-cases.jsonl with the text of the corpus line it names', () => {
@@ -115,6 +128,21 @@ describe('pattern pack conformance suite', () => {
         'secrets-0001: text differs from bench/corpus/secrets.jsonl:1',
         'secrets-0002: in secrets.jsonl, not secrets-cases.jsonl',
       ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([null, 7])('skips a case whose origin is %p, not a string', (origin) => {
+    // The case is not corpus-seeded (the seed script writes every origin as a
+    // string), so the drift check passes over it as the Python twin does.
+    const root = mkdtempSync(join(tmpdir(), 'aicomply-conformance-'));
+    try {
+      mkdirSync(join(root, 'pack', 'conformance'), { recursive: true });
+      const c = { id: 'x', origin, text: 't', expected: { verdict: 'CLEAN', violations: [] } };
+      writeFileSync(join(root, 'pack', 'conformance', 'x-cases.jsonl'), `${JSON.stringify(c)}\n`);
+      expect(seedDrift(root)).toEqual([]);
+      expect(seeded([c as unknown as ConformanceCase])).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
