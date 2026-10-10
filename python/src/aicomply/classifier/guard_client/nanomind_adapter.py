@@ -96,10 +96,23 @@ def map_infer_response_to_classifier_result(
     return ClassifierResult(classifier="guard", verdict="VIOLATION", violations=[violation])
 
 
+# MOCK_NANOMIND_URL redirects every classified input to another endpoint, so it is
+# a test and local-development override only: honoured when NODE_ENV is "test" or
+# "development" (the same rule as the TypeScript package), ignored otherwise. To
+# reach a daemon on a non-default address in production, pass ``base_url``.
+_TEST_OVERRIDE_ENVIRONMENTS = frozenset({"test", "development"})
+
+
+def _read_test_override(name: str) -> str | None:
+    if os.environ.get("NODE_ENV") not in _TEST_OVERRIDE_ENVIRONMENTS:
+        return None
+    return os.environ.get(name)
+
+
 def _resolve_base_url(options: NanoMindAdapterOptions) -> str:
     return (
         options.base_url
-        or os.environ.get("MOCK_NANOMIND_URL")
+        or _read_test_override("MOCK_NANOMIND_URL")
         or DEFAULT_NANOMIND_DAEMON_URL
     )
 

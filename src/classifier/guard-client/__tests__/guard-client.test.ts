@@ -88,6 +88,28 @@ describe('GuardClient', () => {
     }
   });
 
+  it.each([['production'], [undefined], ['staging']])(
+    'ignores MOCK_GUARD_SOCKET when NODE_ENV=%s',
+    (nodeEnv) => {
+      const prevSocket = process.env.MOCK_GUARD_SOCKET;
+      const prevNodeEnv = process.env.NODE_ENV;
+      process.env.MOCK_GUARD_SOCKET = '/tmp/some-mock.sock';
+      if (nodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = nodeEnv;
+      try {
+        expect(new GuardClient().getSocketPath()).toBe('/tmp/nanomind-guard.sock');
+        expect(new GuardClient({ socketPath: '/tmp/explicit.sock' }).getSocketPath()).toBe(
+          '/tmp/explicit.sock',
+        );
+      } finally {
+        if (prevSocket === undefined) delete process.env.MOCK_GUARD_SOCKET;
+        else process.env.MOCK_GUARD_SOCKET = prevSocket;
+        if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = prevNodeEnv;
+      }
+    },
+  );
+
   it('isAvailable=true when a server is listening on the socket', async () => {
     const sockPath = join(tmpDir, 'live.sock');
     const server = await startMockServer((sock) => sock.end(), sockPath);

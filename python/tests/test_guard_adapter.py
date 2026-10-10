@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from aicomply.classifier.guard_client.nanomind_adapter import (
     _validate_infer_response,
     classify_with_nanomind_daemon,
@@ -70,3 +74,79 @@ def test_classify_returns_none_when_daemon_unreachable():
 
 def test_classify_skips_empty_input():
     assert classify_with_nanomind_daemon("   ") is None
+
+
+def _start_recording_daemon():
+    import http.server
+    import threading
+
+    received = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers.get("content-length", 0))
+            received.append((self.path, self.rfile.read(length)))
+            payload = json.dumps(_ok_response()).encode("utf-8")
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f"http://127.0.0.1:{server.server_address[1]}", received
+
+
+@pytest.mark.parametrize("node_env", ["production", None, "staging"])
+def test_mock_url_is_ignored_outside_test_and_development(monkeypatch, node_env):
+    from aicomply.classifier.guard_client.nanomind_adapter import (
+        DEFAULT_NANOMIND_DAEMON_URL,
+        NanoMindAdapterOptions,
+        _resolve_base_url,
+    )
+
+    server, url, received = _start_recording_daemon()
+    try:
+        monkeypatch.setenv("MOCK_NANOMIND_URL", url)
+        if node_env is None:
+            monkeypatch.delenv("NODE_ENV", raising=False)
+        else:
+            monkeypatch.setenv("NODE_ENV", node_env)
+        assert _resolve_base_url(NanoMindAdapterOptions()) == DEFAULT_NANOMIND_DAEMON_URL
+        classify_with_nanomind_daemon(
+            "SSN 516-81-3086", NanoMindAdapterOptions(timeout_ms=300)
+        )
+        assert received == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("node_env", ["test", "development"])
+def test_mock_url_is_honoured_in_test_and_development(monkeypatch, node_env):
+    server, url, received = _start_recording_daemon()
+    try:
+        monkeypatch.setenv("MOCK_NANOMIND_URL", url)
+        monkeypatch.setenv("NODE_ENV", node_env)
+        out = classify_with_nanomind_daemon("content")
+        assert out is not None and out.verdict == "CLEAN"
+        assert [path for path, _ in received] == ["/v1/infer"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_explicit_base_url_wins_over_mock_url(monkeypatch):
+    from aicomply.classifier.guard_client.nanomind_adapter import (
+        NanoMindAdapterOptions,
+        _resolve_base_url,
+    )
+
+    monkeypatch.setenv("MOCK_NANOMIND_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("NODE_ENV", "test")
+    opts = NanoMindAdapterOptions(base_url="http://127.0.0.1:47201")
+    assert _resolve_base_url(opts) == "http://127.0.0.1:47201"

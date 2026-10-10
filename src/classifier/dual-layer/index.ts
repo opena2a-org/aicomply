@@ -31,8 +31,8 @@ import type {
 // The Guard layer is invoked via the nanomind-daemon adapter
 // (classifyWithNanoMindDaemon). The adapter is a stateless function so
 // nothing is constructed at module-top — the daemon base URL is
-// resolved at call time so process.env.MOCK_NANOMIND_URL takes effect
-// even when it changes between classify() calls.
+// resolved at call time so the MOCK_NANOMIND_URL test override takes
+// effect even when it changes between classify() calls.
 
 export interface DualLayerOptions {
   guardVerifyOptions?: NanoMindGuardVerifyOptions;

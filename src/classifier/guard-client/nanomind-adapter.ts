@@ -36,6 +36,7 @@ import type {
   NanoMindInferRequest,
   NanoMindInferResponse,
 } from './types';
+import { readTestOverride } from './test-overrides';
 
 /**
  * The four non-empty AttackClass values. Used to validate that a
@@ -65,7 +66,8 @@ export interface NanoMindAdapterOptions {
   /**
    * Base URL the daemon is reachable at. Defaults to
    * `http://127.0.0.1:47200`. The `MOCK_NANOMIND_URL` env var overrides
-   * the default for tests and local development.
+   * the default for tests and local development, and is honoured only
+   * when NODE_ENV is `test` or `development`.
    */
   baseUrl?: string;
   /**
@@ -161,7 +163,7 @@ export async function classifyWithNanoMindDaemon(
 ): Promise<ClassifierResult | null> {
   const baseUrl =
     options.baseUrl ??
-    process.env.MOCK_NANOMIND_URL ??
+    readTestOverride('MOCK_NANOMIND_URL') ??
     DEFAULT_NANOMIND_DAEMON_URL;
   const timeoutMs = options.timeoutMs ?? DEFAULT_NANOMIND_TIMEOUT_MS;
   const url = baseUrl.replace(/\/+$/, '') + NANOMIND_INFER_ENDPOINT;
@@ -221,7 +223,7 @@ export async function isNanoMindDaemonAvailable(
 ): Promise<boolean> {
   const baseUrl =
     options.baseUrl ??
-    process.env.MOCK_NANOMIND_URL ??
+    readTestOverride('MOCK_NANOMIND_URL') ??
     DEFAULT_NANOMIND_DAEMON_URL;
   const timeoutMs = Math.min(options.timeoutMs ?? 200, DEFAULT_NANOMIND_TIMEOUT_MS);
   const url = baseUrl.replace(/\/+$/, '') + '/health';
