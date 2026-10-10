@@ -18,12 +18,15 @@
 // nothing about the package being published, so the gate refuses it.
 //
 // Every reason is printed, one REFUSED line each, then the fix for each. A
-// missing package.json or pack is named as such, and the record's own fields
-// are still checked beside it. Exit 1 on a refusal, 2 on a usage error. Needs
-// no build: it reads the record, package.json and the pack.
+// package.json, pack or record that is missing, is a directory or sits under a
+// file is named as such with its path, and the record's own fields are still
+// checked beside a package.json or pack the gate could not read. A
+// package.json that names no version is refused on its own: a record that
+// names none either would otherwise compare equal. Exit 1 on a refusal, 2 on a
+// usage error. Needs no build: it reads the record, package.json and the pack.
 
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -34,7 +37,10 @@ const PACK = 'pack/patterns.json';
 const RERUN_FIX =
   'run `npm run conformance` on the commit being released, resolve every FAIL it prints, then run this gate again';
 const ROOT_FIX = `pass --root the package directory, the one that holds package.json and ${PACK}`;
+const PACKAGE_FIX =
+  'restore package.json from the commit being released: the record is compared against its "version" string';
 const PACK_FIX = `restore ${PACK} from the commit being released: the package ships it and the record is compared against its bytes`;
+const RECORD_FIX = `remove what stands in place of ${RECORD}, then ${RERUN_FIX}`;
 
 const args = process.argv.slice(2);
 let root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -54,13 +60,44 @@ function isCount(value) {
   return Number.isInteger(value) && value >= 0;
 }
 
-/** The bytes of `file` under `root`, or null when there is no such file. */
-function readIfPresent(file) {
+function isDirectory(path) {
   try {
-    return readFileSync(resolve(root, file));
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** The path, from `root` down towards `file`, that is not the directory it has to be. */
+function nonDirectory(file) {
+  let dir = root;
+  for (const part of file.split('/').slice(0, -1)) {
+    if (!isDirectory(dir)) break;
+    dir = resolve(dir, part);
+  }
+  return dir;
+}
+
+/**
+ * The bytes of `file` under `root`, or in `problem` why there are none: the
+ * path and the condition for a file that is missing, is a directory or sits
+ * under a file, and the system's own message for anything else. `where` says
+ * where the file was looked for.
+ */
+function read(file, where = '') {
+  try {
+    return { bytes: readFileSync(resolve(root, file)) };
   } catch (err) {
-    if (err?.code === 'ENOENT') return null;
-    throw err;
+    switch (err?.code) {
+      case 'ENOENT':
+        return { missing: true, problem: `${file} does not exist${where}` };
+      case 'EISDIR':
+        return { problem: `${file}${where} is a directory, not a file` };
+      case 'ENOTDIR':
+        return { problem: `${file} cannot be read, ${nonDirectory(file)} is not a directory` };
+      default:
+        return { problem: `${file} cannot be read (${err instanceof Error ? err.message : String(err)})` };
+    }
   }
 }
 
@@ -69,34 +106,40 @@ function refusals() {
   const reasons = [];
   const refuse = (reason, fix = RERUN_FIX) => reasons.push({ reason, fix });
 
-  const pkg = readIfPresent('package.json');
-  const pack = readIfPresent(PACK);
+  const pkg = read('package.json', ` in ${root}`);
+  const pack = read(PACK, ` in ${root}`);
   let version;
   let packSha256;
-  if (pkg === null) {
-    refuse(`package: package.json does not exist in ${root}`, ROOT_FIX);
+  if (pkg.bytes === undefined) {
+    refuse(`package: ${pkg.problem}`, ROOT_FIX);
   } else {
-    version = JSON.parse(pkg.toString('utf8')).version;
-    console.log(`package:    ${RUNTIME} ${version}`);
+    const named = JSON.parse(pkg.bytes.toString('utf8'))?.version;
+    if (typeof named === 'string' && named !== '') {
+      version = named;
+      console.log(`package:    ${RUNTIME} ${version}`);
+    } else {
+      refuse(`package: package.json carries no version string, its version is ${show(named)}`, PACKAGE_FIX);
+    }
   }
-  if (pack === null) {
+  if (pack.bytes === undefined) {
     // Without a package.json the root itself is the likely mistake.
-    refuse(`pack: ${PACK} does not exist in ${root}`, pkg === null ? ROOT_FIX : PACK_FIX);
+    refuse(`pack: ${pack.problem}`, pkg.bytes === undefined ? ROOT_FIX : PACK_FIX);
   } else {
-    packSha256 = createHash('sha256').update(pack).digest('hex');
+    packSha256 = createHash('sha256').update(pack.bytes).digest('hex');
     console.log(`pack:       sha256 ${packSha256} (${PACK})`);
   }
 
-  let text;
-  try {
-    text = readFileSync(resolve(root, RECORD), 'utf8');
-  } catch {
-    refuse(`record: ${RECORD} does not exist`);
+  const stored = read(RECORD);
+  if (stored.bytes === undefined) {
+    let fix = RERUN_FIX;
+    // As for the pack: without a package.json the root itself is the likely mistake.
+    if (!stored.missing) fix = pkg.bytes === undefined ? ROOT_FIX : RECORD_FIX;
+    refuse(`record: ${stored.problem}`, fix);
     return reasons;
   }
   let record;
   try {
-    record = JSON.parse(text);
+    record = JSON.parse(stored.bytes.toString('utf8'));
   } catch {
     record = null;
   }
@@ -112,11 +155,11 @@ function refusals() {
   if (record.runtime !== RUNTIME) {
     refuse(`runtime: the record is for ${show(record.runtime)}, this gate publishes "${RUNTIME}"`);
   }
-  // A missing package.json or pack is already refused above; there is nothing to compare with.
-  if (pkg !== null && record.runtimeVersion !== version) {
+  // A version or pack the gate could not read is already refused above; there is nothing to compare with.
+  if (version !== undefined && record.runtimeVersion !== version) {
     refuse(`runtimeVersion: the record was written by ${show(record.runtimeVersion)}, this package is ${show(version)}`);
   }
-  if (pack !== null && record.packSha256 !== packSha256) {
+  if (packSha256 !== undefined && record.packSha256 !== packSha256) {
     refuse(
       `packSha256: the record was written against pack ${show(record.packSha256)}, this package ships "${packSha256}"`,
     );
@@ -135,7 +178,7 @@ let reasons;
 try {
   reasons = refusals();
 } catch (err) {
-  // An unreadable package or pack is a refusal too: the gate never passes on an error.
+  // Anything unforeseen is a refusal too: the gate never passes on an error.
   reasons = [{ reason: `gate: ${err instanceof Error ? err.message : String(err)}`, fix: RERUN_FIX }];
 }
 

@@ -10,10 +10,12 @@ record written against other pack bytes, by another runtime or version, or
 with a failing case says nothing about those artifacts, so the gate refuses it.
 
 Run it after ``python bench/conformance.py`` and ``python -m build``, before
-the upload. Every reason is printed, one REFUSED line each: a record that
-cannot be read leaves nothing to compare the artifacts with, so beside it the
-gate reports what the artifact directory and each artifact lack on their own.
-Exit 1 on a refusal, 2 on a usage error.
+the upload. Every reason is printed, one REFUSED line each, then the fix for
+each, every distinct fix once: a stray file in ``dist/`` is resolved by
+removing it, not by another conformance run. A record that cannot be read
+leaves nothing to compare the artifacts with, so beside it the gate reports
+what the artifact directory and each artifact lack on their own. Exit 1 on a
+refusal, 2 on a usage error.
 
 Usage:
     python bench/release_gate.py [--record <path>] [--dist <dir>]
@@ -29,13 +31,44 @@ import tarfile
 import zipfile
 from email.parser import HeaderParser
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 RUNTIME = "python"
 PACKAGE = "aicomply"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 RECORD_PATH = _REPO_ROOT / "conformance" / "python.json"
 DIST_DIR = _REPO_ROOT / "python" / "dist"
+
+RERUN_FIX = (
+    "run `python bench/conformance.py` on the commit being released, resolve every FAIL it "
+    "prints, then run this gate again"
+)
+# For a record and an artifact that disagree, and for anything unforeseen.
+BOTH_FIX = (
+    "run `python bench/conformance.py` and `python -m build` on the commit being released, "
+    "resolve every FAIL the first prints, then run this gate again"
+)
+
+
+class Refusal(NamedTuple):
+    """One reason the gate refuses, and what resolves it."""
+
+    reason: str
+    fix: str
+
+
+def _build_fix(dist_dir: Path) -> str:
+    return (
+        f"run `python -m build` on the commit being released into an empty {dist_dir}, "
+        "then run this gate again"
+    )
+
+
+def _stray_fix(dist_dir: Path) -> str:
+    return (
+        f"remove from {dist_dir} every file that is not a wheel or an sdist (an upload sends "
+        "all of them), then run this gate again"
+    )
 
 
 def _show(value: Any) -> str:
@@ -85,52 +118,69 @@ def _read_sdist(path: Path) -> tuple[str | None, bytes | None]:
         )
 
 
-def _artifact_refusals(path: Path, record: dict[str, Any] | None) -> list[str]:
+def _artifact_refusals(path: Path, record: dict[str, Any] | None) -> list[Refusal]:
     """What ``path`` lacks, and with a ``record``, where the two disagree."""
     name = path.name
+    build_fix = _build_fix(path.parent)
     if name.endswith(".whl"):
         reader = _read_wheel
     elif name.endswith(".tar.gz"):
         reader = _read_sdist
     else:
-        return [f"{name}: not a wheel or an sdist, so the gate cannot read its pack"]
+        return [
+            Refusal(
+                f"{name}: not a wheel or an sdist, so the gate cannot read its pack",
+                _stray_fix(path.parent),
+            )
+        ]
     try:
         version, pack = reader(path)
     except (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError) as err:
-        return [f"{name}: unreadable ({err})"]
+        return [Refusal(f"{name}: unreadable ({err})", build_fix)]
 
     sha256 = hashlib.sha256(pack).hexdigest() if pack is not None else None
     print(f"artifact:   {name} version {_show(version)}, pack sha256 {_show(sha256)}")
     reasons = []
     if version is None:
-        reasons.append(f"{name}: carries no version metadata")
+        reasons.append(Refusal(f"{name}: carries no version metadata", build_fix))
     elif record is not None and record.get("runtimeVersion") != version:
         reasons.append(
-            f"runtimeVersion: the record was written by {_show(record.get('runtimeVersion'))} "
-            f"(aicomply.__version__), {name} is {_show(version)}"
+            Refusal(
+                "runtimeVersion: the record was written by "
+                f"{_show(record.get('runtimeVersion'))} (aicomply.__version__), "
+                f"{name} is {_show(version)}",
+                BOTH_FIX,
+            )
         )
     if sha256 is None:
-        reasons.append(f"{name}: carries no pattern pack")
+        reasons.append(Refusal(f"{name}: carries no pattern pack", build_fix))
     elif record is not None and record.get("packSha256") != sha256:
         reasons.append(
-            f"packSha256: the record was written against pack {_show(record.get('packSha256'))}, "
-            f"{name} embeds {_show(sha256)}"
+            Refusal(
+                "packSha256: the record was written against pack "
+                f"{_show(record.get('packSha256'))}, {name} embeds {_show(sha256)}",
+                BOTH_FIX,
+            )
         )
     return reasons
 
 
-def _record_refusals(record_path: Path) -> tuple[dict[str, Any] | None, list[str]]:
+def _record_refusals(record_path: Path) -> tuple[dict[str, Any] | None, list[Refusal]]:
     """The record, ``None`` when it cannot be read, and every reason it falls short."""
     try:
         text = record_path.read_text(encoding="utf-8")
-    except OSError:
-        return None, [f"record: {record_path} does not exist"]
+    except FileNotFoundError:
+        return None, [Refusal(f"record: {record_path} does not exist", RERUN_FIX)]
+    except (OSError, UnicodeDecodeError) as err:
+        # A directory, bytes that are not UTF-8, a file this user may not open.
+        fix = f"remove what stands in place of {record_path}, then {RERUN_FIX}"
+        return None, [Refusal(f"record: {record_path} cannot be read ({err})", fix)]
     try:
         record = json.loads(text)
     except ValueError:
         record = None
     if not isinstance(record, dict):
-        return None, [f"record: {record_path} is not a JSON object"]
+        return None, [Refusal(f"record: {record_path} is not a JSON object", RERUN_FIX)]
     cases, passed = record.get("cases"), record.get("passed")
     print(
         f"record:     {_show(record.get('runtime'))} {_show(record.get('runtimeVersion'))}, "
@@ -141,28 +191,37 @@ def _record_refusals(record_path: Path) -> tuple[dict[str, Any] | None, list[str
     reasons = []
     if record.get("runtime") != RUNTIME:
         reasons.append(
-            f"runtime: the record is for {_show(record.get('runtime'))}, "
-            f'this gate publishes "{RUNTIME}"'
+            Refusal(
+                f"runtime: the record is for {_show(record.get('runtime'))}, "
+                f'this gate publishes "{RUNTIME}"',
+                RERUN_FIX,
+            )
         )
     if not _is_count(cases) or not _is_count(passed):
         reasons.append(
-            "cases: the record needs integer cases and passed, "
-            f"got {_show(cases)} and {_show(passed)}"
+            Refusal(
+                "cases: the record needs integer cases and passed, "
+                f"got {_show(cases)} and {_show(passed)}",
+                RERUN_FIX,
+            )
         )
     elif cases == 0:
-        reasons.append("cases: the record ran no cases")
+        reasons.append(Refusal("cases: the record ran no cases", RERUN_FIX))
     elif passed != cases:
-        reasons.append(f"passed: {passed} of {cases} cases passed")
+        reasons.append(Refusal(f"passed: {passed} of {cases} cases passed", RERUN_FIX))
     return record, reasons
 
 
-def refusals(record_path: Path, dist_dir: Path) -> list[str]:
-    """Every reason the record cannot stand for the artifacts in ``dist_dir``."""
+def refusals(record_path: Path, dist_dir: Path) -> list[Refusal]:
+    """Every reason the record cannot stand for the artifacts in ``dist_dir``, each with its fix."""
     record, reasons = _record_refusals(record_path)
     artifacts = sorted(p for p in dist_dir.iterdir() if p.is_file()) if dist_dir.is_dir() else []
     if not artifacts:
         reasons.append(
-            f"artifacts: {dist_dir} holds no built artifact, run `python -m build` first"
+            Refusal(
+                f"artifacts: {dist_dir} holds no built artifact, run `python -m build` first",
+                _build_fix(dist_dir),
+            )
         )
     for artifact in artifacts:
         reasons.extend(_artifact_refusals(artifact, record))
@@ -179,21 +238,18 @@ def main(argv: list[str] | None = None) -> int:
         reasons = refusals(args.record, args.dist)
     except Exception as err:
         # Anything unforeseen is a refusal too: the gate never passes on an error.
-        reasons = [f"gate: {err}"]
+        reasons = [Refusal(f"gate: {err}", BOTH_FIX)]
 
     if not reasons:
         print("release gate: passed")
         return 0
     # Keep the log in order: what was read first, then why it was refused.
     sys.stdout.flush()
-    for reason in reasons:
-        print(f"REFUSED {reason}", file=sys.stderr)
+    for refusal in reasons:
+        print(f"REFUSED {refusal.reason}", file=sys.stderr)
     print("release gate: refused, do not publish", file=sys.stderr)
-    print(
-        "fix: run `python bench/conformance.py` and `python -m build` on the commit being "
-        "released, resolve every FAIL the first prints, then run this gate again",
-        file=sys.stderr,
-    )
+    for fix in dict.fromkeys(refusal.fix for refusal in reasons):
+        print(f"fix: {fix}", file=sys.stderr)
     return 1
 
 

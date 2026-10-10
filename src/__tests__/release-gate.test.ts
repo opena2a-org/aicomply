@@ -199,6 +199,99 @@ describe('npm release gate', () => {
     }
   });
 
+  const ROOT_FIX = 'fix: pass --root the package directory, the one that holds package.json and pack/patterns.json';
+  const RERUN_FIX =
+    'fix: run `npm run conformance` on the commit being released, resolve every FAIL it prints, then run this gate again';
+
+  it('names a --root that is a file instead of printing the system error', () => {
+    const file = join(root, 'package.json');
+    const { status, output } = gate(['--root', file]);
+    expect(status).toBe(1);
+    expect(refusedAndFixes(output)).toEqual({
+      refused: [
+        `REFUSED package: package.json cannot be read, ${file} is not a directory`,
+        `REFUSED pack: pack/patterns.json cannot be read, ${file} is not a directory`,
+        `REFUSED record: conformance/typescript.json cannot be read, ${file} is not a directory`,
+      ],
+      fixes: [ROOT_FIX],
+    });
+    expect(output).not.toMatch(/ENOTDIR|REFUSED gate:/);
+    expect(output).not.toContain('release gate: passed');
+  });
+
+  it('names a package.json and a pack that are directories, not missing files', () => {
+    writeRecord(record);
+    for (const file of [join(root, 'package.json'), join(root, 'pack', 'patterns.json')]) {
+      rmSync(file);
+      mkdirSync(file);
+    }
+    const { status, output } = gate();
+    expect(status).toBe(1);
+    expect(refusedAndFixes(output)).toEqual({
+      refused: [
+        `REFUSED package: package.json in ${root} is a directory, not a file`,
+        `REFUSED pack: pack/patterns.json in ${root} is a directory, not a file`,
+      ],
+      fixes: [ROOT_FIX],
+    });
+    expect(output).not.toMatch(/EISDIR|REFUSED gate:|does not exist/);
+  });
+
+  it('names the file that stands where the pack directory should be', () => {
+    writeRecord(record);
+    rmSync(join(root, 'pack'), { recursive: true });
+    writeFileSync(join(root, 'pack'), '');
+    const { status, output } = gate();
+    expect(status).toBe(1);
+    expect(refusedAndFixes(output)).toEqual({
+      refused: [`REFUSED pack: pack/patterns.json cannot be read, ${join(root, 'pack')} is not a directory`],
+      fixes: [
+        'fix: restore pack/patterns.json from the commit being released: the package ships it and the record is compared against its bytes',
+      ],
+    });
+    expect(output).not.toMatch(/ENOTDIR|REFUSED gate:/);
+  });
+
+  it('names a record that is a directory, not a missing one', () => {
+    mkdirSync(join(root, 'conformance', 'typescript.json'));
+    const { status, output } = gate();
+    expect(status).toBe(1);
+    expect(refusedAndFixes(output)).toEqual({
+      refused: ['REFUSED record: conformance/typescript.json is a directory, not a file'],
+      fixes: [`fix: remove what stands in place of conformance/typescript.json, then ${RERUN_FIX.slice('fix: '.length)}`],
+    });
+    expect(output).not.toMatch(/EISDIR|does not exist/);
+  });
+
+  it.each([
+    ['no version', { name: 'x' }, 'missing'],
+    ['a version that is not a string', { name: 'x', version: 2 }, '2'],
+    ['an empty version', { name: 'x', version: '' }, '""'],
+  ])('refuses a package.json with %s, even when the record names the same', (_label, pkg, shown) => {
+    // A record without runtimeVersion would match a package without a version
+    // if the gate compared the two, so the missing version refuses on its own.
+    writeFileSync(join(root, 'package.json'), JSON.stringify(pkg));
+    writeRecord({ ...record, runtimeVersion: (pkg as { version?: unknown }).version });
+    const { status, output } = gate();
+    expect(status).toBe(1);
+    expect(refusedAndFixes(output)).toEqual({
+      refused: [`REFUSED package: package.json carries no version string, its version is ${shown}`],
+      fixes: ['fix: restore package.json from the commit being released: the record is compared against its "version" string'],
+    });
+    expect(output).not.toContain('release gate: passed');
+  });
+
+  it('refuses on an error it did not foresee, here a package.json that is not JSON', () => {
+    // The catch-all: whatever the checks throw, the gate refuses and never passes.
+    writeRecord(record);
+    writeFileSync(join(root, 'package.json'), '{');
+    const { status, output } = gate();
+    expect(status).toBe(1);
+    expect(refusedAndFixes(output).refused).toEqual([expect.stringMatching(/^REFUSED gate: \S/)]);
+    expect(output).toContain('release gate: refused, do not publish');
+    expect(output).not.toContain('release gate: passed');
+  });
+
   it('exits 2 on an argument it does not know', () => {
     const { status, output } = gate(['--skip']);
     expect(status).toBe(2);
@@ -301,28 +394,67 @@ describe('npm publish lifecycle', () => {
     expect(pkg.scripts.conformance).toBe('npm run build && node scripts/conformance.mjs');
   });
 
-  /** The workflow's uncommented lines, with `\`-continued shell lines joined. */
+  /**
+   * The workflow's uncommented lines as the shell gets them: `\`-continued
+   * lines joined, and the lines YAML folds into one joined too, whether a `>`
+   * block scalar or a plain scalar carried onto deeper-indented lines. A blank
+   * line ends a folded paragraph, and a `|` block keeps its lines.
+   */
   function workflowLines(workflow: string): string[] {
-    return workflow
-      .replace(/\\\r?\n\s*/g, ' ')
-      .split('\n')
-      .filter((l) => !/^\s*#/.test(l));
+    const lines: string[] = [];
+    // Column of the key whose scalar is being folded, when one is.
+    let foldedUnder: number | null = null;
+    for (const line of workflow.replace(/\\\r?\n\s*/g, ' ').split(/\r?\n/)) {
+      if (/^\s*#/.test(line)) continue;
+      const indent = line.search(/\S/);
+      if (foldedUnder !== null && (indent === -1 || indent > foldedUnder)) {
+        if (indent === -1) lines.push('');
+        else lines[lines.length - 1] += ` ${line.trim()}`;
+        continue;
+      }
+      const key = /^(\s*(?:-\s+)?)[\w-]+:\s+(\S.*)$/.exec(line);
+      foldedUnder = key !== null && !key[2].startsWith('|') ? key[1].length : null;
+      lines.push(key !== null && /^>[+-]?\d?\s*$/.test(key[2]) ? line.slice(0, -key[2].length) : line);
+    }
+    return lines;
   }
+
+  /** The `npm publish` flags that take the next word as their value. */
+  const VALUE_FLAGS = ['--access', '--tag', '--registry', '--otp'];
+
+  /**
+   * What each `npm publish` on `line` is handed to publish. npm skips
+   * prepublishOnly for a tarball and publishes another folder under that
+   * folder's own scripts, and a variable or a command substitution can expand
+   * to either, so the workflow's publish must name nothing.
+   */
+  function publishTargets(line: string): string[] {
+    const targets: string[] = [];
+    for (const [, rest] of line.matchAll(/\bnpm publish\b([^;&|#]*)/g)) {
+      const words = rest.split(/\s+/).filter((w) => w !== '');
+      for (let i = 0; i < words.length; i++) {
+        if (!words[i].startsWith('-')) targets.push(words[i]);
+        else if (VALUE_FLAGS.includes(words[i])) i++;
+      }
+    }
+    return targets;
+  }
+
+  /** `--ignore-scripts` as a flag of an npm command other than publish, config and set: it stops at that command. */
+  const FLAG_ON_ANOTHER_COMMAND = /(\bnpm\s+(?!publish\b|config\b|c\b|set\b)[a-z][\w-]*[^;&|]*?)\s--ignore-scripts\b/g;
 
   /**
    * What would switch prepublishOnly off for the workflow's publish. npm skips
-   * it under --ignore-scripts and when it is handed a tarball, so a publish
-   * line must carry neither; an `npm_config_ignore_scripts` environment setting
-   * or `npm config set ignore-scripts` reaches every later npm command, and so
-   * does an `ignore-scripts` line in the repository .npmrc. The flag on another
-   * command, such as `npm ci --ignore-scripts`, does not reach the publish.
+   * it when the publish is handed something to publish (see `publishTargets`)
+   * and under ignore-scripts, which reaches the publish as a flag on it, as an
+   * `npm_config_ignore_scripts` environment setting, through `npm config set`
+   * or `npm set`, and as a line in an .npmrc, the repository's or one a step
+   * writes. So every line that mentions it is refused, except where it is the
+   * flag on another command, such as `npm ci --ignore-scripts`.
    */
   function scriptsSwitchedOff(workflow: string, npmrc: string | null): string[] {
     const found = workflowLines(workflow).filter(
-      (l) =>
-        (/\bnpm publish\b/.test(l) && /ignore[-_]scripts|\.tgz\b/i.test(l)) ||
-        /\bnpm_config_ignore_scripts\b/i.test(l) ||
-        /\bnpm config set ignore[-_]scripts\b/i.test(l),
+      (l) => publishTargets(l).length > 0 || /ignore[-_]scripts/i.test(l.replace(FLAG_ON_ANOTHER_COMMAND, '$1')),
     );
     const rc = (npmrc ?? '')
       .split('\n')
@@ -335,22 +467,63 @@ describe('npm publish lifecycle', () => {
 
   it.each([
     ['a hardened install step', ['      - run: npm ci --ignore-scripts', PUBLISH], null],
+    ['a hardened install chained before it', ['      - run: npm ci --ignore-scripts && npm publish --provenance --access public'], null],
     ['a comment that mentions the flag', ['      # never npm publish --ignore-scripts', PUBLISH], null],
     ['an .npmrc that leaves scripts on', [PUBLISH], 'ignore-scripts=false\n; ignore-scripts=true\n'],
+    ['flags that take a value', ['      - run: npm publish --provenance --access public --tag next'], null],
+    ['its flags folded onto the next line', ['        run: >', '          npm publish --provenance', '          --access public'], null],
   ])('lets a publish through with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).toEqual([]);
   });
 
   it.each([
     ['--ignore-scripts on the publish', ['      - run: npm publish --ignore-scripts'], null],
+    ['the flag on a publish chained after an install', ['      - run: npm ci && npm publish --ignore-scripts'], null],
     ['a tarball handed to the publish', ['      - run: npm publish ./aicomply-2.2.3.tgz'], null],
+    ['a tarball named by a command substitution', ['      - run: npm publish "$(npm pack | tail -1)"'], null],
+    ['a tarball named by a variable', ['      - run: npm publish "$TARBALL"'], null],
+    ['a tarball after a flag that takes a value', ['      - run: npm publish --access public "$TARBALL"'], null],
     ['the flag on a continued publish line', ['        run: |', '          npm publish --access public \\', '            --ignore-scripts'], null],
+    ['the flag on the next line of a folded scalar', ['        run: >', '          npm publish --provenance --access public', '          --ignore-scripts'], null],
+    ['a tarball on the next line of a folded scalar', ['      - run: >-', '          npm publish --provenance --access public', '          "$TARBALL"'], null],
+    ['a tarball on the next line of a plain scalar', ['      - run: npm publish --provenance --access public', '          "$TARBALL"'], null],
     ['an environment setting', ['    env:', "      NPM_CONFIG_IGNORE_SCRIPTS: 'true'", PUBLISH], null],
     ['an environment file line', ['      - run: echo "npm_config_ignore_scripts=true" >> "$GITHUB_ENV"', PUBLISH], null],
     ['npm config set', ['      - run: npm config set ignore-scripts true', PUBLISH], null],
+    ['npm config set with a location flag', ['      - run: npm config set --global ignore-scripts true', PUBLISH], null],
+    ['npm set', ['      - run: npm set ignore-scripts true', PUBLISH], null],
+    ['a line a step appends to .npmrc', ['      - run: echo "ignore-scripts=true" >> .npmrc', PUBLISH], null],
     ['an .npmrc line', [PUBLISH], 'registry=https://registry.npmjs.org/\nignore-scripts=true\n'],
   ])('refuses a publish with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
+  });
+
+  it('reads the lines YAML folds as the one line the shell gets', () => {
+    const workflow = [
+      '      - run: >',
+      '          npm publish',
+      '          # a comment is not a line',
+      '          --provenance',
+      '',
+      '          echo done',
+      '      - run: |',
+      '          npm ci',
+      '          npm test',
+      '      - run: npm pack',
+      '          --dry-run',
+      '        env:',
+      '          CI: true',
+    ];
+    expect(workflowLines(workflow.join('\n')).map((l) => l.trim().replace(/\s+/g, ' '))).toEqual([
+      '- run: npm publish --provenance',
+      'echo done',
+      '- run: |',
+      'npm ci',
+      'npm test',
+      '- run: npm pack --dry-run',
+      'env:',
+      'CI: true',
+    ]);
   });
 
   it('is not switched off where the release workflow publishes', () => {

@@ -102,6 +102,9 @@ export function loadConformanceCases(dir: string): ConformanceCase[] {
       if (typeof c.id !== 'string' || typeof c.text !== 'string' || c.expected === undefined) {
         throw new Error(`${file}:${index + 1}: a case needs id, text and expected`);
       }
+      if (c.origin !== undefined && typeof c.origin !== 'string') {
+        throw new Error(`${file}:${index + 1}: origin must be a string`);
+      }
       if (ids.has(c.id)) throw new Error(`${file}:${index + 1}: duplicate case id ${c.id}`);
       ids.add(c.id);
       cases.push(c);
