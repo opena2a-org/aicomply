@@ -4,8 +4,14 @@
  * without that option. The plain CommonJS setup files need no transform, so
  * they must stay outside the ts-jest patterns, while the ESM-only packages that
  * `transformIgnorePatterns` lets through must still be routed to ts-jest.
+ * The table checks read only the `transform` map in jest.config.js, and a
+ * preset can add patterns of its own, so the warning is also checked where it
+ * shows up: in the output of a real run on a cold transform cache.
  */
 
+import { spawnSync } from 'child_process';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 
 const ROOT = join(__dirname, '..', '..');
@@ -18,7 +24,6 @@ interface JestConfig {
   transformIgnorePatterns: string[];
 }
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const config: JestConfig = require(join(ROOT, 'jest.config.js'));
 
 function resolveRootDir(p: string): string {
@@ -71,4 +76,31 @@ describe('jest.config.js', () => {
     expect(transformerFor(join(ROOT, 'src', 'index.ts'))).toBe('ts-jest');
     expect(transformerFor(join(ROOT, 'src', '__tests__', 'readme.test.ts'))).toBe('ts-jest');
   });
+});
+
+describe('jest runner output', () => {
+  it('prints no ts-jest allowJs warning on a cold cache', () => {
+    const cacheDirectory = mkdtempSync(join(tmpdir(), 'aicomply-jest-cache-'));
+    try {
+      const env = { ...process.env };
+      delete env.JEST_WORKER_ID; // the child is a runner of its own, not a worker of this one
+      delete env.TS_JEST_LOG; // keeps ts-jest warnings on stderr
+      const run = spawnSync(
+        process.execPath,
+        [
+          join(ROOT, 'node_modules', 'jest', 'bin', 'jest.js'),
+          'src/__tests__/readme.test.ts',
+          '--cacheDirectory',
+          cacheDirectory,
+        ],
+        { cwd: ROOT, env, encoding: 'utf8' },
+      );
+      const output = `${run.stdout}\n${run.stderr}`;
+      if (run.status !== 0) throw new Error(`jest exited with ${run.status}:\n${output}`);
+      const warnings = output.split('\n').filter((line) => line.includes('ts-jest[ts-compiler] (WARN)'));
+      expect(warnings).toEqual([]);
+    } finally {
+      rmSync(cacheDirectory, { recursive: true, force: true });
+    }
+  }, 180_000);
 });
