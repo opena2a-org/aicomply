@@ -70,11 +70,12 @@ describe('README', () => {
   });
 
   it('ships LICENSE as the canonical Apache-2.0 text apart from the copyright line', () => {
-    // The license badge claims Apache-2.0, so LICENSE must be the published text
-    // byte for byte. A substring check misses a re-wrapped paragraph or a dropped
-    // blank line, so the whole file is hashed once the filled-in appendix
-    // copyright line is put back to its template form. On a mismatch, see what
-    // changed with: curl -s https://www.apache.org/licenses/LICENSE-2.0.txt | diff - LICENSE
+    // The license badge claims Apache-2.0, so LICENSE must be the published text,
+    // after CRLF normalization and with the copyright line restored to its
+    // template form. A substring check misses a re-wrapped paragraph or a dropped
+    // blank line, so the whole file is hashed after those two steps. On a
+    // mismatch, see what changed with:
+    // curl -s https://www.apache.org/licenses/LICENSE-2.0.txt | diff - LICENSE
     const license = readFileSync(join(ROOT, 'LICENSE'), 'utf8').replace(/\r\n/g, '\n');
     expect((license.match(/\n/g) ?? []).length).toBe(APACHE_2_0_LINES);
     const template = license.replace(/^   Copyright .*$/m, APACHE_2_0_COPYRIGHT_TEMPLATE);
