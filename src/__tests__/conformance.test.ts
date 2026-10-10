@@ -60,6 +60,19 @@ function seedDrift(root: string): string[] {
   return drift;
 }
 
+/**
+ * Every `*.jsonl` case file in `casesDir` named like a credential store: a leaf
+ * of `credential`, `secret` or `password` plus extensions, which secret-file
+ * name rules refuse on sight whatever the file holds. Checked over every case
+ * file, not only the corpus-seeded ones `seedDrift` reads.
+ */
+function storeNamedCaseFiles(casesDir: string): string[] {
+  return readdirSync(casesDir)
+    .filter((f) => f.endsWith('.jsonl'))
+    .filter((f) => /^\.?(credentials?|secrets?|passwords?)(\.[a-z0-9]+)*$/i.test(f))
+    .sort();
+}
+
 describe('pattern pack conformance suite', () => {
   // Per-case exact equality: every stored outcome, not an aggregate rate.
   const record = runConformance(CASES_DIR);
@@ -111,6 +124,31 @@ describe('pattern pack conformance suite', () => {
       .map((f) => f.replace(/\.jsonl$/, ''));
     const caseFiles = readdirSync(CASES_DIR);
     expect(corpusClasses.filter((k) => !caseFiles.includes(`${k}-cases.jsonl`))).toEqual([]);
+  });
+
+  it('names no case file like a credential store', () => {
+    expect(readdirSync(CASES_DIR)).toContain('credential-cases.jsonl');
+    expect(storeNamedCaseFiles(CASES_DIR)).toEqual([]);
+  });
+
+  it('reports a store-named case file whose cases are not corpus-seeded', () => {
+    // seedDrift skips cases without a bench/corpus origin, so a regression
+    // case moved into `secrets.jsonl` passes it; the name check still fails.
+    const root = mkdtempSync(join(tmpdir(), 'aicomply-conformance-'));
+    try {
+      const casesDir = join(root, 'pack', 'conformance');
+      mkdirSync(casesDir, { recursive: true });
+      const expected = { verdict: 'CLEAN', violations: [] };
+      const names = ['secrets.jsonl', '.Passwords.jsonl', 'credential-cases.jsonl', 'regressions.jsonl'];
+      names.forEach((name, i) => {
+        const c = { id: `regression-${i}`, origin: 'pull request #19', text: 'x', expected };
+        writeFileSync(join(casesDir, name), `${JSON.stringify(c)}\n`);
+      });
+      expect(seedDrift(root)).toEqual([]);
+      expect(storeNamedCaseFiles(casesDir)).toEqual(['.Passwords.jsonl', 'secrets.jsonl']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('reports a seeded case filed under its corpus name or holding stale text', () => {
