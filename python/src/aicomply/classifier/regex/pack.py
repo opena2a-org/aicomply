@@ -10,11 +10,15 @@ The loader fails closed: a missing, malformed or non-portable pack raises at
 import time rather than leaving the classifier running with no patterns, which
 would report every input as CLEAN.
 
-Every regex compiles with ``re.ASCII`` so ``\\d`` / ``\\b`` / ``\\s`` and
+Every regex compiles with ``re.ASCII`` so ``\\d`` / ``\\b`` / ``\\w`` and
 IGNORECASE case-folding match JavaScript's ASCII semantics (JS ``\\d`` is
 ``[0-9]``; Python's default ``\\d`` is Unicode-aware and would diverge on e.g.
-Arabic-Indic digits). NFKC normalization runs *before* the regex layer, so
-legitimate fullwidth digits are already folded to ASCII.
+Arabic-Indic digits). ``\\s`` is the known gap in the other direction:
+JavaScript's ``\\s`` also matches Unicode separators such as U+2028 and U+1680,
+which ``re.ASCII`` does not, so a value set off from its keyword by one of
+those separators is reported by the TypeScript runtime and not by this one.
+NFKC normalization runs *before* the regex layer, so legitimate fullwidth
+digits are already folded to ASCII; it leaves those separators unchanged.
 """
 
 from __future__ import annotations
@@ -75,9 +79,12 @@ class PackError(ValueError):
 def non_portable_construct(source: str) -> str | None:
     """Return the first construct outside the portable regex subset, or None.
 
-    The subset is what JavaScript, Python ``re`` and RE2 (Go) all compile with
-    the same meaning: no lookaround, no backreferences, no named groups, and no
-    inline modifier groups (case-insensitivity is the entry's ``flags`` field).
+    The subset is syntax that JavaScript, Python ``re`` and RE2 (Go) all
+    accept: no lookaround, no backreferences, no named groups, and no inline
+    modifier groups (case-insensitivity is the entry's ``flags`` field).
+    Accepting the syntax does not make the engines agree on every input (see
+    the module docstring on ``\\s``); the conformance suite is what asserts
+    agreement, case by case.
     """
     in_class = False
     i = 0
