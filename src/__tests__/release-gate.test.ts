@@ -580,6 +580,7 @@ describe('npm publish lifecycle', () => {
     ['the flag on a publish after an install and ||', ['      - run: npm ci || npm publish --ignore-scripts'], null],
     ['the flag on a publish an install pipes into', ['      - run: npm ci | npm publish --ignore-scripts'], null],
     ['the flag on a publish after a hardened install', ['      - run: npm ci --ignore-scripts $(npm publish --ignore-scripts)'], null],
+    ['the flag on a publish an install-led command runs on', ['      - run: npm ci --ignore-scripts npm publish --ignore-scripts'], null],
     ['an install wrapping a publish', ['      - run: npm ci $(npm publish --ignore-scripts)'], null],
     ['an install wrapping a publish in backticks', ['      - run: npm ci `npm publish --ignore-scripts`'], null],
     ['the flag on an npm run that names an install', ['      - run: npm run release npm ci --ignore-scripts'], null],
