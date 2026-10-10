@@ -9,6 +9,7 @@
 import { spawnSync } from 'node:child_process';
 import {
   appendFileSync,
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -202,6 +203,11 @@ describe('npm release gate', () => {
   const ROOT_FIX = 'fix: pass --root the package directory, the one that holds package.json and pack/patterns.json';
   const RERUN_FIX =
     'fix: run `npm run conformance` on the commit being released, resolve every FAIL it prints, then run this gate again';
+  const PACKAGE_FIX =
+    'fix: restore package.json from the commit being released: the record is compared against its "version" string';
+  const PACK_FIX =
+    'fix: restore pack/patterns.json from the commit being released: the package ships it and the record is compared against its bytes';
+  const RECORD_FIX = `fix: remove what stands in place of conformance/typescript.json, then ${RERUN_FIX.slice('fix: '.length)}`;
 
   it('names a --root that is a file instead of printing the system error', () => {
     const file = join(root, 'package.json');
@@ -219,7 +225,8 @@ describe('npm release gate', () => {
     expect(output).not.toContain('release gate: passed');
   });
 
-  it('names a package.json and a pack that are directories, not missing files', () => {
+  it('names a package.json and a pack that are directories, not missing files, and fixes each in place', () => {
+    // The root holds a package.json entry, so --root is not the mistake.
     writeRecord(record);
     for (const file of [join(root, 'package.json'), join(root, 'pack', 'patterns.json')]) {
       rmSync(file);
@@ -232,10 +239,34 @@ describe('npm release gate', () => {
         `REFUSED package: package.json in ${root} is a directory, not a file`,
         `REFUSED pack: pack/patterns.json in ${root} is a directory, not a file`,
       ],
-      fixes: [ROOT_FIX],
+      fixes: [PACKAGE_FIX, PACK_FIX],
     });
     expect(output).not.toMatch(/EISDIR|REFUSED gate:|does not exist/);
+    expect(output).not.toContain(ROOT_FIX);
   });
+
+  // Permission bits do not stop the superuser from reading, and Windows has none to clear.
+  const permissionsApply = process.platform !== 'win32' && process.getuid?.() !== 0;
+  (permissionsApply ? it : it.skip)(
+    'fixes a package.json it has no permission to read in place, not with --root',
+    () => {
+      mkdirSync(join(root, 'conformance', 'typescript.json'));
+      rmSync(join(root, 'pack', 'patterns.json'));
+      chmodSync(join(root, 'package.json'), 0o000);
+      const { status, output } = gate();
+      expect(status).toBe(1);
+      expect(refusedAndFixes(output)).toEqual({
+        refused: [
+          expect.stringMatching(/^REFUSED package: package\.json cannot be read \(EACCES: /),
+          `REFUSED pack: pack/patterns.json does not exist in ${root}`,
+          'REFUSED record: conformance/typescript.json is a directory, not a file',
+        ],
+        fixes: [PACKAGE_FIX, PACK_FIX, RECORD_FIX],
+      });
+      expect(output).not.toContain(ROOT_FIX);
+      expect(output).not.toContain('release gate: passed');
+    },
+  );
 
   it('names the file that stands where the pack directory should be', () => {
     writeRecord(record);
@@ -258,7 +289,7 @@ describe('npm release gate', () => {
     expect(status).toBe(1);
     expect(refusedAndFixes(output)).toEqual({
       refused: ['REFUSED record: conformance/typescript.json is a directory, not a file'],
-      fixes: [`fix: remove what stands in place of conformance/typescript.json, then ${RERUN_FIX.slice('fix: '.length)}`],
+      fixes: [RECORD_FIX],
     });
     expect(output).not.toMatch(/EISDIR|does not exist/);
   });

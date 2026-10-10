@@ -79,24 +79,25 @@ function nonDirectory(file) {
 }
 
 /**
- * The bytes of `file` under `root`, or in `problem` why there are none: the
- * path and the condition for a file that is missing, is a directory or sits
- * under a file, and the system's own message for anything else. `where` says
- * where the file was looked for.
+ * The bytes of `file` under `root`, or in `problem` why there are none and in
+ * `code` the system's error code: the path and the condition for a file that
+ * is missing, is a directory or sits under a file, and the system's own
+ * message for anything else. `where` says where the file was looked for.
  */
 function read(file, where = '') {
   try {
     return { bytes: readFileSync(resolve(root, file)) };
   } catch (err) {
-    switch (err?.code) {
+    const code = err?.code;
+    switch (code) {
       case 'ENOENT':
-        return { missing: true, problem: `${file} does not exist${where}` };
+        return { code, problem: `${file} does not exist${where}` };
       case 'EISDIR':
-        return { problem: `${file}${where} is a directory, not a file` };
+        return { code, problem: `${file}${where} is a directory, not a file` };
       case 'ENOTDIR':
-        return { problem: `${file} cannot be read, ${nonDirectory(file)} is not a directory` };
+        return { code, problem: `${file} cannot be read, ${nonDirectory(file)} is not a directory` };
       default:
-        return { problem: `${file} cannot be read (${err instanceof Error ? err.message : String(err)})` };
+        return { code, problem: `${file} cannot be read (${err instanceof Error ? err.message : String(err)})` };
     }
   }
 }
@@ -108,10 +109,14 @@ function refusals() {
 
   const pkg = read('package.json', ` in ${root}`);
   const pack = read(PACK, ` in ${root}`);
+  // A package.json that does not exist, or a root that is not a directory,
+  // makes the root itself the likely mistake. A package.json that is there and
+  // cannot be read, a directory or one without permission, is the package's.
+  const wrongRoot = pkg.code === 'ENOENT' || pkg.code === 'ENOTDIR';
   let version;
   let packSha256;
   if (pkg.bytes === undefined) {
-    refuse(`package: ${pkg.problem}`, ROOT_FIX);
+    refuse(`package: ${pkg.problem}`, wrongRoot ? ROOT_FIX : PACKAGE_FIX);
   } else {
     const named = JSON.parse(pkg.bytes.toString('utf8'))?.version;
     if (typeof named === 'string' && named !== '') {
@@ -122,8 +127,7 @@ function refusals() {
     }
   }
   if (pack.bytes === undefined) {
-    // Without a package.json the root itself is the likely mistake.
-    refuse(`pack: ${pack.problem}`, pkg.bytes === undefined ? ROOT_FIX : PACK_FIX);
+    refuse(`pack: ${pack.problem}`, wrongRoot ? ROOT_FIX : PACK_FIX);
   } else {
     packSha256 = createHash('sha256').update(pack.bytes).digest('hex');
     console.log(`pack:       sha256 ${packSha256} (${PACK})`);
@@ -132,8 +136,7 @@ function refusals() {
   const stored = read(RECORD);
   if (stored.bytes === undefined) {
     let fix = RERUN_FIX;
-    // As for the pack: without a package.json the root itself is the likely mistake.
-    if (!stored.missing) fix = pkg.bytes === undefined ? ROOT_FIX : RECORD_FIX;
+    if (stored.code !== 'ENOENT') fix = wrongRoot ? ROOT_FIX : RECORD_FIX;
     refuse(`record: ${stored.problem}`, fix);
     return reasons;
   }
