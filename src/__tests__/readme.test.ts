@@ -1,10 +1,13 @@
 /**
  * README contract tests. The README is the first thing a visitor runs, so the
  * top of it is pinned: the OpenA2A family header, the npm / license / tests
- * badges, the first command plus its output within the first 30 lines, and a
- * sample output that is what the CLI actually prints for the documented input.
+ * badges, the try-it section ahead of every other section with its scan output
+ * fence opening by line 28, and a sample output that is what the CLI actually
+ * prints for the documented input. LICENSE, which the license badge vouches
+ * for, is pinned to the canonical Apache-2.0 text.
  */
 
+import { createHash } from 'crypto';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { comply } from '../index';
@@ -13,6 +16,11 @@ import { renderHuman } from '../cli';
 const ROOT = join(__dirname, '..', '..');
 const README = readFileSync(join(ROOT, 'README.md'), 'utf8');
 const LINES = README.split('\n');
+
+/** SHA-256 and line count of https://www.apache.org/licenses/LICENSE-2.0.txt. */
+const APACHE_2_0_SHA256 = 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30';
+const APACHE_2_0_LINES = 202;
+const APACHE_2_0_COPYRIGHT_TEMPLATE = '   Copyright [yyyy] [name of copyright owner]';
 
 /** 1-based line number of the first line matching `re`, or -1. */
 function lineOf(re: RegExp, from = 1): number {
@@ -52,18 +60,6 @@ describe('README', () => {
       '[![npm version](https://img.shields.io/npm/v/@opena2a/aicomply.svg)](https://www.npmjs.com/package/@opena2a/aicomply)',
     );
     expect(top).toContain('[![License: Apache-2.0]');
-    // The badge claims Apache-2.0, so LICENSE must carry the canonical text, not a
-    // paraphrase: the clause 6 and clause 9 wording checked here is what a
-    // rewritten copy of the license altered before.
-    const license = readFileSync(join(ROOT, 'LICENSE'), 'utf8');
-    expect(license).toContain('Apache License');
-    expect(license).toContain('Version 2.0, January 2004');
-    expect(license).toContain(
-      'except as required for reasonable and customary use in describing the\n' +
-        '      origin of the Work and reproducing the content of the NOTICE file.',
-    );
-    expect(license).toContain('9. Accepting Warranty or Additional Liability.');
-    expect(license).toContain('of your accepting any such warranty or additional liability.');
 
     // The tests badge must point at a workflow that exists and runs the test suite.
     const m = /\[!\[Tests\]\(https:\/\/github\.com\/opena2a-org\/aicomply\/actions\/workflows\/([\w.-]+\.yml)\/badge\.svg\)\]/.exec(top);
@@ -71,6 +67,18 @@ describe('README', () => {
     const workflow = join(ROOT, '.github', 'workflows', m![1]);
     expect(existsSync(workflow)).toBe(true);
     expect(readFileSync(workflow, 'utf8')).toMatch(/run: npm test\b/);
+  });
+
+  it('ships LICENSE as the canonical Apache-2.0 text apart from the copyright line', () => {
+    // The license badge claims Apache-2.0, so LICENSE must be the published text
+    // byte for byte. A substring check misses a re-wrapped paragraph or a dropped
+    // blank line, so the whole file is hashed once the filled-in appendix
+    // copyright line is put back to its template form. On a mismatch, see what
+    // changed with: curl -s https://www.apache.org/licenses/LICENSE-2.0.txt | diff - LICENSE
+    const license = readFileSync(join(ROOT, 'LICENSE'), 'utf8').replace(/\r\n/g, '\n');
+    expect((license.match(/\n/g) ?? []).length).toBe(APACHE_2_0_LINES);
+    const template = license.replace(/^   Copyright .*$/m, APACHE_2_0_COPYRIGHT_TEMPLATE);
+    expect(createHash('sha256').update(template).digest('hex')).toBe(APACHE_2_0_SHA256);
   });
 
   it('puts the try-it command before any other section', () => {
