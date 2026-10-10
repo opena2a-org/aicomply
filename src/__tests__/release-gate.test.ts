@@ -436,9 +436,12 @@ describe('npm publish lifecycle', () => {
    * but it counts as a line for the block's indentation and for the line
    * after it. A tag or an anchor may stand before a `|` or `>` header.
    *
-   * The shell joins a `\`-continued line onto the word the `\` ends, so where
-   * the `\` follows a word it is kept in the joined line, followed by a space,
-   * for `withoutInstallFlags` to see; after a space it is joined with a space.
+   * The shell joins a `\`-continued line onto the word the `\` ends only when
+   * the next line keeps no indentation; in a `|` block, and on a more-indented
+   * line of a `>` block, YAML keeps the indentation and the shell gets two
+   * words. Where the `\` follows a word it is kept in the joined line, followed
+   * by a space, for `withoutInstallFlags` and `publishTargets` to see; after a
+   * space it is joined with a space.
    */
   function workflowLines(workflow: string): string[] {
     const lines: string[] = [];
@@ -494,7 +497,7 @@ describe('npm publish lifecycle', () => {
    */
   function publishTargets(line: string): string[] {
     const targets: string[] = [];
-    for (const [, rest] of line.matchAll(/\bnpm publish\b([^;&|#]*)/g)) {
+    for (const [, rest] of line.matchAll(/\bnpm\\?\s+publish\b([^;&|#]*)/g)) {
       const words = rest.split(/\s+/).filter((w) => w !== '');
       for (let i = 0; i < words.length; i++) {
         if (!words[i].startsWith('-')) targets.push(words[i]);
@@ -695,6 +698,7 @@ describe('npm publish lifecycle', () => {
     ['the flag on an npm run after an install that only names a clobbered file', ['      - run: npm run release >| npm ci --ignore-scripts'], null],
     ['the flag on an install name a continued line completes', ['        run: |', '          npm i\\', '          t --ignore-scripts'], null],
     ['a tarball after a new key ends a more-indented line', ['      - run: >', '          echo a', '            echo b', '      - run: npm publish --provenance --access public', '          "$TARBALL"'], null],
+    ['a tarball after npm and a continued publish on a more-indented line', ['      - run: |', '          npm\\', '            publish ./aicomply-2.2.3.tgz'], null],
   ])('refuses a publish with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
   });
