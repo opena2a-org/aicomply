@@ -52,7 +52,18 @@ describe('README', () => {
       '[![npm version](https://img.shields.io/npm/v/@opena2a/aicomply.svg)](https://www.npmjs.com/package/@opena2a/aicomply)',
     );
     expect(top).toContain('[![License: Apache-2.0]');
-    expect(readFileSync(join(ROOT, 'LICENSE'), 'utf8')).toContain('Apache License');
+    // The badge claims Apache-2.0, so LICENSE must carry the canonical text, not a
+    // paraphrase: the clause 6 and clause 9 wording checked here is what a
+    // rewritten copy of the license altered before.
+    const license = readFileSync(join(ROOT, 'LICENSE'), 'utf8');
+    expect(license).toContain('Apache License');
+    expect(license).toContain('Version 2.0, January 2004');
+    expect(license).toContain(
+      'except as required for reasonable and customary use in describing the\n' +
+        '      origin of the Work and reproducing the content of the NOTICE file.',
+    );
+    expect(license).toContain('9. Accepting Warranty or Additional Liability.');
+    expect(license).toContain('of your accepting any such warranty or additional liability.');
 
     // The tests badge must point at a workflow that exists and runs the test suite.
     const m = /\[!\[Tests\]\(https:\/\/github\.com\/opena2a-org\/aicomply\/actions\/workflows\/([\w.-]+\.yml)\/badge\.svg\)\]/.exec(top);
