@@ -39,7 +39,8 @@ def recorded_urls(monkeypatch) -> list[str]:
     urls: list[str] = []
 
     def recording_urlopen(req, *args, **kwargs):
-        urls.append(req.full_url)
+        # urlopen takes a URL string or a Request; the adapter passes both.
+        urls.append(req if isinstance(req, str) else req.full_url)
         return real_urlopen(req, *args, **kwargs)
 
     monkeypatch.setattr(urllib.request, "urlopen", recording_urlopen)

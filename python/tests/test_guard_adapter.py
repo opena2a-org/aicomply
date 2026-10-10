@@ -72,6 +72,14 @@ def test_classify_returns_none_when_daemon_unreachable():
     assert out is None
 
 
+def test_health_probe_on_unreachable_daemon_is_recorded(recorded_urls: list[str]):
+    # The probe passes urlopen a URL string, not a Request; the fixture records both.
+    from aicomply.classifier.guard_client.nanomind_adapter import is_nanomind_daemon_available
+
+    assert is_nanomind_daemon_available() is False
+    assert recorded_urls == ["http://127.0.0.1:1/health"]
+
+
 def test_classify_skips_empty_input():
     assert classify_with_nanomind_daemon("   ") is None
 
