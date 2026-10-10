@@ -10,6 +10,18 @@
 
 The semantic Guard layer is wired and the NanoMind model has shipped (`nanomind-security-classifier` tme-v0.5.0, served by `@nanomind/daemon` over HTTP on `127.0.0.1:47200`). However, the current model over-flags benign text (measured 2026-06-25: roughly 70% benign false positives at the 0.8 block threshold, many at near-1.0 confidence), so the Guard remains a **preview** and is not recommended for production gating. The regex layer is the stable production surface and carries the measured accuracy in [SECURITY.md](./SECURITY.md); `comply()` runs regex-only whenever no daemon is reachable, which is the default. Promoting the Guard out of preview is gated on a model recalibration that fixes the benign false-positive rate (scoped in `todo/`).
 
+## Agent identity (HackMyAgent AIM-001)
+
+aicomply deliberately carries no agent identity declaration (`agent-card.json`, `agent.json` or `aim.json`). `npx hackmyagent secure --ci .` reports this as AIM-001 "No agent identity declaration" (MEDIUM, on `package.json`). The finding is an accepted decision, not an open item.
+
+An identity declaration lets other agents, registries and trust frameworks verify an agent. aicomply is not an agent:
+
+- It is a classifier library and a CLI. `comply()` runs in-process inside the calling agent or service, and `aicomply scan` exits after one pass. Neither runs as a standing agent, accepts agent-to-agent requests or acts on anyone's behalf.
+- It signs nothing and presents no identity of its own. It verifies Guard result signatures (Ed25519 + ML-DSA-44, see [SECURITY.md](./SECURITY.md)) and reads Registry intelligence endpoints as a client.
+- Its results belong to the agent that called it. That agent's own identity declaration covers what it does with aicomply's output; a declaration for the library would describe an agent that does not exist.
+
+The integrity signal for the library itself is the npm provenance attestation (`npm audit signatures`). Revisit this decision if aicomply ever runs as a standalone agent or service that other agents address directly.
+
 ## Stage definitions
 
 - **stable**: production-ready, semver honored, breaking changes documented, security patches triaged within 24 hours.
