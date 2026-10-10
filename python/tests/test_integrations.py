@@ -2,19 +2,12 @@
 
 from __future__ import annotations
 
+import urllib.request
+
 import pytest
 
-import aicomply.classifier.dual_layer as dual_layer
+from aicomply.classifier.guard_client.nanomind_adapter import NANOMIND_INFER_ENDPOINT
 from aicomply.integrations import ComplianceViolation, guard_io, guard_output
-
-
-@pytest.fixture(autouse=True)
-def _no_guard_daemon(monkeypatch: pytest.MonkeyPatch):
-    # The decorators default to use_guard=True, which consults a NanoMind daemon
-    # when one answers on 127.0.0.1:47200 (or at MOCK_NANOMIND_URL). These tests
-    # cover the decorators over the regex layer, so the daemon is unreachable
-    # here whatever runs on this machine.
-    monkeypatch.setattr(dual_layer, "classify_with_nanomind_daemon", lambda *a, **k: None)
 
 
 def test_decorators_are_reexported_at_top_level():
@@ -35,6 +28,27 @@ def test_guard_output_raises_on_pii():
 
     with pytest.raises(ComplianceViolation):
         answer()
+
+
+def test_default_guard_call_goes_to_the_closed_port_from_conftest(monkeypatch):
+    # conftest.py is the one place tests are kept away from a local daemon. The
+    # decorators here run the real adapter, and its request goes to conftest's
+    # closed port, never to the default 127.0.0.1:47200.
+    real_urlopen = urllib.request.urlopen
+    urls: list[str] = []
+
+    def recording_urlopen(req, *args, **kwargs):
+        urls.append(req.full_url)
+        return real_urlopen(req, *args, **kwargs)
+
+    monkeypatch.setattr(urllib.request, "urlopen", recording_urlopen)
+
+    @guard_output()
+    def answer() -> str:
+        return "All good, order 300843 shipped."
+
+    assert answer() == "All good, order 300843 shipped."
+    assert urls == ["http://127.0.0.1:1" + NANOMIND_INFER_ENDPOINT]
 
 
 def test_guard_output_allows_clean():
