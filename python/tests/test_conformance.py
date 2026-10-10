@@ -9,6 +9,7 @@ every case's verdict and violations field by field.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,16 @@ def test_marks_every_corpus_seeded_case_as_fake_fixture_text():
     seeded = [c for c in cases if c.get("origin", "").startswith("bench/corpus/")]
     assert len(seeded) == 3200
     assert [c["id"] for c in seeded if "FAKE" not in c.get("fixture", "")] == []
+
+
+def test_names_no_case_file_like_a_credential_store():
+    # A leaf of `credential`, `secret` or `password` plus extensions is what
+    # secret-file name rules refuse on sight, whatever the file holds. The
+    # credential class is seeded under a `-cases` suffix for that reason.
+    store_name = re.compile(r"^\.?(credentials?|secrets?|passwords?)(\.[a-z0-9]+)*$", re.IGNORECASE)
+    files = sorted(p.name for p in CASES_DIR.glob("*.jsonl"))
+    assert "credential-cases.jsonl" in files
+    assert [f for f in files if store_name.match(f)] == []
 
 
 @pytest.mark.parametrize(
