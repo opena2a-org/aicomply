@@ -23,7 +23,7 @@
  * daemon is treated as a defense-in-depth layer — its absence must
  * never cause a request to fail.
  *
- * Trust boundary (CHIEF-CSR 2026-06-01): the daemon is a separate
+ * Trust boundary (2026-06-01): the daemon is a separate
  * process and its responses are an attack surface. The `evidence` and
  * `remediation` fields are NEVER copied into `Violation.value` because
  * they may carry attacker-influenced strings; only the structured

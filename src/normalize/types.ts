@@ -6,7 +6,7 @@
  * carry both their position in the normalized stream and a best-effort
  * slice of the original bytes they map back to.
  *
- * Threat-model scope (CHIEF-CSR 2026-05-28): in-scope mutations are
+ * Threat-model scope (2026-05-28): in-scope mutations are
  * Unicode homoglyphs (NFKC), zero-width / bidi controls, intra-token
  * whitespace injection, and bounded Base64 / URL-encoded forms.
  * Out-of-scope: steganography, language translation, adversarial LLM

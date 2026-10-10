@@ -1,7 +1,7 @@
 /**
  * Bounded recursive extraction of Base64- and URL-encoded segments.
  *
- * Threat model (CHIEF-CSR 2026-05-28): attackers Base64-encode credentials or
+ * Threat model (2026-05-28): attackers Base64-encode credentials or
  * URL-encode them as a trivial evasion ("api_key=YWJjZGVm..." or
  * "%73%73%6e%3d..."). We extract candidates, decode them, and emit a
  * `DecodedExtraction` per successful decode for the dual-layer classifier
