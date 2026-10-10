@@ -20,6 +20,14 @@ bench/
 # Conformance cases are seeded from that corpus, so they carry the same samples
 pack/conformance/
 
+# The pattern pack holds the detection regexes as JSON strings (for example the
+# AWS access-key-id shape `\b(AKIA[0-9A-Z]{16})\b`). AST-CRED-003 reads such a
+# regex source as a hardcoded secret. These are pattern definitions, not
+# secrets; the Python file is a byte-identical copy checked by `npm run
+# pack:check`.
+pack/patterns.json
+python/src/aicomply/pack/patterns.json
+
 # Docs demonstrate the invisible-unicode / homoglyph attack with literal examples
 # (e.g. the README audit-trail example normalizes full-width digits to ASCII)
 README.md
