@@ -71,6 +71,18 @@ def _seed_drift(root: Path) -> list[str]:
     return drift
 
 
+_STORE_NAME = re.compile(r"^\.?(credentials?|secrets?|passwords?)(\.[a-z0-9]+)*$", re.IGNORECASE)
+
+
+def _store_named_case_files(cases_dir: Path) -> list[str]:
+    """Every ``*.jsonl`` case file in ``cases_dir`` named like a credential
+    store: a leaf of ``credential``, ``secret`` or ``password`` plus
+    extensions, which secret-file name rules refuse on sight whatever the file
+    holds. Checked over every case file, not only the corpus-seeded ones
+    ``_seed_drift`` reads."""
+    return sorted(p.name for p in cases_dir.glob("*.jsonl") if _STORE_NAME.match(p.name))
+
+
 def test_passes_every_case_against_the_loaded_pack():
     assert [f["id"] for f in _RECORD["failures"]] == []
     assert _RECORD["passed"] == _RECORD["cases"]
@@ -116,6 +128,30 @@ def test_holds_each_corpus_class_in_its_cases_file_with_the_corpus_text():
     case_files = {p.name for p in CASES_DIR.glob("*.jsonl")}
     corpus_classes = sorted(p.stem for p in (_REPO_ROOT / "bench" / "corpus").glob("*.jsonl"))
     assert [k for k in corpus_classes if f"{k}-cases.jsonl" not in case_files] == []
+
+
+def test_names_no_case_file_like_a_credential_store():
+    assert (CASES_DIR / "credential-cases.jsonl").is_file()
+    assert _store_named_case_files(CASES_DIR) == []
+
+
+def test_reports_a_store_named_case_file_whose_cases_are_not_corpus_seeded(tmp_path):
+    # _seed_drift skips cases without a bench/corpus origin, so a regression
+    # case moved into `secrets.jsonl` passes it; the name check still fails.
+    cases_dir = tmp_path / "pack" / "conformance"
+    cases_dir.mkdir(parents=True)
+    expected = {"verdict": "CLEAN", "violations": []}
+    names = ("secrets.jsonl", ".Passwords.jsonl", "credential-cases.jsonl", "regressions.jsonl")
+    for i, name in enumerate(names):
+        case = {
+            "id": f"regression-{i}",
+            "origin": "pull request #19",
+            "text": "x",
+            "expected": expected,
+        }
+        (cases_dir / name).write_text(json.dumps(case) + "\n", encoding="utf-8")
+    assert _seed_drift(tmp_path) == []
+    assert _store_named_case_files(cases_dir) == [".Passwords.jsonl", "secrets.jsonl"]
 
 
 def test_reports_a_seeded_case_filed_under_its_corpus_name_or_holding_stale_text(tmp_path):
