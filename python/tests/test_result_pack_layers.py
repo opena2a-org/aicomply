@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import urllib.request
 from pathlib import Path
 
 import pytest
 
 import aicomply.classifier.dual_layer as dual_layer
 from aicomply import PACK_SHA256, PACK_VERSION, PackIdentity, comply
+from aicomply.classifier.guard_client.nanomind_adapter import NANOMIND_INFER_ENDPOINT
 from aicomply.types import ClassifierResult
 
 PACK_BYTES = (Path(__file__).resolve().parents[2] / "pack" / "patterns.json").read_bytes()
@@ -42,9 +44,18 @@ def test_layers_on_regex_only_path():
 
 
 def test_layers_on_unreachable_daemon_omit_guard(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(dual_layer, "classify_with_nanomind_daemon", lambda *a, **k: None)
+    # The real adapter runs and its request goes to conftest.py's closed port.
+    real_urlopen = urllib.request.urlopen
+    urls: list[str] = []
+
+    def recording_urlopen(req, *args, **kwargs):
+        urls.append(req.full_url)
+        return real_urlopen(req, *args, **kwargs)
+
+    monkeypatch.setattr(urllib.request, "urlopen", recording_urlopen)
     res = comply("SSN 516-81-3086")
     assert res.layers == ["normalize", "regex"]
+    assert urls == ["http://127.0.0.1:1" + NANOMIND_INFER_ENDPOINT]
 
 
 def test_layers_add_guard_when_the_daemon_answered(monkeypatch: pytest.MonkeyPatch):
