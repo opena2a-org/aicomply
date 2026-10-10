@@ -41,6 +41,12 @@ export interface ConformanceCase {
   expected: ConformanceOutcome;
   /** Where the case came from, e.g. `bench/corpus/ssn.jsonl:12` or an issue. */
   origin?: string;
+  /**
+   * Set on every corpus-seeded case: names the token-shaped text as FAKE
+   * generator output so a credential scan over the file can tell it from a
+   * leak. Not compared; `scripts/conformance.mjs --seed` writes it.
+   */
+  fixture?: string;
   note?: string;
 }
 

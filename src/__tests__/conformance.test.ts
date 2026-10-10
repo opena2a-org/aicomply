@@ -41,6 +41,14 @@ describe('pattern pack conformance suite', () => {
     );
   });
 
+  it('marks every corpus-seeded case as FAKE fixture text', () => {
+    // The seeded text carries token-shaped strings; the marker on the same
+    // line is what lets a credential scan over the file pass them.
+    const seeded = loadConformanceCases(CASES_DIR).filter((c) => c.origin?.startsWith('bench/corpus/'));
+    expect(seeded).toHaveLength(3200);
+    expect(seeded.filter((c) => !/FAKE/.test(c.fixture ?? ''))).toEqual([]);
+  });
+
   it('fails a case whose stored outcome differs from this runtime', () => {
     // The suite is not vacuous: one wrong field in one case turns it red.
     const dir = mkdtempSync(join(tmpdir(), 'aicomply-conformance-'));

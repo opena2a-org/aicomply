@@ -51,6 +51,15 @@ def test_covers_the_full_corpus_plus_the_regression_cases():
         assert required in ids
 
 
+def test_marks_every_corpus_seeded_case_as_fake_fixture_text():
+    # The seeded text carries token-shaped strings; the marker on the same
+    # line is what lets a credential scan over the file pass them.
+    cases = load_conformance_cases(CASES_DIR)
+    seeded = [c for c in cases if c.get("origin", "").startswith("bench/corpus/")]
+    assert len(seeded) == 3200
+    assert [c["id"] for c in seeded if "FAKE" not in c.get("fixture", "")] == []
+
+
 @pytest.mark.parametrize(
     "text",
     [
