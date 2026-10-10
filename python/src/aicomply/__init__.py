@@ -20,6 +20,7 @@ from .classifier.guard_client import (
     is_nanomind_daemon_available,
 )
 from .classifier.regex import classify_with_regex, luhn_check, scan_patterns
+from .classifier.regex.pack import PACK_SHA256, PACK_VERSION
 from .normalize import normalize
 from .types import (
     ClassifierResult,
@@ -46,6 +47,8 @@ __all__ = [
     "classify_dual_layer",
     "scan_patterns",
     "luhn_check",
+    "PACK_VERSION",
+    "PACK_SHA256",
     "classify_with_nanomind_daemon",
     "is_nanomind_daemon_available",
     "NanoMindAdapterOptions",

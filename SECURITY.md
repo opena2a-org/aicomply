@@ -223,7 +223,7 @@ regex-only.
    but no NanoMind-Guard binary is published yet. Phase 2b training is the
    external gate. Until then `comply()` is regex-only.
 2. **Pattern source is public.** A determined attacker can find regex
-   bypasses by inspecting `src/classifier/regex/patterns.ts`. The patterns
+   bypasses by inspecting `pack/patterns.json`. The patterns
    are not secret and not designed to be - they are designed to be reviewed
    and tuned for your context. Combine with the Guard layer (when ready)
    and your own controls for adversarial-input scenarios.

@@ -1,9 +1,16 @@
 /**
- * Deterministic regex patterns for sensitive data classification.
+ * Deterministic regex scan for sensitive data classification.
  *
- * Each pattern includes a detection regex and an optional validator
- * for post-match verification (e.g., Luhn check for PANs).
+ * The patterns themselves are data in `pack/patterns.json`, compiled once by
+ * `./pack`. Each entry carries a detection regex and an optional named
+ * validator for post-match verification (e.g., Luhn check for PANs, see
+ * `./validators`). This module only runs them.
  */
+
+import { PACK, type PatternDefinition, type PatternType } from './pack';
+
+export { luhnCheck } from './validators';
+export type { PatternDefinition, PatternType };
 
 export interface PatternMatch {
   type: PatternType;
@@ -13,330 +20,27 @@ export interface PatternMatch {
   confidence: number;
 }
 
-export type PatternType =
-  | 'SSN'
-  | 'PAN'
-  | 'CUI'
-  | 'CREDENTIAL'
-  | 'IBAN'
-  | 'PASSPORT'
-  | 'MRN'
-  | 'NPI';
-
-export interface PatternDefinition {
-  type: PatternType;
-  regex: RegExp;
-  confidence: number;
-  validate?: (match: string) => boolean;
-}
+/** Compiled patterns, in pack order. Pack order is scan and tie-break order. */
+export const PATTERNS: PatternDefinition[] = PACK.patterns;
 
 /**
- * Luhn algorithm check for card numbers and NPI.
- * Returns true if the digit sequence passes the Luhn checksum.
- */
-export function luhnCheck(digits: string): boolean {
-  const cleaned = digits.replace(/[\s-]/g, '');
-  if (!/^\d+$/.test(cleaned)) return false;
-
-  let sum = 0;
-  let alternate = false;
-
-  for (let i = cleaned.length - 1; i >= 0; i--) {
-    let n = parseInt(cleaned[i], 10);
-    if (alternate) {
-      n *= 2;
-      if (n > 9) n -= 9;
-    }
-    sum += n;
-    alternate = !alternate;
-  }
-
-  return sum % 10 === 0;
-}
-
-/**
- * Validate SSN: not all zeros in any group, not 000/666/900-999 area.
- */
-function validateSsn(match: string): boolean {
-  const parts = match.split('-');
-  if (parts.length !== 3) return false;
-
-  const [area, group, serial] = parts;
-  if (area === '000' || area === '666') return false;
-  if (parseInt(area, 10) >= 900) return false;
-  if (group === '00') return false;
-  if (serial === '0000') return false;
-
-  return true;
-}
-
-/**
- * Validate IBAN: length and basic mod-97 check (ISO 13616).
- */
-function validateIban(match: string): boolean {
-  const cleaned = match.replace(/\s/g, '').toUpperCase();
-  if (cleaned.length < 15 || cleaned.length > 34) return false;
-
-  // Move first 4 chars to end
-  const rearranged = cleaned.slice(4) + cleaned.slice(0, 4);
-
-  // Convert letters to numbers (A=10, B=11, ..., Z=35)
-  let numericStr = '';
-  for (const ch of rearranged) {
-    const code = ch.charCodeAt(0);
-    if (code >= 65 && code <= 90) {
-      numericStr += (code - 55).toString();
-    } else {
-      numericStr += ch;
-    }
-  }
-
-  // Mod 97 using string-based arithmetic to handle large numbers
-  let remainder = 0;
-  for (const digit of numericStr) {
-    remainder = (remainder * 10 + parseInt(digit, 10)) % 97;
-  }
-
-  return remainder === 1;
-}
-
-/**
- * Validate PAN: must pass Luhn check and have valid IIN prefix.
- */
-function validatePan(match: string): boolean {
-  const cleaned = match.replace(/[\s-]/g, '');
-  if (!luhnCheck(cleaned)) return false;
-
-  // Check known IIN prefixes
-  const first = cleaned[0];
-  const firstTwo = cleaned.slice(0, 2);
-
-  // Visa: starts with 4
-  if (first === '4') return true;
-  // Mastercard: 51-55 or 2221-2720
-  if (parseInt(firstTwo, 10) >= 51 && parseInt(firstTwo, 10) <= 55) return true;
-  const firstFour = parseInt(cleaned.slice(0, 4), 10);
-  if (firstFour >= 2221 && firstFour <= 2720) return true;
-  // Amex: 34 or 37
-  if (firstTwo === '34' || firstTwo === '37') return true;
-  // Discover: 6011, 644-649, 65
-  if (cleaned.startsWith('6011') || firstTwo === '65') return true;
-  if (parseInt(cleaned.slice(0, 3), 10) >= 644 && parseInt(cleaned.slice(0, 3), 10) <= 649) return true;
-
-  return false;
-}
-
-/**
- * Validate NPI: exactly 10 digits, passes Luhn with prefix 80840.
- */
-function validateNpi(match: string): boolean {
-  const cleaned = match.replace(/\s/g, '');
-  if (!/^\d{10}$/.test(cleaned)) return false;
-
-  // NPI Luhn uses prefix 80840 prepended to the 10-digit NPI
-  return luhnCheck('80840' + cleaned);
-}
-
-/**
- * True when the captured "value" is really the NEXT KEY of an empty
- * assignment, e.g. `OPENAI_API_KEY=` on one line followed by
- * `ANTHROPIC_API_KEY=` on the next.
+ * True when the value is a reference to a credential rather than the
+ * credential itself.
  *
- * Keyed on UPPER_SNAKE plus a single trailing `=`, which is the environment
- * variable naming convention and not a secret shape. Base64 values are
- * mixed-case, so a legitimate value ending in one padding character
- * (`Ab3dEf6hIj9kLm2nOp5qRs8=`) is untouched, and an all-caps hex secret
- * (`DEADBEEFCAFEBABE1234`, no trailing `=`) still reports.
- */
-function isEmptyAssignmentTarget(value: string): boolean {
-  return /^[A-Z][A-Z0-9_]*=$/.test(value);
-}
-
-export const PATTERNS: PatternDefinition[] = [
-  {
-    type: 'SSN',
-    regex: /\b(\d{3}-\d{2}-\d{4})\b/g,
-    confidence: 0.95,
-    validate: validateSsn,
-  },
-  {
-    type: 'PAN',
-    // 13-19 digit sequences, optionally separated by spaces or dashes
-    regex: /\b(\d[\d -]{11,22}\d)\b/g,
-    confidence: 0.9,
-    validate: (match: string) => {
-      const cleaned = match.replace(/[\s-]/g, '');
-      if (cleaned.length < 13 || cleaned.length > 19) return false;
-      return validatePan(match);
-    },
-  },
-  {
-    type: 'CUI',
-    regex: /\b(CUI\/\/SP-[A-Z-]+|CONTROLLED\s+UNCLASSIFIED\s+INFORMATION|FOR\s+OFFICIAL\s+USE\s+ONLY|CUI\/\/[A-Z-]+)\b/gi,
-    confidence: 0.99,
-  },
-  {
-    type: 'CREDENTIAL',
-    // AWS Access Key ID
-    regex: /\b(AKIA[0-9A-Z]{16})\b/g,
-    confidence: 0.98,
-  },
-  {
-    type: 'CREDENTIAL',
-    // AWS secret access key. The secret is a 40-char base64 string with no
-    // distinctive prefix (unlike the AKIA access-key id above), so matching it
-    // bare would flag every 40-char hash/id. Require an aws_secret_access_key
-    // keyword in an assignment context instead. Pairs with the AKIA rule so a
-    // leaked credentials block reports both the id and the secret.
-    regex: /(?:aws[_-]?)?secret[_-]?access[_-]?key["']?\s*[:=]\s*['"]?([A-Za-z0-9/+]{40})['"]?/gi,
-    confidence: 0.9,
-  },
-  {
-    type: 'CREDENTIAL',
-    // Anthropic API key (sk-ant-apiNN-...). Provider keys appear bare in tool
-    // output and transcripts, not only in `key=` assignments, so they need a
-    // dedicated rule. Adapted from the @opena2a/credential-patterns canonical
-    // forms. The distinctive 'sk-ant-api' prefix is FP-proof on its own, so no
-    // leading \b — that lets a key survive an adjacent word char (e.g. a stray
-    // '_sk-ant-...' an attacker prepends to dodge a word-boundary anchor).
-    regex: /(sk-ant-api\d{2}-[A-Za-z0-9_-]{20,})/g,
-    confidence: 0.98,
-  },
-  {
-    type: 'CREDENTIAL',
-    // OpenAI project-scoped key (sk-proj-...). Char class widened to [_-] vs the
-    // canonical [A-Za-z0-9]{20,}: real project keys carry '-'/'_' separators.
-    regex: /(sk-proj-[A-Za-z0-9_-]{20,})/g,
-    confidence: 0.98,
-  },
-  {
-    type: 'CREDENTIAL',
-    // OpenRouter key (sk-or-v1-...)
-    regex: /(sk-or-v1-[A-Za-z0-9]{48,})/g,
-    confidence: 0.98,
-  },
-  {
-    type: 'CREDENTIAL',
-    // OpenAI legacy secret key (sk- followed by 48+ alnum). Broadest rule, so
-    // the lowest confidence: a 48-char hash/ID prefixed with 'sk-' can false-
-    // positive. Unlike the specific rules above it KEEPS a leading \b — that
-    // suppresses the common English-word FPs (risk-/disk-/task- + long token).
-    // The early '-' in sk-ant-/sk-proj-/sk-or-v1- means those are caught by
-    // their specific rules above, never this one.
-    regex: /\b(sk-[A-Za-z0-9]{48,})/g,
-    confidence: 0.85,
-  },
-  {
-    type: 'CREDENTIAL',
-    // GitHub personal access token (classic)
-    regex: /\b(ghp_[A-Za-z0-9]{36})\b/g,
-    confidence: 0.98,
-  },
-  {
-    type: 'CREDENTIAL',
-    // GitHub fine-grained token
-    regex: /\b(github_pat_[A-Za-z0-9_]{82})\b/g,
-    confidence: 0.98,
-  },
-  {
-    type: 'CREDENTIAL',
-    // Bearer token in header-like context
-    regex: /Bearer\s+([A-Za-z0-9._~+/=-]{20,})/g,
-    confidence: 0.85,
-  },
-  {
-    type: 'CREDENTIAL',
-    // Generic API key patterns (key=..., api_key=..., apikey=...)
-    //
-    // An empty-valued key used to adopt the NEXT LINE as its value.
-    // `OPENAI_API_KEY=\nBAR=your-key-here` reported a CREDENTIAL whose masked
-    // preview was `BAR=***re`, and an .env.example reported
-    // `ANTHROPIC_API_KEY=` -- in both cases the captured "secret" was the next
-    // key's NAME. That fires on the placeholder file people are told to commit
-    // and broke the documented `git diff | aicomply scan -q` gate.
-    //
-    // `=` is admitted only as TRAILING base64 padding, never inside the body:
-    // a `=` followed by more characters is a second assignment, which is what
-    // let `BAR=your-key-here` be swallowed whole.
-    //
-    // The separator deliberately keeps `\s*` rather than horizontal-only
-    // whitespace. A value legitimately on the line below its key (YAML block
-    // style, `api_key:\n  <secret>`) is a real exposure, and narrowing to
-    // same-line silently dropped it -- the compact whitespace-removed view
-    // does NOT compensate, measured. The remaining `KEY=` case is rejected by
-    // the validator instead, which is precise about the thing that is actually
-    // wrong.
-    regex: /(?:api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*['"]?([A-Za-z0-9._~+/-]{16,}={0,2})['"]?/gi,
-    confidence: 0.8,
-    validate: (value) => !isEmptyAssignmentTarget(value),
-  },
-  {
-    type: 'IBAN',
-    // Two letter country code + two check digits + up to 30 alphanumeric
-    regex: /\b([A-Z]{2}\d{2}[\s]?[\dA-Z]{4}[\s]?(?:[\dA-Z]{4}[\s]?){1,7}[\dA-Z]{1,4})\b/g,
-    confidence: 0.85,
-    validate: validateIban,
-  },
-  {
-    type: 'PASSPORT',
-    // Common passport formats: 1-2 letters followed by 6-9 digits, requires context keyword
-    regex: /(?:passport|travel\s+document)[:\s#-]*\b([A-Z]{1,2}\d{6,9})\b/gi,
-    confidence: 0.75,
-  },
-  {
-    type: 'MRN',
-    // Medical Record Number: MRN prefix followed by 6-12 alphanumeric
-    // chars that include at least one digit. The digit requirement
-    // suppresses the common prose-mention false positive ("MRN system",
-    // "MRN audit logs", "MRN training") - real MRNs are numeric or
-    // alphanumeric with a numeric component, never an English word.
-    regex: /\bMRN[:\s#-]*(?=[A-Z0-9]*\d)([A-Z0-9]{6,12})\b/gi,
-    confidence: 0.9,
-  },
-  {
-    type: 'NPI',
-    // 10-digit National Provider Identifier
-    regex: /\bNPI[:\s#-]*(\d{10})\b/gi,
-    confidence: 0.85,
-    validate: validateNpi,
-  },
-];
-
-/**
- * Reference forms that name a secret without containing one.
- *
- * `process.env.OPENAI_API_KEY` is the *remediated* shape — it is exactly what
+ * `process.env.OPENAI_API_KEY` is the *remediated* shape -- it is exactly what
  * `opena2a protect` rewrites a hardcoded key into. Reporting it as a finding
  * makes two commands in the same CLI contradict each other and breaks CI on
  * correctly-fixed code (opena2a#254).
  *
- * Every form is anchored `^...$` against the captured value, so this suppresses
- * a value that IS a reference and never one that merely contains a
- * reference-shaped substring (`process.envXABC...` stays a finding). The guard
- * sits in the shared match loop rather than in one pattern, because the same
- * reference is capturable by any keyword rule — the generic api_key rule and
- * the Bearer rule both matched it before this landed.
- */
-const ENV_REFERENCE_FORMS: RegExp[] = [
-  // Dotted accessors: process.env.X, import.meta.env.VITE_X, Deno.env.X
-  /^(?:globalThis\.)?(?:process\.env|import\.meta\.env|Deno\.env)\.[A-Za-z_][A-Za-z0-9_]*$/,
-  // Bracket accessors: process.env['X'], os.environ["X"]
-  /^(?:globalThis\.)?(?:process\.env|import\.meta\.env|Deno\.env|os\.environ|ENV)\s*\[\s*['"][A-Za-z_][A-Za-z0-9_]*['"]\s*\]$/,
-  // Getter calls: os.environ.get('X'), os.getenv('X'), System.getenv("X")
-  /^(?:os\.environ\.get|os\.getenv|System\.getenv|Deno\.env\.get|std::env::var)\s*\(\s*['"][A-Za-z_][A-Za-z0-9_]*['"]\s*\)$/,
-  // Shell / config interpolation: $X, ${X}, ${env:X} — the form protect emits
-  // into .mcp.json and .env-consuming config.
-  /^\$\{?(?:env:)?[A-Za-z_][A-Za-z0-9_]*\}?$/,
-];
-
-/**
- * True when the value is a reference to a credential rather than the
- * credential itself. Exported so the dual-layer and any future non-regex
- * consumer can apply one definition instead of restating it.
+ * The forms are the pack's `referenceForms`, each anchored `^...$` against the
+ * captured value, so this suppresses a value that IS a reference and never one
+ * that merely contains a reference-shaped substring (`process.envXABC...` stays
+ * a finding). Exported so the dual-layer and any future non-regex consumer can
+ * apply one definition instead of restating it.
  */
 export function isEnvVarReference(value: string): boolean {
   const trimmed = value.trim();
-  return ENV_REFERENCE_FORMS.some((form) => form.test(trimmed));
+  return PACK.referenceForms.some((form) => form.test(trimmed));
 }
 
 /**
@@ -356,7 +60,9 @@ export function scanPatterns(content: string): PatternMatch[] {
 
       // An env-var reference names a secret without carrying one. Skipping it
       // here (not per-pattern) keeps the definition in one place; the anchored
-      // forms mean a literal sitting next to a reference still reports.
+      // forms mean a literal sitting next to a reference still reports. The
+      // same reference is capturable by any keyword rule -- the generic
+      // api_key rule and the Bearer rule both matched it before this landed.
       if (isEnvVarReference(capturedValue)) {
         continue;
       }

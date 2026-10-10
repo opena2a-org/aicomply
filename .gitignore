@@ -19,3 +19,6 @@ credentials.json
 
 # Packed tarballs (smoke-test artifacts)
 *.tgz
+
+# Per-runtime conformance records (written by the conformance runners in CI)
+/conformance/
