@@ -483,8 +483,11 @@ describe('npm publish lifecycle', () => {
     'install', 'add', 'i', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall',
   ];
 
-  /** `npm` and one of the names in `INSTALL_COMMANDS`. */
-  const AN_INSTALL = new RegExp(String.raw`\bnpm\s+(?:${INSTALL_COMMANDS.join('|')})(?![\w-])`, 'g');
+  /**
+   * `npm` and one of the names in `INSTALL_COMMANDS` at the start of a
+   * command, after the `run:` key where the command opens a step.
+   */
+  const AN_INSTALL = new RegExp(String.raw`^\s*(?:(?:-\s+)?run:\s+)?npm\s+(?:${INSTALL_COMMANDS.join('|')})(?![\w-])`);
 
   /**
    * `line` without `--ignore-scripts` where it is the flag of an install,
@@ -492,27 +495,16 @@ describe('npm publish lifecycle', () => {
    * stops there. `npm run`, `npm test`, `npm exec` and the like still run the
    * script or command they name, and every npm command that starts inherits
    * the setting, so the flag on any command not listed in `INSTALL_COMMANDS`
-   * is left in. Each command between `;`, `&` and `|` is read once, left to
-   * right, so a long line takes time in proportion to its length.
+   * is left in. The flag is the install's only when `npm <install>` begins
+   * the command it is in, and only the first flag in that command is taken
+   * out. `;`, `&`, `|`, a parenthesis (so also `$(`) and a backtick each end
+   * one command and start the next. Each command is read once, so a long line
+   * takes time in proportion to its length.
    */
   function withoutInstallFlags(line: string): string {
     return line
-      .split(/([;&|])/)
-      .map((command) => {
-        const flag = /\s--ignore-scripts\b/g;
-        let kept = '';
-        let from = 0;
-        for (const install of command.matchAll(AN_INSTALL)) {
-          if (install.index < from) continue;
-          flag.lastIndex = install.index + install[0].length;
-          const found = flag.exec(command);
-          // No later install in this command has the flag after it either.
-          if (found === null) break;
-          kept += command.slice(from, found.index);
-          from = flag.lastIndex;
-        }
-        return kept + command.slice(from);
-      })
+      .split(/([;&|()`])/)
+      .map((command) => (AN_INSTALL.test(command) ? command.replace(/\s--ignore-scripts\b/, '') : command))
       .join('');
   }
 
@@ -585,12 +577,19 @@ describe('npm publish lifecycle', () => {
     ['npm set', ['      - run: npm set ignore-scripts true', PUBLISH], null],
     ['a line a step appends to .npmrc', ['      - run: echo "ignore-scripts=true" >> .npmrc', PUBLISH], null],
     ['an .npmrc line', [PUBLISH], 'registry=https://registry.npmjs.org/\nignore-scripts=true\n'],
+    ['the flag on a publish after an install and ||', ['      - run: npm ci || npm publish --ignore-scripts'], null],
+    ['the flag on a publish an install pipes into', ['      - run: npm ci | npm publish --ignore-scripts'], null],
+    ['the flag on a publish after a hardened install', ['      - run: npm ci --ignore-scripts $(npm publish --ignore-scripts)'], null],
+    ['an install wrapping a publish', ['      - run: npm ci $(npm publish --ignore-scripts)'], null],
+    ['an install wrapping a publish in backticks', ['      - run: npm ci `npm publish --ignore-scripts`'], null],
+    ['the flag on an npm run that names an install', ['      - run: npm run release npm ci --ignore-scripts'], null],
+    ['the flag on an npm run after an install it substitutes', ['      - run: npm run release $(npm ci) --ignore-scripts'], null],
   ])('refuses a publish with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
   });
 
   it('reads a long line of installs in time that grows with its length', () => {
-    const installs = 'npm ci '.repeat(60000);
+    const installs = 'npm ci --ignore-scriptz '.repeat(60000);
     const started = Date.now();
     expect(scriptsSwitchedOff(`      - run: ${installs}--ignore-scripts`, null)).toEqual([]);
     expect(scriptsSwitchedOff(`      - run: ${installs}&& npm test --ignore-scripts`, null)).not.toEqual([]);
