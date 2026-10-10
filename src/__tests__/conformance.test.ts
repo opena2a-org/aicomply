@@ -179,4 +179,16 @@ describe('pattern pack conformance suite', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it.each([[null], [7], [['bench/corpus/ssn.jsonl:1']]])('refuses a case whose origin is %p, not a string', (origin) => {
+    // The drift check passes over such a case, so the loader is where it is reported.
+    const dir = mkdtempSync(join(tmpdir(), 'aicomply-conformance-'));
+    try {
+      const c = { id: 'x', origin, text: 't', expected: { verdict: 'CLEAN', violations: [] } };
+      writeFileSync(join(dir, 'a.jsonl'), `\n${JSON.stringify(c)}\n`);
+      expect(() => loadConformanceCases(dir)).toThrow('a.jsonl:2: origin must be a string');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

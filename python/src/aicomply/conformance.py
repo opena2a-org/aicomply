@@ -58,6 +58,8 @@ def load_conformance_cases(directory: Path) -> list[dict[str, Any]]:
                 or "expected" not in case
             ):
                 raise ValueError(f"{path.name}:{number}: a case needs id, text and expected")
+            if "origin" in case and not isinstance(case["origin"], str):
+                raise ValueError(f"{path.name}:{number}: origin must be a string")
             if case["id"] in ids:
                 raise ValueError(f"{path.name}:{number}: duplicate case id {case['id']}")
             ids.add(case["id"])

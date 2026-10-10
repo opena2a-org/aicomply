@@ -190,3 +190,13 @@ def test_refuses_a_duplicate_case_id(tmp_path):
     (tmp_path / "a.jsonl").write_text(json.dumps(case) + "\n" + json.dumps(case) + "\n")
     with pytest.raises(ValueError, match="duplicate case id same"):
         load_conformance_cases(tmp_path)
+
+
+@pytest.mark.parametrize("origin", [None, 7, ["bench/corpus/ssn.jsonl:1"]])
+def test_refuses_a_case_whose_origin_is_not_a_string(tmp_path, origin):
+    # The drift check passes over such a case, so the loader is where it is reported.
+    expected = {"verdict": "CLEAN", "violations": []}
+    case = {"id": "x", "origin": origin, "text": "t", "expected": expected}
+    (tmp_path / "a.jsonl").write_text("\n" + json.dumps(case) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="a.jsonl:2: origin must be a string"):
+        load_conformance_cases(tmp_path)

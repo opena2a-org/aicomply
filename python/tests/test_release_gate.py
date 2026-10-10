@@ -10,6 +10,7 @@ release workflow acts on.
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
 import subprocess
@@ -75,7 +76,9 @@ def dist(tmp_path: Path) -> Path:
 def _gate(dist: Path, record: object = _RECORD) -> subprocess.CompletedProcess[str]:
     """Run the gate on ``dist`` with ``record`` written beside it (``None`` writes none)."""
     record_path = dist.parent / "python.json"
-    if record is not None:
+    if isinstance(record, bytes):
+        record_path.write_bytes(record)
+    elif record is not None:
         text = record if isinstance(record, str) else json.dumps(record, indent=2) + "\n"
         record_path.write_text(text, encoding="utf-8")
     return subprocess.run(
@@ -83,6 +86,39 @@ def _gate(dist: Path, record: object = _RECORD) -> subprocess.CompletedProcess[s
         capture_output=True,
         text=True,
         check=False,
+    )
+
+
+def _refused(run: subprocess.CompletedProcess[str]) -> list[str]:
+    return [line for line in run.stderr.splitlines() if line.startswith("REFUSED ")]
+
+
+def _fixes(run: subprocess.CompletedProcess[str]) -> list[str]:
+    return [line for line in run.stderr.splitlines() if line.startswith("fix: ")]
+
+
+_RERUN = (
+    "run `python bench/conformance.py` on the commit being released, resolve every FAIL it "
+    "prints, then run this gate again"
+)
+_RERUN_FIX = f"fix: {_RERUN}"
+_BOTH_FIX = (
+    "fix: run `python bench/conformance.py` and `python -m build` on the commit being released, "
+    "resolve every FAIL the first prints, then run this gate again"
+)
+
+
+def _build_fix(dist: Path) -> str:
+    return (
+        f"fix: run `python -m build` on the commit being released into an empty {dist}, "
+        "then run this gate again"
+    )
+
+
+def _stray_fix(dist: Path) -> str:
+    return (
+        f"fix: remove from {dist} every file that is not a wheel or an sdist (an upload sends "
+        "all of them), then run this gate again"
     )
 
 
@@ -158,7 +194,36 @@ def test_refuses_when_there_is_no_record(dist):
     assert "python.json does not exist" in run.stderr
 
 
-@pytest.mark.parametrize("record", [None, "[]"], ids=["no-record", "not-an-object"])
+def test_says_why_it_cannot_read_a_record_that_is_not_valid_utf8(dist):
+    _wheel(dist)
+    run = _gate(dist, b"\xff\xfe\x00bad")
+    assert run.returncode == 1
+    record_path = dist.parent / "python.json"
+    assert _refused(run) == [
+        f"REFUSED record: {record_path} cannot be read "
+        "('utf-8' codec can't decode byte 0xff in position 0: invalid start byte)"
+    ]
+    assert _fixes(run) == [f"fix: remove what stands in place of {record_path}, then {_RERUN}"]
+    assert "release gate: passed" not in run.stdout
+
+
+def test_says_a_record_that_is_a_directory_cannot_be_read_not_that_it_does_not_exist(dist):
+    _wheel(dist)
+    record_path = dist.parent / "python.json"
+    record_path.mkdir()
+    run = _gate(dist, None)
+    assert run.returncode == 1
+    refused = _refused(run)
+    assert len(refused) == 1
+    assert refused[0].startswith(f"REFUSED record: {record_path} cannot be read (")
+    assert "Is a directory" in refused[0]
+    assert "does not exist" not in run.stderr
+    assert _fixes(run) == [f"fix: remove what stands in place of {record_path}, then {_RERUN}"]
+
+
+@pytest.mark.parametrize(
+    "record", [None, "[]", b"\xff\xfe\x00bad"], ids=["no-record", "not-an-object", "not-utf-8"]
+)
 def test_reports_what_the_artifacts_lack_beside_a_record_it_cannot_read(dist, record):
     # With no record to compare against there is no runtimeVersion or packSha256
     # reason, but an empty or incomplete dist/ is still a reason of its own.
@@ -287,3 +352,73 @@ def test_prints_every_reason_not_only_the_first(dist):
         "REFUSED runtimeVersion",
         "REFUSED packSha256",
     ]
+
+
+def test_names_removing_a_stray_file_as_its_fix_not_another_run_or_build(dist):
+    _wheel(dist)
+    _sdist(dist)
+    (dist / "notes.txt").write_text("notes\n", encoding="utf-8")
+    run = _gate(dist)
+    assert run.returncode == 1
+    assert _refused(run) == [
+        "REFUSED notes.txt: not a wheel or an sdist, so the gate cannot read its pack"
+    ]
+    assert _fixes(run) == [_stray_fix(dist)]
+
+
+def test_names_the_build_as_the_fix_for_an_artifact_that_is_missing_or_incomplete(dist):
+    assert _fixes(_gate(dist)) == [_build_fix(dist)]
+
+    _wheel(dist, pack=None)
+    _sdist(dist, metadata=False)
+    (dist / "aicomply-0.0.1.tar.gz").write_bytes(b"not a tar archive")
+    run = _gate(dist)
+    assert run.returncode == 1
+    assert len(_refused(run)) == 3
+    assert _fixes(run) == [_build_fix(dist)]
+
+
+def test_names_the_conformance_run_as_the_fix_for_a_record_that_falls_short(dist):
+    _wheel(dist)
+    assert _fixes(_gate(dist, None)) == [_RERUN_FIX]
+    assert _fixes(_gate(dist, "[]")) == [_RERUN_FIX]
+    assert _fixes(_gate(dist, {**_RECORD, "runtime": "typescript", "passed": 0})) == [_RERUN_FIX]
+
+
+def test_prints_each_distinct_fix_once_in_the_order_of_what_it_refused(dist):
+    # A failed case, an artifact of another version and two stray files: four
+    # reasons that three different actions resolve.
+    _wheel(dist, version="9.9.9")
+    (dist / "more.txt").write_text("more\n", encoding="utf-8")
+    (dist / "notes.txt").write_text("notes\n", encoding="utf-8")
+    run = _gate(dist, {**_RECORD, "passed": _RECORD["cases"] - 1})
+    assert run.returncode == 1
+    assert [line.split(":")[0] for line in _refused(run)] == [
+        "REFUSED passed",
+        "REFUSED runtimeVersion",
+        "REFUSED more.txt",
+        "REFUSED notes.txt",
+    ]
+    assert _fixes(run) == [_RERUN_FIX, _BOTH_FIX, _stray_fix(dist)]
+    # The fixes close the log, after the verdict.
+    assert run.stderr.splitlines()[4] == "release gate: refused, do not publish"
+
+
+def test_refuses_on_an_error_it_did_not_foresee(dist, monkeypatch, capsys):
+    # The catch-all: whatever the checks raise, the gate refuses and never passes.
+    spec = importlib.util.spec_from_file_location("release_gate", GATE)
+    assert spec is not None and spec.loader is not None
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+
+    def unforeseen(*_args: object) -> list[object]:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(gate, "refusals", unforeseen)
+    _wheel(dist)
+    _sdist(dist)
+    status = gate.main(["--record", str(dist.parent / "python.json"), "--dist", str(dist)])
+    out, err = capsys.readouterr()
+    assert status == 1
+    assert err.splitlines()[:2] == ["REFUSED gate: boom", "release gate: refused, do not publish"]
+    assert "release gate: passed" not in out + err
