@@ -26,6 +26,18 @@ _RECORD = run_conformance(CASES_DIR)
 _CORPUS_ORIGIN = re.compile(r"^bench/corpus/([^/:]+)\.jsonl:(\d+)$")
 
 
+def _is_seeded(case: dict) -> bool:
+    """Whether ``case`` claims a corpus origin. The seed script writes every
+    origin as a string, so a missing, null or other non-string origin marks a
+    case that was not seeded from the corpus."""
+    origin = case.get("origin")
+    return isinstance(origin, str) and origin.startswith("bench/corpus/")
+
+
+def _seeded(cases: list[dict]) -> list[dict]:
+    return [c for c in cases if _is_seeded(c)]
+
+
 def _seed_drift(root: Path) -> list[str]:
     """Every corpus-seeded case under ``root`` that no longer matches what
     ``scripts/conformance.mjs --seed`` would write for it: a file not named
@@ -39,9 +51,9 @@ def _seed_drift(root: Path) -> list[str]:
             if line.strip() == "":
                 continue
             case = json.loads(line)
-            origin = case.get("origin", "")
-            if not origin.startswith("bench/corpus/"):
+            if not _is_seeded(case):
                 continue
+            origin = case["origin"]
             match = _CORPUS_ORIGIN.match(origin)
             if match is None:
                 drift.append(f"{case['id']}: origin {origin} does not name a corpus line")
@@ -90,8 +102,7 @@ def test_covers_the_full_corpus_plus_the_regression_cases():
 def test_marks_every_corpus_seeded_case_as_fake_fixture_text():
     # The seeded text carries token-shaped strings; the marker on the same
     # line is what lets a credential scan over the file pass them.
-    cases = load_conformance_cases(CASES_DIR)
-    seeded = [c for c in cases if c.get("origin", "").startswith("bench/corpus/")]
+    seeded = _seeded(load_conformance_cases(CASES_DIR))
     assert len(seeded) == 3200
     assert [c["id"] for c in seeded if "FAKE" not in c.get("fixture", "")] == []
 
@@ -125,6 +136,24 @@ def test_reports_a_seeded_case_filed_under_its_corpus_name_or_holding_stale_text
         "secrets-0001: text differs from bench/corpus/secrets.jsonl:1",
         "secrets-0002: in secrets.jsonl, not secrets-cases.jsonl",
     ]
+
+
+@pytest.mark.parametrize("origin", [None, 7])
+def test_skips_a_case_whose_origin_is_not_a_string(tmp_path, origin):
+    # The case is not corpus-seeded (the seed script writes every origin as a
+    # string), so the drift check passes over it as the TypeScript twin does.
+    (tmp_path / "pack" / "conformance").mkdir(parents=True)
+    case = {
+        "id": "x",
+        "origin": origin,
+        "text": "t",
+        "expected": {"verdict": "CLEAN", "violations": []},
+    }
+    (tmp_path / "pack" / "conformance" / "x-cases.jsonl").write_text(
+        json.dumps(case) + "\n", encoding="utf-8"
+    )
+    assert _seed_drift(tmp_path) == []
+    assert _seeded([case]) == []
 
 
 @pytest.mark.parametrize(
