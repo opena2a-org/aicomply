@@ -14,7 +14,7 @@
  *   - Request timeout -> classify=null within timeoutMs.
  *
  * Maps to the v2.0 plan Phase 1 step 3 exit criteria and the
- * CHIEF-CSR validation requirements.
+ * daemon-response validation requirements.
  */
 
 import { createServer, Server } from 'node:http';

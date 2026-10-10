@@ -1,6 +1,6 @@
 /**
  * Spec-driven tests for the adversarial-mutation normalization layer
- * (v1.0, CHIEF-CSR decision 2026-05-28).
+ * (v1.0, threat-model scope 2026-05-28).
  *
  * Each assertion maps to one of:
  *   - NFKC compatibility folding for homoglyph defenses
@@ -231,7 +231,7 @@ describe('normalize() pipeline end-to-end', () => {
   });
 });
 
-describe('Threat-model bounds (CHIEF-CSR scope decisions)', () => {
+describe('Threat-model bounds (scope decisions)', () => {
   it('does NOT fold Cyrillic look-alikes (different letter, out of scope)', () => {
     // U+0430 Cyrillic 'а' is NOT NFKC-equivalent to U+0061 ASCII 'a'.
     const r = normalize('pаssword=hunter2');

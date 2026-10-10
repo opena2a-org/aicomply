@@ -5,7 +5,7 @@
  * exchanges newline-delimited JSON requests/responses. Frozen wire shape
  * is defined in `./types.ts`.
  *
- * Structural readiness (v1.0, CHIEF-CDS decision 2026-05-28):
+ * Structural readiness (v1.0, 2026-05-28):
  *   - `isAvailable()` checks socket existence + reachability.
  *   - `classify()` performs the request/response round-trip with a
  *     bounded timeout, validates the response shape, and maps to a

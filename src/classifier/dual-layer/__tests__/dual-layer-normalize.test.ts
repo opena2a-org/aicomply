@@ -5,7 +5,7 @@
  * in-scope adversarial transforms and asserts the violation surfaces
  * with correct view tagging and original-content anchoring.
  *
- * Maps to CHIEF-CSR decision 2026-05-28 (threat-model scope) and the
+ * Maps to the 2026-05-28 threat-model scope (src/normalize/types.ts) and the
  * README §"What V1 does NOT do" bullets being closed for v1.0.
  */
 

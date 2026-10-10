@@ -9,7 +9,7 @@
  *   - Malformed JSON / wrong shape → classify=null (silent fallback).
  *   - Read timeout (server accepts but never replies) → classify=null.
  *
- * Maps to CHIEF-CDS decision 2026-05-28: Guard stays a stub until
+ * Design constraint (2026-05-28): Guard stays a stub until
  * Phase 2b training ships, but the IPC layer is fully wired and
  * testable so the day the real binary lands all that's needed is a
  * deployed socket - no code change.

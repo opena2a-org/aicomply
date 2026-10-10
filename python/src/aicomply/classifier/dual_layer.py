@@ -4,7 +4,7 @@ Both the regex classifier and the Guard classifier must return CLEAN for content
 to pass. If either flags a violation -> VIOLATION. If either returns DENY -> DENY
 (highest severity wins).
 
-Scope note ([CHIEF-CDS] 2026-06-18): this Python port covers the deterministic
+Scope note (2026-06-18): this Python port covers the deterministic
 detection layer (regex + normalization views + Guard merge + verdict). The TS-only
 Registry-L2 / ARP-signature / policy-pack / session-vault layers are out of port
 v1 scope - they carry no bench/corpus coverage and porting the crypto/registry

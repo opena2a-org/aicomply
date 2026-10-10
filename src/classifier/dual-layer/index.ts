@@ -106,7 +106,7 @@ export async function classifyDualLayer(
   content: string,
   options?: DualLayerOptions,
 ): Promise<ComplyResult> {
-  // Pre-regex adversarial normalization (CHIEF-CSR 2026-05-28).
+  // Pre-regex adversarial normalization (threat-model scope 2026-05-28).
   // NFKC + zero-width strip produce normalizedContent; the compact form
   // and any Base64/URL-decoded segments are scanned in addition.
   const norm = normalize(content);

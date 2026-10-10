@@ -7,7 +7,7 @@ non-2xx, malformed JSON, schema violation, timeout) this returns ``None`` so the
 dual-layer silently falls back to regex-only - the daemon is a defense-in-depth
 layer and its absence must never fail a request.
 
-Trust boundary (CHIEF-CSR): the daemon is a separate process and its responses
+Trust boundary: the daemon is a separate process and its responses
 are an attack surface. ``evidence`` / ``remediation`` are NEVER copied into a
 Violation value; only the structured ``attackClass`` enum becomes the type.
 """
