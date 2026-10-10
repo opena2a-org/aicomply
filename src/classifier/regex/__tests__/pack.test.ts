@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   PACK,
@@ -8,6 +9,7 @@ import {
   PACK_VERSION,
   compilePack,
   nonPortableConstruct,
+  readPackFile,
 } from '../pack';
 import { PATTERNS } from '../patterns';
 import * as api from '../../../index';
@@ -26,6 +28,14 @@ function withPattern(id: string, override: Record<string, unknown>): Buffer {
 describe('pattern pack', () => {
   it('loads the repository pack file', () => {
     expect(PACK_PATH).toBe(join(ROOT, 'pack', 'patterns.json'));
+  });
+
+  it('names the missing pack file and how to ship it when dist/ is moved without it', () => {
+    const missing = join(tmpdir(), 'aicomply-relocated', 'pack', 'patterns.json');
+    expect(() => readPackFile(missing)).toThrow(
+      `aicomply pattern pack: ${missing} not found. The package reads pack/patterns.json from its root at runtime: ` +
+        'when bundling, mark @opena2a/aicomply as external; when copying the package, copy pack/ with dist/.',
+    );
   });
 
   it('reports the version and SHA-256 of the exact bytes it loaded', () => {
@@ -100,6 +110,8 @@ describe('compilePack refuses a pack that breaks the contract', () => {
     ['a lookahead', withPattern('mrn', { regex: '\\bMRN[:\\s#-]*(?=[A-Z0-9]*\\d)([A-Z0-9]{6,12})\\b' }), /lookahead/],
     ['an unknown validator', withPattern('ssn', { validator: 'luhnModN' }), /validator luhnModN/],
     ['a prototype key as validator', withPattern('ssn', { validator: 'constructor' }), /validator constructor/],
+    // JSON.stringify drops an undefined value, so this entry has no validator key.
+    ['an entry with no validator key', withPattern('ssn', { validator: undefined }), /ssn: validator is required/],
     ['an unknown type', withPattern('ssn', { type: 'PHONE' }), /type PHONE/],
     ['an unsupported flag', withPattern('ssn', { flags: 'm' }), /flags/],
     ['a confidence above 1', withPattern('ssn', { confidence: 1.5 }), /confidence/],
