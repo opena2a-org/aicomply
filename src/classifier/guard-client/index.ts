@@ -22,9 +22,11 @@
  * which is honoured only when NODE_ENV is `test` or `development`.
  *
  * The real Guard binary is intentionally NOT shipped with v1.0 - this
- * is a stub-with-real-IPC, not a stub-with-fake-classification. Until
- * a NanoMind model is trained and released, no socket exists and
- * everything degrades to regex-only.
+ * is a stub-with-real-IPC, not a stub-with-fake-classification. The
+ * NanoMind model has shipped (tme-v0.5.0), but `@nanomind/daemon` serves
+ * it over HTTP and the dual-layer classifier reaches it through
+ * `./nanomind-adapter.ts`, not through this client. No socket exists,
+ * so this client degrades to regex-only.
  */
 
 import { existsSync } from 'node:fs';

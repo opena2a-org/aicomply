@@ -138,13 +138,65 @@ describe('npm release gate', () => {
     ]);
   });
 
-  it('refuses when the package carries no pack to compare against', () => {
+  /** The REFUSED lines and the fix lines of a run, in order. */
+  function refusedAndFixes(output: string): { refused: string[]; fixes: string[] } {
+    const lines = output.split('\n');
+    return {
+      refused: lines.filter((l) => l.startsWith('REFUSED ')),
+      fixes: lines.filter((l) => l.startsWith('fix: ')),
+    };
+  }
+
+  it('names a missing pack and the fix for it', () => {
     writeRecord(record);
     rmSync(join(root, 'pack', 'patterns.json'));
     const { status, output } = gate();
     expect(status).toBe(1);
-    expect(output).toContain('REFUSED gate: ');
+    expect(refusedAndFixes(output)).toEqual({
+      refused: [`REFUSED pack: pack/patterns.json does not exist in ${root}`],
+      fixes: [
+        'fix: restore pack/patterns.json from the commit being released: the package ships it and the record is compared against its bytes',
+      ],
+    });
+    expect(output).not.toContain('ENOENT');
     expect(output).not.toContain('release gate: passed');
+  });
+
+  it('names a missing package.json and still checks the fields the record carries', () => {
+    writeRecord({ ...record, runtime: 'python' });
+    rmSync(join(root, 'package.json'));
+    rmSync(join(root, 'pack', 'patterns.json'));
+    const { status, output } = gate();
+    expect(status).toBe(1);
+    expect(refusedAndFixes(output)).toEqual({
+      refused: [
+        `REFUSED package: package.json does not exist in ${root}`,
+        `REFUSED pack: pack/patterns.json does not exist in ${root}`,
+        'REFUSED runtime: the record is for "python", this gate publishes "typescript"',
+      ],
+      fixes: [
+        'fix: pass --root the package directory, the one that holds package.json and pack/patterns.json',
+        'fix: run `npm run conformance` on the commit being released, resolve every FAIL it prints, then run this gate again',
+      ],
+    });
+    expect(output).not.toContain('ENOENT');
+  });
+
+  it('names every missing file when --root is an empty directory', () => {
+    const empty = mkdtempSync(join(tmpdir(), 'aicomply-gate-empty-'));
+    try {
+      const { status, output } = gate(['--root', empty]);
+      expect(status).toBe(1);
+      expect(refusedAndFixes(output).refused).toEqual([
+        `REFUSED package: package.json does not exist in ${empty}`,
+        `REFUSED pack: pack/patterns.json does not exist in ${empty}`,
+        'REFUSED record: conformance/typescript.json does not exist',
+      ]);
+      expect(output).not.toContain('ENOENT');
+      expect(output).not.toContain('REFUSED gate:');
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
   });
 
   it('exits 2 on an argument it does not know', () => {
@@ -249,12 +301,63 @@ describe('npm publish lifecycle', () => {
     expect(pkg.scripts.conformance).toBe('npm run build && node scripts/conformance.mjs');
   });
 
+  /** The workflow's uncommented lines, with `\`-continued shell lines joined. */
+  function workflowLines(workflow: string): string[] {
+    return workflow
+      .replace(/\\\r?\n\s*/g, ' ')
+      .split('\n')
+      .filter((l) => !/^\s*#/.test(l));
+  }
+
+  /**
+   * What would switch prepublishOnly off for the workflow's publish. npm skips
+   * it under --ignore-scripts and when it is handed a tarball, so a publish
+   * line must carry neither; an `npm_config_ignore_scripts` environment setting
+   * or `npm config set ignore-scripts` reaches every later npm command, and so
+   * does an `ignore-scripts` line in the repository .npmrc. The flag on another
+   * command, such as `npm ci --ignore-scripts`, does not reach the publish.
+   */
+  function scriptsSwitchedOff(workflow: string, npmrc: string | null): string[] {
+    const found = workflowLines(workflow).filter(
+      (l) =>
+        (/\bnpm publish\b/.test(l) && /ignore[-_]scripts|\.tgz\b/i.test(l)) ||
+        /\bnpm_config_ignore_scripts\b/i.test(l) ||
+        /\bnpm config set ignore[-_]scripts\b/i.test(l),
+    );
+    const rc = (npmrc ?? '')
+      .split('\n')
+      .filter((l) => /^\s*ignore[-_]scripts\b/i.test(l) && !/=\s*false\s*$/i.test(l))
+      .map((l) => `.npmrc: ${l.trim()}`);
+    return [...found.map((l) => l.trim()), ...rc];
+  }
+
+  const PUBLISH = '      - run: npm publish --provenance --access public';
+
+  it.each([
+    ['a hardened install step', ['      - run: npm ci --ignore-scripts', PUBLISH], null],
+    ['a comment that mentions the flag', ['      # never npm publish --ignore-scripts', PUBLISH], null],
+    ['an .npmrc that leaves scripts on', [PUBLISH], 'ignore-scripts=false\n; ignore-scripts=true\n'],
+  ])('lets a publish through with %s', (_label, lines, npmrc) => {
+    expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).toEqual([]);
+  });
+
+  it.each([
+    ['--ignore-scripts on the publish', ['      - run: npm publish --ignore-scripts'], null],
+    ['a tarball handed to the publish', ['      - run: npm publish ./aicomply-2.2.3.tgz'], null],
+    ['the flag on a continued publish line', ['        run: |', '          npm publish --access public \\', '            --ignore-scripts'], null],
+    ['an environment setting', ['    env:', "      NPM_CONFIG_IGNORE_SCRIPTS: 'true'", PUBLISH], null],
+    ['an environment file line', ['      - run: echo "npm_config_ignore_scripts=true" >> "$GITHUB_ENV"', PUBLISH], null],
+    ['npm config set', ['      - run: npm config set ignore-scripts true', PUBLISH], null],
+    ['an .npmrc line', [PUBLISH], 'registry=https://registry.npmjs.org/\nignore-scripts=true\n'],
+  ])('refuses a publish with %s', (_label, lines, npmrc) => {
+    expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
+  });
+
   it('is not switched off where the release workflow publishes', () => {
     const workflow = readFileSync(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
-    const publishes = workflow.split('\n').filter((l) => /\bnpm publish\b/.test(l) && !/^\s*#/.test(l));
-    expect(publishes).not.toEqual([]);
-    // npm skips prepublishOnly under --ignore-scripts and when it is handed a tarball.
-    for (const line of publishes) expect(line).not.toMatch(/ignore-scripts|\.tgz/);
-    expect(workflow).not.toMatch(/ignore[-_]scripts/i);
+    const npmrcPath = join(ROOT, '.npmrc');
+    const npmrc = existsSync(npmrcPath) ? readFileSync(npmrcPath, 'utf8') : null;
+    expect(workflowLines(workflow).filter((l) => /\bnpm publish\b/.test(l))).not.toEqual([]);
+    expect(scriptsSwitchedOff(workflow, npmrc)).toEqual([]);
   });
 });

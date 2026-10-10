@@ -10,8 +10,10 @@ record written against other pack bytes, by another runtime or version, or
 with a failing case says nothing about those artifacts, so the gate refuses it.
 
 Run it after ``python bench/conformance.py`` and ``python -m build``, before
-the upload. Every reason is printed, one REFUSED line each. Exit 1 on a
-refusal, 2 on a usage error.
+the upload. Every reason is printed, one REFUSED line each: a record that
+cannot be read leaves nothing to compare the artifacts with, so beside it the
+gate reports what the artifact directory and each artifact lack on their own.
+Exit 1 on a refusal, 2 on a usage error.
 
 Usage:
     python bench/release_gate.py [--record <path>] [--dist <dir>]
@@ -83,7 +85,8 @@ def _read_sdist(path: Path) -> tuple[str | None, bytes | None]:
         )
 
 
-def _artifact_refusals(path: Path, record: dict[str, Any]) -> list[str]:
+def _artifact_refusals(path: Path, record: dict[str, Any] | None) -> list[str]:
+    """What ``path`` lacks, and with a ``record``, where the two disagree."""
     name = path.name
     if name.endswith(".whl"):
         reader = _read_wheel
@@ -101,14 +104,14 @@ def _artifact_refusals(path: Path, record: dict[str, Any]) -> list[str]:
     reasons = []
     if version is None:
         reasons.append(f"{name}: carries no version metadata")
-    elif record.get("runtimeVersion") != version:
+    elif record is not None and record.get("runtimeVersion") != version:
         reasons.append(
             f"runtimeVersion: the record was written by {_show(record.get('runtimeVersion'))} "
             f"(aicomply.__version__), {name} is {_show(version)}"
         )
     if sha256 is None:
         reasons.append(f"{name}: carries no pattern pack")
-    elif record.get("packSha256") != sha256:
+    elif record is not None and record.get("packSha256") != sha256:
         reasons.append(
             f"packSha256: the record was written against pack {_show(record.get('packSha256'))}, "
             f"{name} embeds {_show(sha256)}"
@@ -116,18 +119,18 @@ def _artifact_refusals(path: Path, record: dict[str, Any]) -> list[str]:
     return reasons
 
 
-def refusals(record_path: Path, dist_dir: Path) -> list[str]:
-    """Every reason the record cannot stand for the artifacts in ``dist_dir``."""
+def _record_refusals(record_path: Path) -> tuple[dict[str, Any] | None, list[str]]:
+    """The record, ``None`` when it cannot be read, and every reason it falls short."""
     try:
         text = record_path.read_text(encoding="utf-8")
     except OSError:
-        return [f"record: {record_path} does not exist"]
+        return None, [f"record: {record_path} does not exist"]
     try:
         record = json.loads(text)
     except ValueError:
         record = None
     if not isinstance(record, dict):
-        return [f"record: {record_path} is not a JSON object"]
+        return None, [f"record: {record_path} is not a JSON object"]
     cases, passed = record.get("cases"), record.get("passed")
     print(
         f"record:     {_show(record.get('runtime'))} {_show(record.get('runtimeVersion'))}, "
@@ -150,7 +153,12 @@ def refusals(record_path: Path, dist_dir: Path) -> list[str]:
         reasons.append("cases: the record ran no cases")
     elif passed != cases:
         reasons.append(f"passed: {passed} of {cases} cases passed")
+    return record, reasons
 
+
+def refusals(record_path: Path, dist_dir: Path) -> list[str]:
+    """Every reason the record cannot stand for the artifacts in ``dist_dir``."""
+    record, reasons = _record_refusals(record_path)
     artifacts = sorted(p for p in dist_dir.iterdir() if p.is_file()) if dist_dir.is_dir() else []
     if not artifacts:
         reasons.append(

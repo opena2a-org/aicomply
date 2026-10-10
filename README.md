@@ -108,7 +108,7 @@ Drop it into your agent's tool-result handler, your message-egress wrapper, or a
 | Credentials| AWS keys, GitHub tokens, Bearer tokens, generic `api_key=` |
 | Government | CUI, FOUO, CONTROLLED markings                                 |
 
-Pattern source lives at [`pack/patterns.json`](https://github.com/opena2a-org/aicomply/blob/main/pack/patterns.json), the one pattern pack the TypeScript and Python packages both load (`PACK_VERSION` and `PACK_SHA256` say which one you have) - not secret, designed to be reviewed and tuned for your context. Each runtime must reproduce every case in [`pack/conformance/`](./pack/conformance) exactly: `npm run conformance` and `python python/bench/conformance.py`.
+Pattern source lives at [`pack/patterns.json`](https://github.com/opena2a-org/aicomply/blob/main/pack/patterns.json), the one pattern pack the TypeScript and Python packages both load (`PACK_VERSION` and `PACK_SHA256` say which one you have) - not secret, designed to be reviewed and tuned for your context. Each runtime must reproduce every case in [`pack/conformance/`](./pack/conformance) exactly: `npm run conformance` and `python python/bench/conformance.py`. The release gates refuse a record that does not match what ships: `npm publish` runs `npm run release:gate` after the conformance run, and for a PyPI release `python python/bench/release_gate.py` checks the record against the wheel and sdist that `python -m build` wrote.
 
 ### Semantic Guard layer (preview, when nanomind-daemon is running)
 
