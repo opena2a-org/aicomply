@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import {
   appendFileSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -157,5 +158,103 @@ describe('npm release gate', () => {
       scripts: Record<string, string>;
     };
     expect(pkg.scripts['release:gate']).toBe('node scripts/release-gate.mjs');
+  });
+});
+
+/**
+ * `npm publish` runs the package's prepublishOnly script before it packs
+ * anything and stops when that script exits non-zero. These tests run this
+ * package's own prepublishOnly through npm, so they pin that a publish cannot
+ * get past a failing conformance run or a refusing gate.
+ */
+describe('npm publish lifecycle', () => {
+  const NPM_RUN_TIMEOUT_MS = 60_000;
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
+    scripts: Record<string, string | undefined>;
+  };
+  let root: string;
+
+  /**
+   * A scratch package whose prepublishOnly is this package's own. The two
+   * scripts it calls are stand-ins that record their name and exit 1 when
+   * told to, so a test sees which steps ran and what npm exits with.
+   */
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'aicomply-publish-'));
+    writeFileSync(
+      join(root, 'step.js'),
+      [
+        "const { appendFileSync } = require('node:fs');",
+        "appendFileSync('steps.txt', process.argv[2] + '\\n');",
+        'process.exit(process.env.FAILING_STEP === process.argv[2] ? 1 : 0);',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({
+        name: 'publish-lifecycle-fixture',
+        version: '0.0.0',
+        private: true,
+        scripts: {
+          prepublishOnly: pkg.scripts.prepublishOnly,
+          conformance: 'node step.js conformance',
+          'release:gate': 'node step.js release:gate',
+        },
+      }),
+    );
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function prepublish(failingStep = ''): { status: number | null; steps: string[] } {
+    const run = spawnSync('npm run prepublishOnly', {
+      cwd: root,
+      env: { ...process.env, npm_config_update_notifier: 'false', FAILING_STEP: failingStep },
+      shell: true,
+      encoding: 'utf8',
+    });
+    const trace = join(root, 'steps.txt');
+    const steps = existsSync(trace) ? readFileSync(trace, 'utf8').split('\n').filter((l) => l.length > 0) : [];
+    return { status: run.status, steps };
+  }
+
+  it(
+    'runs the conformance suite and then the release gate',
+    () => {
+      expect(prepublish()).toEqual({ status: 0, steps: ['conformance', 'release:gate'] });
+    },
+    NPM_RUN_TIMEOUT_MS,
+  );
+
+  it(
+    'stops the publish, without reaching the gate, when the conformance suite fails',
+    () => {
+      expect(prepublish('conformance')).toEqual({ status: 1, steps: ['conformance'] });
+    },
+    NPM_RUN_TIMEOUT_MS,
+  );
+
+  it(
+    'stops the publish when the release gate refuses',
+    () => {
+      expect(prepublish('release:gate')).toEqual({ status: 1, steps: ['conformance', 'release:gate'] });
+    },
+    NPM_RUN_TIMEOUT_MS,
+  );
+
+  it('measures the build it is about to pack', () => {
+    expect(pkg.scripts.conformance).toBe('npm run build && node scripts/conformance.mjs');
+  });
+
+  it('is not switched off where the release workflow publishes', () => {
+    const workflow = readFileSync(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+    const publishes = workflow.split('\n').filter((l) => /\bnpm publish\b/.test(l) && !/^\s*#/.test(l));
+    expect(publishes).not.toEqual([]);
+    // npm skips prepublishOnly under --ignore-scripts and when it is handed a tarball.
+    for (const line of publishes) expect(line).not.toMatch(/ignore-scripts|\.tgz/);
+    expect(workflow).not.toMatch(/ignore[-_]scripts/i);
   });
 });

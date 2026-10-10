@@ -8,7 +8,10 @@
 //                                               ships, with every case passing
 //   node scripts/release-gate.mjs --root <dir>  gate the package rooted at <dir>
 //
-// Run it after `npm run conformance` and before `npm publish`. The pack a
+// `npm publish` runs it: the prepublishOnly script runs `npm run conformance`
+// and then this gate before anything is packed, and a non-zero exit from
+// either stops the publish. npm skips that script under --ignore-scripts and
+// when it is handed a tarball instead of the package directory. The pack a
 // publish embeds is pack/patterns.json at the package root: the `files` list
 // ships it and the built runtime loads it from there. A record written against
 // other pack bytes, by another runtime or version, or with a failing case says

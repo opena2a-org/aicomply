@@ -12,7 +12,8 @@
 //
 // The record carries packSha256 so a release can refuse to publish when the
 // record was produced against a different pack than the one it embeds; that
-// check is scripts/release-gate.mjs (npm run release:gate).
+// check is scripts/release-gate.mjs (npm run release:gate). `npm publish` runs
+// this runner and then that check through the prepublishOnly script.
 // regressions.jsonl is written by hand and is never touched by --seed.
 //
 // Every seeded case carries `fixture: SEEDED_FIXTURE_NOTE`. The corpus text is
