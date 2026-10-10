@@ -431,7 +431,14 @@ describe('npm publish lifecycle', () => {
    * block scalar or a plain scalar carried onto deeper-indented lines. A blank
    * line ends a folded paragraph, and a `|` block keeps its lines. So does a
    * `>` block for a line indented deeper than the block's own lines, and for
-   * the line after it, as YAML folds no line break next to such a line.
+   * the line after it, as YAML folds no line break next to such a line. A
+   * `#` line inside a `>` block is text to YAML: its text is left out here,
+   * but it counts as a line for the block's indentation and for the line
+   * after it. A tag or an anchor may stand before a `|` or `>` header.
+   *
+   * The shell joins a `\`-continued line onto the word the `\` ends, so where
+   * the `\` follows a word it is kept in the joined line, followed by a space,
+   * for `withoutInstallFlags` to see; after a space it is joined with a space.
    */
   function workflowLines(workflow: string): string[] {
     const lines: string[] = [];
@@ -443,26 +450,30 @@ describe('npm publish lifecycle', () => {
     let blockIndent: number | null | undefined = null;
     // Whether the last line was indented deeper than its `>` block.
     let afterDeeper = false;
-    for (const line of workflow.replace(/\\\r?\n\s*/g, ' ').split(/\r?\n/)) {
-      if (/^\s*#/.test(line)) continue;
+    const joined = workflow.replace(/(?<!\S)\\\r?\n\s*/g, ' ').replace(/\\\r?\n\s*/g, '\\ ');
+    for (const line of joined.split(/\r?\n/)) {
+      const comment = /^\s*#/.test(line);
       const indent = line.search(/\S/);
       if (foldedUnder !== null && (indent === -1 || indent > foldedUnder)) {
         if (indent === -1) {
           lines.push('');
           continue;
         }
+        if (comment && blockIndent === null) continue;
         if (blockIndent === undefined) blockIndent = indent;
         const deeper = blockIndent !== null && indent > blockIndent;
-        if (deeper || afterDeeper) lines.push(line);
-        else lines[lines.length - 1] += ` ${line.trim()}`;
+        if (deeper || afterDeeper) lines.push(comment ? '' : line);
+        else if (!comment) lines[lines.length - 1] += ` ${line.trim()}`;
         afterDeeper = deeper;
         continue;
       }
+      if (comment) continue;
       const key = /^(\s*(?:-\s+)?)[\w-]+:\s+(\S.*)$/.exec(line);
-      foldedUnder = key !== null && !key[2].startsWith('|') ? key[1].length : null;
+      const value = key === null ? '' : key[2].replace(/^(?:[!&]\S*\s+)*/, '');
+      foldedUnder = key !== null && !value.startsWith('|') ? key[1].length : null;
       // A `>` header carries a chomping indicator and an indentation
       // indicator in either order, and may end in a comment.
-      const header = key === null ? null : /^>(?:[+-]?(\d)?|(\d)[+-])\s*(?:#.*)?$/.exec(key[2]);
+      const header = key === null ? null : /^>(?:[+-]?(\d)?|(\d)[+-])\s*(?:#.*)?$/.exec(value);
       const indicator = header?.[1] ?? header?.[2];
       if (key === null || header === null) blockIndent = null;
       else blockIndent = indicator === undefined ? undefined : key[1].length + Number(indicator);
@@ -527,14 +538,43 @@ describe('npm publish lifecycle', () => {
    * is left in. The flag is the install's only when `npm <install>` begins
    * the command it is in (see `AN_INSTALL`), and only the first flag in that
    * command is taken out. `;`, `&`, `|`, a parenthesis (so also `$(`) and a
-   * backtick each end one command and start the next. Each command is read
-   * once, so a long line takes time in proportion to its length.
+   * backtick each end one command and start the next.
+   *
+   * Quotes, escapes and redirections are not decoded, so the flag is left in
+   * wherever they could make the split wrong: on a command the split starts
+   * while a `"` or `'` opened earlier on the line is still open (the quote
+   * that opens a quoted YAML value counts, so only its first command is
+   * read), on a command the split starts at an `&` or `|` directly after `<`
+   * or `>`, as in the redirections `>&`, `<&` and `>|`, which name a file and
+   * end no command, and on every flag a `\` stands before anywhere on the
+   * line, as the shell escapes the character after it, YAML decodes it in a
+   * double-quoted value and a `\` that ends a line joins the next line onto
+   * its word. A quote left open on an earlier line is not seen. Each command
+   * is read once, so a long line takes time in proportion to its length.
    */
   function withoutInstallFlags(line: string): string {
-    return line
-      .split(/([;&|()`])/)
-      .map((command) => (AN_INSTALL.test(command) ? command.replace(/\s--ignore-scripts\b/, '') : command))
-      .join('');
+    const parts = line.split(/([;&|()`])/);
+    // The quote the text before the command leaves open, if any.
+    let open = '';
+    // Whether a `\` stands in the text before the command.
+    let escaped = false;
+    for (let i = 0; i < parts.length; i += 2) {
+      const command = parts[i];
+      const redirected = i > 0 && /[&|]/.test(parts[i - 1]) && /[<>]$/.test(parts[i - 2]);
+      const flag = /\s--ignore-scripts\b/.exec(command);
+      if (
+        flag !== null && open === '' && !redirected && !escaped &&
+        !command.slice(0, flag.index).includes('\\') && AN_INSTALL.test(command)
+      ) {
+        parts[i] = command.slice(0, flag.index) + command.slice(flag.index + flag[0].length);
+      }
+      for (const c of command) {
+        if (c === '\\') escaped = true;
+        else if (open === '' && (c === '"' || c === "'")) open = c;
+        else if (c === open) open = '';
+      }
+    }
+    return parts.join('');
   }
 
   /**
@@ -543,8 +583,10 @@ describe('npm publish lifecycle', () => {
    * and under ignore-scripts, which reaches the publish as a flag on it, as an
    * `npm_config_ignore_scripts` environment setting, through `npm config set`
    * or `npm set`, and as a line in an .npmrc, the repository's or one a step
-   * writes. So every line that mentions it is refused, except where it is the
-   * flag on an install, such as `npm ci --ignore-scripts`.
+   * writes. So every line that mentions it is refused, except where the
+   * command it stands in begins with an install, such as
+   * `npm ci --ignore-scripts`, and `withoutInstallFlags` finds no quote,
+   * redirection or `\` that could put it on another command.
    */
   function scriptsSwitchedOff(workflow: string, npmrc: string | null): string[] {
     const found = workflowLines(workflow).filter(
@@ -580,6 +622,10 @@ describe('npm publish lifecycle', () => {
     ['an .npmrc that leaves scripts on', [PUBLISH], 'ignore-scripts=false\n; ignore-scripts=true\n'],
     ['flags that take a value', ['      - run: npm publish --provenance --access public --tag next'], null],
     ['its flags folded onto the next line', ['        run: >', '          npm publish --provenance', '          --access public'], null],
+    ['a flag folded under an indentation indicator', ['      - run: >2', '          npm ci', '          --ignore-scripts', PUBLISH], null],
+    ['a hardened install continued onto the next line', ['        run: |', '          npm ci --ignore-scripts \\', '            --no-audit', PUBLISH], null],
+    ['a hardened install after a quote that closes', ['      - run: echo "a; b" && npm ci --ignore-scripts', PUBLISH], null],
+    ['a hardened install after a redirection', ['      - run: npm run build > build.log && npm ci --ignore-scripts', PUBLISH], null],
   ])('lets a publish through with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).toEqual([]);
   });
@@ -631,6 +677,24 @@ describe('npm publish lifecycle', () => {
     ['the flag after a folded scalar whose first line is more indented', ['      - run: >2', '           npm ci', '          npm publish --ignore-scripts'], null],
     ['the flag in a folded scalar with its indicators the other way round', ['      - run: >2-', '          echo; npm ci', '            npm publish --ignore-scripts'], null],
     ['the flag in a folded scalar with a comment on its first line', ['      - run: > # publish', '          echo; npm ci', '            npm publish --ignore-scripts'], null],
+    ['the flag after an install and a YAML line break escape', ['      - run: "npm ci\\nnpm publish --ignore-scripts"'], null],
+    ['the flag after a command, an install and a YAML line break escape', ['      - run: "echo ok; npm ci\\nnpm publish --ignore-scripts"'], null],
+    ['the flag after an install and a YAML escape of ;', ['      - run: "npm ci\\x3bnpm publish --ignore-scripts"'], null],
+    ['the flag on an npm run after a set install and YAML escapes of &&', ['      - run: "X=1 npm ci\\x26\\x26 npm run release --ignore-scripts"'], null],
+    ['the flag after a timed install and a YAML line break escape under a run: key with no dash', ['        run: "time npm ci\\u000anpm publish --ignore-scripts"'], null],
+    ['the flag on an install name a YAML escaped line break completes', ['      - run: "npm i\\', '          t --ignore-scripts"'], null],
+    ['the flag on the line after a more-indented comment line of a folded scalar', ['      - run: >', '          npm ci', '            # note', '          npm publish --ignore-scripts'], null],
+    ['the flag after a folded scalar whose first line is a comment', ['      - run: >', '          # note', '            npm ci', '          npm publish --ignore-scripts'], null],
+    ['the flag in a tagged literal scalar', ['      - run: !!str |', '          npm ci', '          npm publish --ignore-scripts'], null],
+    ['the flag in a tagged folded scalar', ['      - run: !!str >', '          echo; npm ci', '            npm publish --ignore-scripts'], null],
+    ['the flag in an anchored folded scalar', ['      - run: &a >', '          echo; npm ci', '            npm publish --ignore-scripts'], null],
+    ['the flag on an npm run after an install in double quotes', ['      - run: npm run release "x; npm ci" --ignore-scripts'], null],
+    ['the flag on an npm run after an install in single quotes', ["      - run: npm run release 'x; X=1 npm ci' --ignore-scripts"], null],
+    ['the flag on an npm run after an install that only names a file', ['      - run: npm run release >& npm ci --ignore-scripts'], null],
+    ['the flag on an npm run after a set install that only names a file', ['      - run: npm run release >& X=1 npm ci --ignore-scripts'], null],
+    ['the flag on an npm run after an install that only names a clobbered file', ['      - run: npm run release >| npm ci --ignore-scripts'], null],
+    ['the flag on an install name a continued line completes', ['        run: |', '          npm i\\', '          t --ignore-scripts'], null],
+    ['a tarball after a new key ends a more-indented line', ['      - run: >', '          echo a', '            echo b', '      - run: npm publish --provenance --access public', '          "$TARBALL"'], null],
   ])('refuses a publish with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
   });
