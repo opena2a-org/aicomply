@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { conformanceOutcome, loadConformanceCases, runConformance } from '../conformance';
@@ -47,6 +47,15 @@ describe('pattern pack conformance suite', () => {
     const seeded = loadConformanceCases(CASES_DIR).filter((c) => c.origin?.startsWith('bench/corpus/'));
     expect(seeded).toHaveLength(3200);
     expect(seeded.filter((c) => !/FAKE/.test(c.fixture ?? ''))).toEqual([]);
+  });
+
+  it('names no case file like a credential store', () => {
+    // A leaf of `credential`, `secret` or `password` plus extensions is what
+    // secret-file name rules refuse on sight, whatever the file holds. The
+    // credential class is seeded under a `-cases` suffix for that reason.
+    const files = readdirSync(CASES_DIR).filter((f) => f.endsWith('.jsonl'));
+    expect(files).toContain('credential-cases.jsonl');
+    expect(files.filter((f) => /^\.?(credentials?|secrets?|passwords?)(\.[a-z0-9]+)*$/i.test(f))).toEqual([]);
   });
 
   it('fails a case whose stored outcome differs from this runtime', () => {
