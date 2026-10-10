@@ -5,8 +5,8 @@
  * agent keyword and no agent identity file exists at the root or under
  * `.well-known/`; aicomply is a classifier library and carries none by design.
  * The rationale must stay in STATUS.md, and must stay true: if an identity
- * file is ever added, or the keyword removed, the section has to be rewritten
- * with it.
+ * file is ever added, an `agentCard` or `a2a` field added to package.json, or
+ * the keyword removed, the section has to be rewritten with it.
  */
 
 import { readFileSync, existsSync } from 'fs';
@@ -25,7 +25,11 @@ const IDENTITY_FILES = [
   '.well-known/aim.json',
 ];
 
-/** HackMyAgent raises AIM-001 only for a package whose keywords mention one of these. */
+/**
+ * HackMyAgent raises AIM-001 for a package whose package.json has one of these
+ * fields, or a keyword that contains `agent` or `a2a`.
+ */
+const AGENT_FIELDS = ['agentCard', 'a2a'];
 const AGENT_KEYWORD = /agent|a2a/;
 
 /** Body of the `## ` section whose heading matches `re`, or null. */
@@ -61,6 +65,15 @@ describe('STATUS.md', () => {
     expect(agentKeywords).not.toEqual([]);
     expect(body).toContain('`keywords`');
     for (const keyword of agentKeywords) expect(body).toContain(`\`${keyword}\``);
+  });
+
+  it('has neither agent field in package.json, so the keyword is the only AIM-001 trigger', () => {
+    const body = section(/agent identity/i);
+    const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as Record<string, unknown>;
+    for (const field of AGENT_FIELDS) {
+      expect(body).toContain(`\`${field}\``);
+      expect({ field, present: field in pkg }).toEqual({ field, present: false });
+    }
   });
 
   it('points only at paths that are in the repository', () => {
