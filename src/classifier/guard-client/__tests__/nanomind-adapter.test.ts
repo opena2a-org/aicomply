@@ -340,6 +340,70 @@ describe('isNanoMindDaemonAvailable', () => {
   });
 });
 
+describe('MOCK_NANOMIND_URL is a test-only override', () => {
+  const prevNodeEnv = process.env.NODE_ENV;
+  const prevMockUrl = process.env.MOCK_NANOMIND_URL;
+
+  afterEach(() => {
+    if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = prevNodeEnv;
+    if (prevMockUrl === undefined) delete process.env.MOCK_NANOMIND_URL;
+    else process.env.MOCK_NANOMIND_URL = prevMockUrl;
+  });
+
+  function setNodeEnv(value: string | undefined): void {
+    if (value === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = value;
+  }
+
+  it.each([['production'], [undefined]])(
+    'classify never sends content to the override when NODE_ENV=%s',
+    async (nodeEnv) => {
+      const m = await startMockDaemon((_, respond) => respond(200, makeValidResponse()));
+      try {
+        process.env.MOCK_NANOMIND_URL = m.baseUrl;
+        setNodeEnv(nodeEnv);
+        await classifyWithNanoMindDaemon('SSN 516-81-3086', { timeoutMs: 300 });
+        expect(m.receivedRequests).toHaveLength(0);
+      } finally {
+        await m.close();
+      }
+    },
+  );
+
+  it.each([['production'], [undefined]])(
+    'isAvailable never probes the override when NODE_ENV=%s',
+    async (nodeEnv) => {
+      const m = await startMockDaemon((_, respond) => respond(200, { ok: true }));
+      try {
+        process.env.MOCK_NANOMIND_URL = m.baseUrl;
+        setNodeEnv(nodeEnv);
+        await isNanoMindDaemonAvailable({ timeoutMs: 100 });
+        expect(m.receivedRequests).toHaveLength(0);
+      } finally {
+        await m.close();
+      }
+    },
+  );
+
+  it.each([['test'], ['development']])(
+    'classify honours the override when NODE_ENV=%s',
+    async (nodeEnv) => {
+      const m = await startMockDaemon((_, respond) => respond(200, makeValidResponse()));
+      try {
+        process.env.MOCK_NANOMIND_URL = m.baseUrl;
+        setNodeEnv(nodeEnv);
+        const r = await classifyWithNanoMindDaemon('content');
+        expect(r?.verdict).toBe('CLEAN');
+        expect(m.receivedRequests).toHaveLength(1);
+        expect(m.receivedRequests[0].url).toBe(NANOMIND_INFER_ENDPOINT);
+      } finally {
+        await m.close();
+      }
+    },
+  );
+});
+
 describe('mapInferResponseToClassifierResult (unit)', () => {
   it('promotes to VIOLATION above the threshold', () => {
     const r = mapInferResponseToClassifierResult(

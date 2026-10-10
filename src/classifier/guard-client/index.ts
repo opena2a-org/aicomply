@@ -15,9 +15,10 @@
  *     falls back to regex-only.
  *
  * The default socket path is `/tmp/nanomind-guard.sock`, which the
- * real Guard binary will bind once Phase 2b training completes. For
- * tests and local development the path can be overridden via the
- * `MOCK_GUARD_SOCKET` env var or the `socketPath` constructor option.
+ * real Guard binary will bind once Phase 2b training completes. The
+ * path can be overridden via the `socketPath` constructor option, or
+ * for tests and local development via the `MOCK_GUARD_SOCKET` env var,
+ * which is honoured only when NODE_ENV is `test` or `development`.
  *
  * The real Guard binary is intentionally NOT shipped with v1.0 - this
  * is a stub-with-real-IPC, not a stub-with-fake-classification. Until
@@ -29,6 +30,7 @@ import { existsSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import type { ClassifierResult, Violation } from '../../types';
 import type { GuardClientOptions, GuardRequest, GuardResponse } from './types';
+import { readTestOverride } from './test-overrides';
 
 const DEFAULT_SOCKET_PATH = '/tmp/nanomind-guard.sock';
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -39,7 +41,7 @@ export class GuardClient {
 
   constructor(options: GuardClientOptions = {}) {
     this.socketPath =
-      options.socketPath ?? process.env.MOCK_GUARD_SOCKET ?? DEFAULT_SOCKET_PATH;
+      options.socketPath ?? readTestOverride('MOCK_GUARD_SOCKET') ?? DEFAULT_SOCKET_PATH;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
