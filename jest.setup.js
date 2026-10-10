@@ -1,3 +1,8 @@
+// The MOCK_* overrides are honoured only when NODE_ENV is `test` or
+// `development`. Jest sets NODE_ENV=test only when it is unset, so a shell
+// that exports NODE_ENV=production would switch the pin below off. Force it.
+process.env.NODE_ENV = 'test';
+
 // Force the nanomind adapter to a known-bad URL so tests never accidentally
 // hit a real local nanomind-daemon if a developer happens to be running one.
 // Tests that want adapter success spin up their own mock server and pass its

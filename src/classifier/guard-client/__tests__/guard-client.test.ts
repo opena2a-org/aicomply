@@ -9,10 +9,11 @@
  *   - Malformed JSON / wrong shape → classify=null (silent fallback).
  *   - Read timeout (server accepts but never replies) → classify=null.
  *
- * Design constraint (2026-05-28): Guard stays a stub until
- * Phase 2b training ships, but the IPC layer is fully wired and
- * testable so the day the real binary lands all that's needed is a
- * deployed socket - no code change.
+ * Design constraint: the Guard socket binary is not shipped, so in a
+ * real install GuardClient is an IPC stub that returns null when the
+ * socket is absent. The IPC layer is still fully wired and testable,
+ * so a deployed socket is all a real Guard binary would need - no
+ * code change.
  */
 
 import { createServer, Socket } from 'node:net';

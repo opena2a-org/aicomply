@@ -150,3 +150,31 @@ def test_explicit_base_url_wins_over_mock_url(monkeypatch):
     monkeypatch.setenv("NODE_ENV", "test")
     opts = NanoMindAdapterOptions(base_url="http://127.0.0.1:47201")
     assert _resolve_base_url(opts) == "http://127.0.0.1:47201"
+
+
+# The address a developer's own nanomind-daemon listens on. conftest.py keeps
+# every test away from it, so fixture content never reaches a real daemon.
+_LOCAL_DAEMON_URL = "http://127.0.0.1:47200"
+
+
+def test_tests_without_base_url_never_reach_a_local_daemon():
+    from aicomply.classifier.guard_client.nanomind_adapter import (
+        NanoMindAdapterOptions,
+        _resolve_base_url,
+    )
+
+    assert _resolve_base_url(NanoMindAdapterOptions()) != _LOCAL_DAEMON_URL
+
+
+@pytest.mark.parametrize("node_env", ["production", None, "staging"])
+def test_tests_outside_test_mode_never_reach_a_local_daemon(monkeypatch, node_env):
+    from aicomply.classifier.guard_client.nanomind_adapter import (
+        NanoMindAdapterOptions,
+        _resolve_base_url,
+    )
+
+    if node_env is None:
+        monkeypatch.delenv("NODE_ENV", raising=False)
+    else:
+        monkeypatch.setenv("NODE_ENV", node_env)
+    assert _resolve_base_url(NanoMindAdapterOptions()) != _LOCAL_DAEMON_URL

@@ -356,7 +356,7 @@ describe('MOCK_NANOMIND_URL is a test-only override', () => {
     else process.env.NODE_ENV = value;
   }
 
-  it.each([['production'], [undefined]])(
+  it.each([['production'], [undefined], ['staging']])(
     'classify never sends content to the override when NODE_ENV=%s',
     async (nodeEnv) => {
       const m = await startMockDaemon((_, respond) => respond(200, makeValidResponse()));
@@ -371,7 +371,7 @@ describe('MOCK_NANOMIND_URL is a test-only override', () => {
     },
   );
 
-  it.each([['production'], [undefined]])(
+  it.each([['production'], [undefined], ['staging']])(
     'isAvailable never probes the override when NODE_ENV=%s',
     async (nodeEnv) => {
       const m = await startMockDaemon((_, respond) => respond(200, { ok: true }));

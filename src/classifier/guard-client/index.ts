@@ -14,9 +14,10 @@
  *     closed (false / null) so the dual-layer classifier silently
  *     falls back to regex-only.
  *
- * The default socket path is `/tmp/nanomind-guard.sock`, which the
- * real Guard binary will bind once Phase 2b training completes. The
- * path can be overridden via the `socketPath` constructor option, or
+ * The default socket path is `/tmp/nanomind-guard.sock`. No Guard
+ * socket binary is shipped, so nothing binds that path today and
+ * GuardClient is an IPC stub that returns null. The path can be
+ * overridden via the `socketPath` constructor option, or
  * for tests and local development via the `MOCK_GUARD_SOCKET` env var,
  * which is honoured only when NODE_ENV is `test` or `development`.
  *
