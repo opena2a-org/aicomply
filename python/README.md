@@ -11,8 +11,10 @@ intra-token whitespace, and bounded Base64 / URL-encoded payloads — by normali
 the input before matching.
 
 This is the Python port of [`@opena2a/aicomply`](https://www.npmjs.com/package/@opena2a/aicomply).
-It reproduces the TypeScript detection baseline against the same shared corpus
-(`bench/corpus`), so verdicts agree across languages.
+It loads the same pattern pack as the TypeScript package (`aicomply.PACK_VERSION`
+and `aicomply.PACK_SHA256` identify it) and reproduces the TypeScript output case by
+case on the shared conformance suite (`pack/conformance`), so findings agree across
+languages.
 
 ## Install
 

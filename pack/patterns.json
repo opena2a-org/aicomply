@@ -1,0 +1,232 @@
+{
+  "schemaVersion": 1,
+  "packVersion": "1.0.0",
+  "referenceForms": [
+    {
+      "id": "env-dotted-accessor",
+      "regex": "^(?:globalThis\\.)?(?:process\\.env|import\\.meta\\.env|Deno\\.env)\\.[A-Za-z_][A-Za-z0-9_]*$",
+      "note": "process.env.X, import.meta.env.VITE_X, Deno.env.X"
+    },
+    {
+      "id": "env-bracket-accessor",
+      "regex": "^(?:globalThis\\.)?(?:process\\.env|import\\.meta\\.env|Deno\\.env|os\\.environ|ENV)\\s*\\[\\s*['\"][A-Za-z_][A-Za-z0-9_]*['\"]\\s*\\]$",
+      "note": "process.env['X'], os.environ[\"X\"]"
+    },
+    {
+      "id": "env-getter-call",
+      "regex": "^(?:os\\.environ\\.get|os\\.getenv|System\\.getenv|Deno\\.env\\.get|std::env::var)\\s*\\(\\s*['\"][A-Za-z_][A-Za-z0-9_]*['\"]\\s*\\)$",
+      "note": "os.environ.get('X'), os.getenv('X'), System.getenv(\"X\")"
+    },
+    {
+      "id": "env-interpolation",
+      "regex": "^\\$\\{?(?:env:)?[A-Za-z_][A-Za-z0-9_]*\\}?$",
+      "note": "$X, ${X}, ${env:X}: the form opena2a protect writes into .mcp.json and .env-consuming config"
+    }
+  ],
+  "patterns": [
+    {
+      "id": "ssn",
+      "type": "SSN",
+      "regex": "\\b(\\d{3}-\\d{2}-\\d{4})\\b",
+      "flags": "",
+      "confidence": 0.95,
+      "validator": "ssn",
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "Validator rejects area 000, 666 and 900-999, group 00 and serial 0000."
+    },
+    {
+      "id": "pan",
+      "type": "PAN",
+      "regex": "\\b(\\d[\\d -]{11,22}\\d)\\b",
+      "flags": "",
+      "confidence": 0.9,
+      "validator": "pan",
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "13-19 digits, optionally separated by spaces or dashes. Validator checks length, Luhn and a known IIN prefix."
+    },
+    {
+      "id": "cui-marking",
+      "type": "CUI",
+      "regex": "\\b(CUI//SP-[A-Z-]+|CONTROLLED\\s+UNCLASSIFIED\\s+INFORMATION|FOR\\s+OFFICIAL\\s+USE\\s+ONLY|CUI//[A-Z-]+)\\b",
+      "flags": "i",
+      "confidence": 0.99,
+      "validator": null,
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "Controlled Unclassified Information banner markings."
+    },
+    {
+      "id": "aws-access-key-id",
+      "type": "CREDENTIAL",
+      "regex": "\\b(AKIA[0-9A-Z]{16})\\b",
+      "flags": "",
+      "confidence": 0.98,
+      "validator": null,
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "AWS access key id."
+    },
+    {
+      "id": "aws-secret-access-key",
+      "type": "CREDENTIAL",
+      "regex": "(?:aws[_-]?)?secret[_-]?access[_-]?key[\"']?\\s*[:=]\\s*['\"]?([A-Za-z0-9/+]{40})['\"]?",
+      "flags": "i",
+      "confidence": 0.9,
+      "validator": null,
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "The secret is a 40-char base64 string with no distinctive prefix, so matching it bare would flag every 40-char hash or id. It is matched only in an aws_secret_access_key assignment, which pairs with the AKIA rule so a leaked credentials block reports both."
+    },
+    {
+      "id": "anthropic-api-key",
+      "type": "CREDENTIAL",
+      "regex": "(sk-ant-api\\d{2}-[A-Za-z0-9_-]{20,})",
+      "flags": "",
+      "confidence": 0.98,
+      "validator": null,
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "Provider keys appear bare in tool output and transcripts, not only in key= assignments. The sk-ant-api prefix is distinctive on its own, so there is no leading word boundary: a key survives an adjacent word char such as a prepended underscore."
+    },
+    {
+      "id": "openai-project-key",
+      "type": "CREDENTIAL",
+      "regex": "(sk-proj-[A-Za-z0-9_-]{20,})",
+      "flags": "",
+      "confidence": 0.98,
+      "validator": null,
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "OpenAI project-scoped key. The class admits - and _ because real project keys carry those separators."
+    },
+    {
+      "id": "openrouter-key",
+      "type": "CREDENTIAL",
+      "regex": "(sk-or-v1-[A-Za-z0-9]{48,})",
+      "flags": "",
+      "confidence": 0.98,
+      "validator": null,
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "OpenRouter key."
+    },
+    {
+      "id": "openai-legacy-key",
+      "type": "CREDENTIAL",
+      "regex": "\\b(sk-[A-Za-z0-9]{48,})",
+      "flags": "",
+      "confidence": 0.85,
+      "validator": null,
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "Broadest provider rule, so the lowest provider confidence. It keeps the leading word boundary to suppress English-word false positives (risk-, disk-, task- followed by a long token). The early - in sk-ant-, sk-proj- and sk-or-v1- means those keys are caught by their specific rules, never this one."
+    },
+    {
+      "id": "github-pat-classic",
+      "type": "CREDENTIAL",
+      "regex": "\\b(ghp_[A-Za-z0-9]{36})\\b",
+      "flags": "",
+      "confidence": 0.98,
+      "validator": null,
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "GitHub personal access token (classic)."
+    },
+    {
+      "id": "github-pat-fine-grained",
+      "type": "CREDENTIAL",
+      "regex": "\\b(github_pat_[A-Za-z0-9_]{82})\\b",
+      "flags": "",
+      "confidence": 0.98,
+      "validator": null,
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "GitHub fine-grained token."
+    },
+    {
+      "id": "bearer-token",
+      "type": "CREDENTIAL",
+      "regex": "Bearer\\s+([A-Za-z0-9._~+/=-]{20,})",
+      "flags": "",
+      "confidence": 0.85,
+      "validator": null,
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "Bearer token in a header-like context."
+    },
+    {
+      "id": "generic-key-assignment",
+      "type": "CREDENTIAL",
+      "regex": "(?:api[_-]?key|secret[_-]?key|access[_-]?token)\\s*[:=]\\s*['\"]?([A-Za-z0-9._~+/-]{16,}={0,2})['\"]?",
+      "flags": "i",
+      "confidence": 0.8,
+      "validator": "notEmptyAssignmentTarget",
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "api_key=, secret_key=, access_token= assignments. = is admitted only as trailing base64 padding: a = followed by more characters is a second assignment. The separator keeps \\s* so a value on the line below its key (YAML block style) still reports; the validator rejects the case where the captured value is the next line's empty KEY=."
+    },
+    {
+      "id": "iban",
+      "type": "IBAN",
+      "regex": "\\b([A-Z]{2}\\d{2}[\\s]?[\\dA-Z]{4}[\\s]?(?:[\\dA-Z]{4}[\\s]?){1,7}[\\dA-Z]{1,4})\\b",
+      "flags": "",
+      "confidence": 0.85,
+      "validator": "iban",
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "Country code, two check digits, up to 30 alphanumerics. Validator checks length and the ISO 13616 mod-97 checksum."
+    },
+    {
+      "id": "passport",
+      "type": "PASSPORT",
+      "regex": "(?:passport|travel\\s+document)[:\\s#-]*\\b([A-Z]{1,2}\\d{6,9})\\b",
+      "flags": "i",
+      "confidence": 0.75,
+      "validator": null,
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "One or two letters and 6-9 digits after a passport or travel document keyword."
+    },
+    {
+      "id": "mrn",
+      "type": "MRN",
+      "regex": "\\bMRN[:\\s#-]*([A-Z0-9]{6,12})\\b",
+      "flags": "i",
+      "confidence": 0.9,
+      "validator": "containsDigit",
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "Medical record number: 6-12 alphanumerics after MRN. The validator requires a digit, which suppresses prose mentions (MRN system, MRN audit logs)."
+    },
+    {
+      "id": "npi",
+      "type": "NPI",
+      "regex": "\\bNPI[:\\s#-]*(\\d{10})\\b",
+      "flags": "i",
+      "confidence": 0.85,
+      "validator": "npi",
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "National Provider Identifier. Validator runs Luhn over the 80840 prefix plus the 10 digits."
+    }
+  ]
+}

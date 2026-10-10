@@ -104,7 +104,7 @@ Drop it into your agent's tool-result handler, your message-egress wrapper, or a
 | Credentials| AWS keys, GitHub tokens, Bearer tokens, generic `api_key=` |
 | Government | CUI, FOUO, CONTROLLED markings                                 |
 
-Pattern source lives at [`src/classifier/regex/patterns.ts`](https://github.com/opena2a-org/aicomply/blob/main/src/classifier/regex/patterns.ts) - not secret, designed to be reviewed and tuned for your context.
+Pattern source lives at [`pack/patterns.json`](https://github.com/opena2a-org/aicomply/blob/main/pack/patterns.json), the one pattern pack the TypeScript and Python packages both load (`PACK_VERSION` and `PACK_SHA256` say which one you have) - not secret, designed to be reviewed and tuned for your context. Each runtime must reproduce every case in [`pack/conformance/`](./pack/conformance) exactly: `npm run conformance` and `python python/bench/conformance.py`.
 
 ### Semantic Guard layer (preview, when nanomind-daemon is running)
 

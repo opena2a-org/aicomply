@@ -1,0 +1,5 @@
+# The pattern pack is identified by the SHA-256 of its exact bytes, and the
+# Python package carries a byte-identical copy. Line-ending conversion on
+# checkout would change both hashes, so these files are never normalized.
+pack/patterns.json -text
+python/src/aicomply/pack/patterns.json -text

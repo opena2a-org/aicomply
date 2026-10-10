@@ -59,6 +59,7 @@ export type {
 } from './arp';
 export { scanPatterns, luhnCheck } from './classifier/regex/patterns';
 export type { PatternMatch, PatternType } from './classifier/regex/patterns';
+export { PACK_VERSION, PACK_SHA256 } from './classifier/regex/pack';
 
 import { classifyDualLayer } from './classifier/dual-layer';
 import { RegistryIntelligenceCache } from './registry';

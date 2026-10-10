@@ -17,6 +17,8 @@ python/tests/test_normalize.py
 
 # Adversarial accuracy corpus + its generator: intentionally evasion-shaped inputs
 bench/
+# Conformance cases are seeded from that corpus, so they carry the same samples
+pack/conformance/
 
 # Docs demonstrate the invisible-unicode / homoglyph attack with literal examples
 # (e.g. the README audit-trail example normalizes full-width digits to ASCII)

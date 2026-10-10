@@ -251,7 +251,7 @@ export async function classifyDualLayer(
  * the normalized view - avoids double-reporting the same SSN that's
  * detected both raw and via the compact-form pass.
  */
-function scanAllViews(norm: ReturnType<typeof normalize>): ClassifierResult {
+export function scanAllViews(norm: ReturnType<typeof normalize>): ClassifierResult {
   const normalizedScan = classifyWithRegex(norm.normalizedContent, {
     view: 'normalized',
     offsetMap: norm.offsetMap,

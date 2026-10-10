@@ -1,0 +1,68 @@
+#!/usr/bin/env node
+// Pattern pack conformance runner for the TypeScript runtime.
+//
+//   node scripts/conformance.mjs           run every case in pack/conformance,
+//                                          write conformance/typescript.json,
+//                                          exit 1 unless passed == cases
+//   node scripts/conformance.mjs --seed    regenerate the corpus-derived case
+//                                          files (pack/conformance/<class>.jsonl)
+//                                          from bench/corpus, with expectations
+//                                          taken from this runtime
+//
+// The record carries packSha256 so a release can refuse to publish when the
+// record was produced against a different pack than the one it embeds.
+// regressions.jsonl is written by hand and is never touched by --seed.
+//
+// Requires a build: npm run build.
+
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const CASES_DIR = resolve(ROOT, 'pack/conformance');
+const CORPUS_DIR = resolve(ROOT, 'bench/corpus');
+const RECORD_PATH = resolve(ROOT, 'conformance/typescript.json');
+
+const require = createRequire(import.meta.url);
+const { conformanceOutcome, runConformance } = require(resolve(ROOT, 'dist/conformance.js'));
+
+if (process.argv.includes('--seed')) {
+  for (const file of readdirSync(CORPUS_DIR).filter((f) => f.endsWith('.jsonl')).sort()) {
+    const klass = file.replace(/\.jsonl$/, '');
+    const records = readFileSync(resolve(CORPUS_DIR, file), 'utf8')
+      .split('\n')
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l));
+    const lines = records.map((rec, i) =>
+      JSON.stringify({
+        id: `${klass}-${String(i + 1).padStart(4, '0')}`,
+        origin: `bench/corpus/${file}:${i + 1}`,
+        text: rec.text,
+        expected: conformanceOutcome(rec.text),
+      }),
+    );
+    writeFileSync(resolve(CASES_DIR, file), lines.join('\n') + '\n');
+    console.log(`seeded pack/conformance/${file}: ${lines.length} cases`);
+  }
+  process.exit(0);
+}
+
+const record = runConformance(CASES_DIR);
+mkdirSync(dirname(RECORD_PATH), { recursive: true });
+writeFileSync(RECORD_PATH, JSON.stringify(record, null, 2) + '\n');
+
+console.log(`runtime:    ${record.runtime}`);
+console.log(`pack:       ${record.packVersion} sha256 ${record.packSha256}`);
+console.log(`cases:      ${record.cases}`);
+console.log(`passed:     ${record.passed}`);
+for (const f of record.failures.slice(0, 20)) {
+  console.log(`FAIL ${f.id}`);
+  console.log(`  expected ${JSON.stringify(f.expected)}`);
+  console.log(`  actual   ${JSON.stringify(f.actual)}`);
+}
+if (record.failures.length > 20) console.log(`... ${record.failures.length - 20} more`);
+console.log(`record:     conformance/typescript.json`);
+
+process.exit(record.cases > 0 && record.passed === record.cases ? 0 : 1);
