@@ -38,18 +38,23 @@ def _metadata(version: str) -> bytes:
     return f"Metadata-Version: 2.4\nName: aicomply\nVersion: {version}\n".encode()
 
 
-def _wheel(dist: Path, version: str = VERSION, pack: bytes | None = PACK_BYTES) -> str:
+def _wheel(
+    dist: Path, version: str = VERSION, pack: bytes | None = PACK_BYTES, metadata: bool = True
+) -> str:
     path = dist / f"aicomply-{version}-py3-none-any.whl"
     with zipfile.ZipFile(path, "w") as wheel:
-        wheel.writestr(f"aicomply-{version}.dist-info/METADATA", _metadata(version))
+        if metadata:
+            wheel.writestr(f"aicomply-{version}.dist-info/METADATA", _metadata(version))
         if pack is not None:
             wheel.writestr("aicomply/pack/patterns.json", pack)
     return path.name
 
 
-def _sdist(dist: Path, version: str = VERSION, pack: bytes | None = PACK_BYTES) -> str:
+def _sdist(
+    dist: Path, version: str = VERSION, pack: bytes | None = PACK_BYTES, metadata: bool = True
+) -> str:
     path = dist / f"aicomply-{version}.tar.gz"
-    members = {f"aicomply-{version}/PKG-INFO": _metadata(version)}
+    members = {f"aicomply-{version}/PKG-INFO": _metadata(version)} if metadata else {}
     if pack is not None:
         members[f"aicomply-{version}/src/aicomply/pack/patterns.json"] = pack
     with tarfile.open(path, "w:gz") as sdist:
@@ -151,6 +156,43 @@ def test_refuses_when_there_is_no_record(dist):
     assert run.returncode == 1
     assert "REFUSED record: " in run.stderr
     assert "python.json does not exist" in run.stderr
+
+
+@pytest.mark.parametrize("record", [None, "[]"], ids=["no-record", "not-an-object"])
+def test_reports_what_the_artifacts_lack_beside_a_record_it_cannot_read(dist, record):
+    # With no record to compare against there is no runtimeVersion or packSha256
+    # reason, but an empty or incomplete dist/ is still a reason of its own.
+    run = _gate(dist, record)
+    assert run.returncode == 1
+    refused = [line for line in run.stderr.splitlines() if line.startswith("REFUSED ")]
+    assert [line.split(":")[0] for line in refused] == ["REFUSED record", "REFUSED artifacts"]
+
+    wheel = _wheel(dist, pack=None)
+    sdist = _sdist(dist, metadata=False)
+    run = _gate(dist, record)
+    assert run.returncode == 1
+    refused = [line for line in run.stderr.splitlines() if line.startswith("REFUSED ")]
+    assert refused[0].startswith("REFUSED record: ")
+    assert sorted(refused[1:]) == sorted(
+        [
+            f"REFUSED {wheel}: carries no pattern pack",
+            f"REFUSED {sdist}: carries no version metadata",
+        ]
+    )
+
+
+@pytest.mark.parametrize("artifact", ["wheel", "sdist"])
+def test_refuses_an_artifact_that_carries_no_version_metadata(dist, artifact):
+    # A record without runtimeVersion would match an artifact without a version
+    # if the gate compared the two, so only the missing metadata refuses here.
+    name = _wheel(dist, metadata=False) if artifact == "wheel" else _sdist(dist, metadata=False)
+    record = {k: v for k, v in _RECORD.items() if k != "runtimeVersion"}
+    run = _gate(dist, record)
+    assert run.returncode == 1
+    refused = [line for line in run.stderr.splitlines() if line.startswith("REFUSED ")]
+    assert refused == [f"REFUSED {name}: carries no version metadata"]
+    assert f"artifact:   {name} version missing" in run.stdout
+    assert "release gate: passed" not in run.stdout
 
 
 @pytest.mark.parametrize(

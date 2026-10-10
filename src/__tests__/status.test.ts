@@ -63,7 +63,9 @@ describe('STATUS.md', () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { keywords: string[] };
     const agentKeywords = pkg.keywords.filter((keyword) => AGENT_KEYWORD.test(keyword));
     expect(agentKeywords).not.toEqual([]);
-    expect(body).toContain('`keywords`');
+    // The keyword clause as a whole, the way the field clause is pinned below:
+    // `keywords` and the keyword names alone pass with `a2a` dropped from it.
+    expect(body).toContain('an entry in `keywords` that contains `agent` or `a2a`');
     for (const keyword of agentKeywords) expect(body).toContain(`\`${keyword}\``);
   });
 
