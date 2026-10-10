@@ -70,8 +70,10 @@ describe('STATUS.md', () => {
   it('has neither agent field in package.json, so the keyword is the only AIM-001 trigger', () => {
     const body = section(/agent identity/i);
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as Record<string, unknown>;
+    // The field clause as a whole: the keyword clause of the same sentence also
+    // names `a2a`, so a check for each field name alone passes without it.
+    expect(body).toContain('an `agentCard` or `a2a` field');
     for (const field of AGENT_FIELDS) {
-      expect(body).toContain(`\`${field}\``);
       expect({ field, present: field in pkg }).toEqual({ field, present: false });
     }
   });
