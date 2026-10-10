@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .classifier.dual_layer import _scan_all_views
 from .classifier.regex.pack import PACK_SHA256, PACK_VERSION
 from .normalize import normalize
@@ -90,6 +91,7 @@ def run_conformance(directory: Path) -> dict[str, Any]:
             failures.append({"id": case["id"], "expected": case["expected"], "actual": actual})
     return {
         "runtime": "python",
+        "runtimeVersion": __version__,
         "packVersion": PACK_VERSION,
         "packSha256": PACK_SHA256,
         "cases": len(cases),

@@ -90,6 +90,17 @@ export interface ComplyOptions {
   registryCache?: RegistryIntelligenceCache;
 }
 
+/** A processing layer that ran on the content. */
+export type ComplyLayer = 'normalize' | 'regex' | 'guard';
+
+/** The pattern pack the regex layer ran, as exported by PACK_VERSION and PACK_SHA256. */
+export interface PackIdentity {
+  /** The pack's `packVersion`. */
+  version: string;
+  /** SHA-256 (hex) of the pack file's exact bytes. */
+  sha256: string;
+}
+
 export interface ComplyResult {
   verdict: Verdict;
   violations: Violation[];
@@ -132,4 +143,17 @@ export interface ComplyResult {
    * Empty when the input required no canonicalization.
    */
   normalizations?: NormalizationStep[];
+  /**
+   * The pattern pack the regex layer ran. Always set by comply(), including
+   * on DENY and on the empty-content short-circuit.
+   */
+  pack?: PackIdentity;
+  /**
+   * The layers that ran on the content, in order. 'guard' is listed only
+   * when a Guard classification was accepted into the result (the daemon
+   * answered, or a supplied Guard result passed signature verification), so
+   * a regex-only fallback or a rejected signature never claims it. Empty when
+   * there was no content to classify. Always set by comply().
+   */
+  layers?: ComplyLayer[];
 }

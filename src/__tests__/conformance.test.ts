@@ -1,10 +1,13 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { conformanceOutcome, loadConformanceCases, runConformance } from '../conformance';
 import { PACK_SHA256, PACK_VERSION } from '../classifier/regex/pack';
 
 const CASES_DIR = join(__dirname, '..', '..', 'pack', 'conformance');
+const PACKAGE_VERSION = (
+  JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8')) as { version: string }
+).version;
 
 describe('pattern pack conformance suite', () => {
   // Per-case exact equality: every stored outcome, not an aggregate rate.
@@ -17,6 +20,7 @@ describe('pattern pack conformance suite', () => {
 
   it('records the pack it ran against', () => {
     expect(record.runtime).toBe('typescript');
+    expect(record.runtimeVersion).toBe(PACKAGE_VERSION);
     expect(record.packVersion).toBe(PACK_VERSION);
     expect(record.packSha256).toBe(PACK_SHA256);
   });

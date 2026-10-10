@@ -12,6 +12,8 @@ from typing import Literal
 
 Verdict = Literal["CLEAN", "VIOLATION", "DENY"]
 ClassifierName = Literal["regex", "guard"]
+# A processing layer that ran on the content.
+ComplyLayer = Literal["normalize", "regex", "guard"]
 # 'normalized' is the canonical view; the others mirror DecodedExtraction.source.
 ViolationView = Literal["normalized", "compact", "decoded-base64", "decoded-url"]
 
@@ -70,6 +72,17 @@ class NormalizationStep:
 
 
 @dataclass
+class PackIdentity:
+    """The pattern pack the regex layer ran, as exported by PACK_VERSION and PACK_SHA256."""
+
+    version: str
+    sha256: str
+
+    def to_dict(self) -> dict:
+        return {"version": self.version, "sha256": self.sha256}
+
+
+@dataclass
 class ComplyResult:
     """Result of a ``comply()`` call: the verdict plus structured findings.
 
@@ -79,6 +92,12 @@ class ComplyResult:
     log or serialize a ``ComplyResult`` wholesale, those two fields carry the
     unmasked content. Log ``violations`` (or ``to_dict()`` selectively), not the
     whole result, when the input may contain secrets.
+
+    ``pack`` names the pattern pack the regex layer ran. ``layers`` lists the
+    layers that ran, in order; ``"guard"`` appears only when a Guard
+    classification was accepted into ``classifier_results``, so a regex-only
+    fallback never claims it, and the list is empty when there was no content.
+    ``comply()`` always sets both.
     """
 
     verdict: Verdict
@@ -87,6 +106,8 @@ class ComplyResult:
     original_content: str | None = None
     normalized_content: str | None = None
     normalizations: list[NormalizationStep] = field(default_factory=list)
+    pack: PackIdentity | None = None
+    layers: list[ComplyLayer] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         cr: dict = {"regex": self.classifier_results["regex"].to_dict()}
@@ -102,4 +123,7 @@ class ComplyResult:
             d["originalContent"] = self.original_content
         if self.normalized_content is not None:
             d["normalizedContent"] = self.normalized_content
+        if self.pack is not None:
+            d["pack"] = self.pack.to_dict()
+        d["layers"] = list(self.layers)
         return d

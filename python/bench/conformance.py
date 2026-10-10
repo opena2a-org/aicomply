@@ -32,7 +32,7 @@ def main() -> int:
     RECORD_PATH.parent.mkdir(parents=True, exist_ok=True)
     RECORD_PATH.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
 
-    print(f"runtime:    {record['runtime']}")
+    print(f"runtime:    {record['runtime']} {record['runtimeVersion']}")
     print(f"pack:       {record['packVersion']} sha256 {record['packSha256']}")
     print(f"cases:      {record['cases']}")
     print(f"passed:     {record['passed']}")

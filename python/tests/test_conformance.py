@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+import aicomply
 from aicomply.classifier.regex.pack import PACK_SHA256, PACK_VERSION
 from aicomply.conformance import conformance_outcome, load_conformance_cases, run_conformance
 
@@ -29,6 +30,7 @@ def test_passes_every_case_against_the_loaded_pack():
 
 def test_records_the_pack_it_ran_against():
     assert _RECORD["runtime"] == "python"
+    assert _RECORD["runtimeVersion"] == aicomply.__version__
     assert _RECORD["packVersion"] == PACK_VERSION
     assert _RECORD["packSha256"] == PACK_SHA256
 
