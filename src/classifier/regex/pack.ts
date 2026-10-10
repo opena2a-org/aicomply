@@ -54,9 +54,12 @@ export interface CompiledPack {
 /**
  * Return the first construct outside the portable regex subset, or null.
  *
- * The subset is what JavaScript, Python `re` and RE2 (Go) all compile with the
- * same meaning: no lookaround, no backreferences, no named groups, and no
- * inline modifier groups (case-insensitivity is the entry's `flags` field).
+ * The subset is syntax that JavaScript, Python `re` and RE2 (Go) all accept:
+ * no lookaround, no backreferences, no named groups, and no inline modifier
+ * groups (case-insensitivity is the entry's `flags` field). Accepting the
+ * syntax does not make the engines agree on every input: `\s` matches Unicode
+ * separators such as U+2028 and U+1680 here but not under Python's `re.ASCII`
+ * or in RE2, so the conformance suite is what asserts agreement, case by case.
  */
 export function nonPortableConstruct(source: string): string | null {
   let inClass = false;

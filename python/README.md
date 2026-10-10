@@ -13,8 +13,11 @@ the input before matching.
 This is the Python port of [`@opena2a/aicomply`](https://www.npmjs.com/package/@opena2a/aicomply).
 It loads the same pattern pack as the TypeScript package (`aicomply.PACK_VERSION`
 and `aicomply.PACK_SHA256` identify it) and reproduces the TypeScript output case by
-case on the shared conformance suite (`pack/conformance`), so findings agree across
-languages.
+case on every case of the shared conformance suite (`pack/conformance`). One known
+gap lies outside that suite: a value set off from its keyword by a Unicode separator
+such as U+2028 (line separator) or U+1680 (Ogham space mark) is reported by the
+TypeScript package and not by this one, because JavaScript `\s` matches those
+separators and Python's `re.ASCII` does not.
 
 ## Install
 
