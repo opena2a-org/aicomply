@@ -472,13 +472,28 @@ describe('npm publish lifecycle', () => {
   }
 
   /**
+   * The names npm accepts for `npm ci` and `npm install`: `clean-install`,
+   * `install-clean`, `ic` and the misspelling `isntall-clean` for the one, and
+   * `add`, `i`, the shortened spellings `in` to `instal` and the misspellings
+   * `isnt` to `isntall` for the other. `install-test`, `install-ci-test` and
+   * their aliases are not here: they go on to run the test script.
+   */
+  const INSTALL_COMMANDS = [
+    'ci', 'clean-install', 'install-clean', 'ic', 'isntall-clean',
+    'install', 'add', 'i', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall',
+  ];
+
+  /**
    * `--ignore-scripts` as a flag of an install, which then runs no script and
    * so starts no other npm command: the setting stops there. `npm run`,
    * `npm test`, `npm exec` and the like still run the script or command they
    * name, and every npm command that starts inherits the setting, so the flag
-   * on any command not listed here counts.
+   * on any command not listed in `INSTALL_COMMANDS` counts.
    */
-  const FLAG_ON_AN_INSTALL = /(\bnpm\s+(?:ci|install|i|add)(?![\w-])[^;&|]*?)\s--ignore-scripts\b/g;
+  const FLAG_ON_AN_INSTALL = new RegExp(
+    String.raw`(\bnpm\s+(?:${INSTALL_COMMANDS.join('|')})(?![\w-])[^;&|]*?)\s--ignore-scripts\b`,
+    'g',
+  );
 
   /**
    * What would switch prepublishOnly off for the workflow's publish. npm skips
@@ -505,6 +520,11 @@ describe('npm publish lifecycle', () => {
   it.each([
     ['a hardened install step', ['      - run: npm ci --ignore-scripts', PUBLISH], null],
     ['a hardened npm install step', ['      - run: npm install --ignore-scripts', PUBLISH], null],
+    ['a hardened npm clean-install step', ['      - run: npm clean-install --ignore-scripts', PUBLISH], null],
+    ['a hardened npm install-clean step', ['      - run: npm install-clean --ignore-scripts', PUBLISH], null],
+    ['a hardened npm ic step', ['      - run: npm ic --ignore-scripts', PUBLISH], null],
+    ['a hardened npm isntall step', ['      - run: npm isntall --ignore-scripts', PUBLISH], null],
+    ['a hardened npm instal step', ['      - run: npm instal --ignore-scripts', PUBLISH], null],
     ['a hardened install chained before it', ['      - run: npm ci --ignore-scripts && npm publish --provenance --access public'], null],
     ['a comment that mentions the flag', ['      # never npm publish --ignore-scripts', PUBLISH], null],
     ['an .npmrc that leaves scripts on', [PUBLISH], 'ignore-scripts=false\n; ignore-scripts=true\n'],
@@ -523,6 +543,9 @@ describe('npm publish lifecycle', () => {
     ['the flag on npm exec', ['      - run: npm exec --ignore-scripts -- publish-release'], null],
     ['the flag on npm x', ['      - run: npm x --ignore-scripts publish-release'], null],
     ['the flag on a command that only starts like an install', ['      - run: npm ci-release --ignore-scripts'], null],
+    ['the flag on an install that runs the tests', ['      - run: npm install-test --ignore-scripts'], null],
+    ['the flag on a clean install that runs the tests', ['      - run: npm clean-install-test --ignore-scripts'], null],
+    ['the flag on npm cit', ['      - run: npm cit --ignore-scripts'], null],
     ['a tarball handed to the publish', ['      - run: npm publish ./aicomply-2.2.3.tgz'], null],
     ['a tarball named by a command substitution', ['      - run: npm publish "$(npm pack | tail -1)"'], null],
     ['a tarball named by a variable', ['      - run: npm publish "$TARBALL"'], null],
