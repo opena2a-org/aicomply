@@ -12,7 +12,7 @@ The semantic Guard layer is wired and the NanoMind model has shipped (`nanomind-
 
 ## Agent identity (HackMyAgent AIM-001)
 
-aicomply deliberately carries no agent identity declaration: no `agent-card.json`, `agent.json` or `aim.json` at the repository root, and no `.well-known/agent-card.json`, `.well-known/agent.json` or `.well-known/aim.json`. `npx hackmyagent secure --ci .` reports this as AIM-001 "No agent identity declaration" (MEDIUM, on `package.json`). It is reported on `package.json` because HackMyAgent raises it only for a package whose `keywords` mention `agent` or `a2a` (here `ai-agent`). The finding is an accepted decision, not an open item.
+aicomply deliberately carries no agent identity declaration: no `agent-card.json`, `agent.json` or `aim.json` at the repository root, and no `.well-known/agent-card.json`, `.well-known/agent.json` or `.well-known/aim.json`. `npx hackmyagent secure --ci .` reports this as AIM-001 "No agent identity declaration" (MEDIUM, on `package.json`). It is reported on `package.json` because HackMyAgent raises it for a package whose `package.json` has an `agentCard` or `a2a` field, or an entry in `keywords` that contains `agent` or `a2a`; aicomply has neither field, so here the trigger is the keyword `ai-agent`. The finding is an accepted decision, not an open item.
 
 An identity declaration lets other agents, registries and trust frameworks verify an agent. aicomply is not an agent:
 
