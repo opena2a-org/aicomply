@@ -471,8 +471,14 @@ describe('npm publish lifecycle', () => {
     return targets;
   }
 
-  /** `--ignore-scripts` as a flag of an npm command other than publish, config and set: it stops at that command. */
-  const FLAG_ON_ANOTHER_COMMAND = /(\bnpm\s+(?!publish\b|config\b|c\b|set\b)[a-z][\w-]*[^;&|]*?)\s--ignore-scripts\b/g;
+  /**
+   * `--ignore-scripts` as a flag of an install, which then runs no script and
+   * so starts no other npm command: the setting stops there. `npm run`,
+   * `npm test`, `npm exec` and the like still run the script or command they
+   * name, and every npm command that starts inherits the setting, so the flag
+   * on any command not listed here counts.
+   */
+  const FLAG_ON_AN_INSTALL = /(\bnpm\s+(?:ci|install|i|add)(?![\w-])[^;&|]*?)\s--ignore-scripts\b/g;
 
   /**
    * What would switch prepublishOnly off for the workflow's publish. npm skips
@@ -481,11 +487,11 @@ describe('npm publish lifecycle', () => {
    * `npm_config_ignore_scripts` environment setting, through `npm config set`
    * or `npm set`, and as a line in an .npmrc, the repository's or one a step
    * writes. So every line that mentions it is refused, except where it is the
-   * flag on another command, such as `npm ci --ignore-scripts`.
+   * flag on an install, such as `npm ci --ignore-scripts`.
    */
   function scriptsSwitchedOff(workflow: string, npmrc: string | null): string[] {
     const found = workflowLines(workflow).filter(
-      (l) => publishTargets(l).length > 0 || /ignore[-_]scripts/i.test(l.replace(FLAG_ON_ANOTHER_COMMAND, '$1')),
+      (l) => publishTargets(l).length > 0 || /ignore[-_]scripts/i.test(l.replace(FLAG_ON_AN_INSTALL, '$1')),
     );
     const rc = (npmrc ?? '')
       .split('\n')
@@ -498,6 +504,7 @@ describe('npm publish lifecycle', () => {
 
   it.each([
     ['a hardened install step', ['      - run: npm ci --ignore-scripts', PUBLISH], null],
+    ['a hardened npm install step', ['      - run: npm install --ignore-scripts', PUBLISH], null],
     ['a hardened install chained before it', ['      - run: npm ci --ignore-scripts && npm publish --provenance --access public'], null],
     ['a comment that mentions the flag', ['      # never npm publish --ignore-scripts', PUBLISH], null],
     ['an .npmrc that leaves scripts on', [PUBLISH], 'ignore-scripts=false\n; ignore-scripts=true\n'],
@@ -510,6 +517,12 @@ describe('npm publish lifecycle', () => {
   it.each([
     ['--ignore-scripts on the publish', ['      - run: npm publish --ignore-scripts'], null],
     ['the flag on a publish chained after an install', ['      - run: npm ci && npm publish --ignore-scripts'], null],
+    ['the flag on the npm run that starts the publish', ['      - run: npm run release --ignore-scripts'], null],
+    ['the flag on an npm run-script', ['      - run: npm run-script release --ignore-scripts'], null],
+    ['the flag on npm test', ['      - run: npm ci --ignore-scripts && npm test --ignore-scripts'], null],
+    ['the flag on npm exec', ['      - run: npm exec --ignore-scripts -- publish-release'], null],
+    ['the flag on npm x', ['      - run: npm x --ignore-scripts publish-release'], null],
+    ['the flag on a command that only starts like an install', ['      - run: npm ci-release --ignore-scripts'], null],
     ['a tarball handed to the publish', ['      - run: npm publish ./aicomply-2.2.3.tgz'], null],
     ['a tarball named by a command substitution', ['      - run: npm publish "$(npm pack | tail -1)"'], null],
     ['a tarball named by a variable', ['      - run: npm publish "$TARBALL"'], null],
