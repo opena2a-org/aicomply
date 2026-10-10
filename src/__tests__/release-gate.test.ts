@@ -483,17 +483,38 @@ describe('npm publish lifecycle', () => {
     'install', 'add', 'i', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall',
   ];
 
+  /** `npm` and one of the names in `INSTALL_COMMANDS`. */
+  const AN_INSTALL = new RegExp(String.raw`\bnpm\s+(?:${INSTALL_COMMANDS.join('|')})(?![\w-])`, 'g');
+
   /**
-   * `--ignore-scripts` as a flag of an install, which then runs no script and
-   * so starts no other npm command: the setting stops there. `npm run`,
-   * `npm test`, `npm exec` and the like still run the script or command they
-   * name, and every npm command that starts inherits the setting, so the flag
-   * on any command not listed in `INSTALL_COMMANDS` counts.
+   * `line` without `--ignore-scripts` where it is the flag of an install,
+   * which then runs no script and so starts no other npm command: the setting
+   * stops there. `npm run`, `npm test`, `npm exec` and the like still run the
+   * script or command they name, and every npm command that starts inherits
+   * the setting, so the flag on any command not listed in `INSTALL_COMMANDS`
+   * is left in. Each command between `;`, `&` and `|` is read once, left to
+   * right, so a long line takes time in proportion to its length.
    */
-  const FLAG_ON_AN_INSTALL = new RegExp(
-    String.raw`(\bnpm\s+(?:${INSTALL_COMMANDS.join('|')})(?![\w-])[^;&|]*?)\s--ignore-scripts\b`,
-    'g',
-  );
+  function withoutInstallFlags(line: string): string {
+    return line
+      .split(/([;&|])/)
+      .map((command) => {
+        const flag = /\s--ignore-scripts\b/g;
+        let kept = '';
+        let from = 0;
+        for (const install of command.matchAll(AN_INSTALL)) {
+          if (install.index < from) continue;
+          flag.lastIndex = install.index + install[0].length;
+          const found = flag.exec(command);
+          // No later install in this command has the flag after it either.
+          if (found === null) break;
+          kept += command.slice(from, found.index);
+          from = flag.lastIndex;
+        }
+        return kept + command.slice(from);
+      })
+      .join('');
+  }
 
   /**
    * What would switch prepublishOnly off for the workflow's publish. npm skips
@@ -506,7 +527,7 @@ describe('npm publish lifecycle', () => {
    */
   function scriptsSwitchedOff(workflow: string, npmrc: string | null): string[] {
     const found = workflowLines(workflow).filter(
-      (l) => publishTargets(l).length > 0 || /ignore[-_]scripts/i.test(l.replace(FLAG_ON_AN_INSTALL, '$1')),
+      (l) => publishTargets(l).length > 0 || /ignore[-_]scripts/i.test(withoutInstallFlags(l)),
     );
     const rc = (npmrc ?? '')
       .split('\n')
@@ -563,6 +584,14 @@ describe('npm publish lifecycle', () => {
     ['an .npmrc line', [PUBLISH], 'registry=https://registry.npmjs.org/\nignore-scripts=true\n'],
   ])('refuses a publish with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
+  });
+
+  it('reads a long line of installs in time that grows with its length', () => {
+    const installs = 'npm ci '.repeat(60000);
+    const started = Date.now();
+    expect(scriptsSwitchedOff(`      - run: ${installs}--ignore-scripts`, null)).toEqual([]);
+    expect(scriptsSwitchedOff(`      - run: ${installs}&& npm test --ignore-scripts`, null)).not.toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 
   it('reads the lines YAML folds as the one line the shell gets', () => {
