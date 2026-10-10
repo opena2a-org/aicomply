@@ -2,18 +2,13 @@
 
 [![Status: stable](https://img.shields.io/badge/status-stable-brightgreen)](./STATUS.md)
 
-Inline content classifier for AI agent I/O. Detects PII, credentials, and regulated data before your agent ships it to a cloud LLM, with an optional preview semantic layer that targets prompt-injection and exfiltration patterns.
+> **[OpenA2A](https://github.com/opena2a-org/opena2a)**: [CLI](https://github.com/opena2a-org/opena2a) · [HackMyAgent](https://github.com/opena2a-org/hackmyagent) · [Secretless](https://github.com/opena2a-org/secretless-ai) · [AIM](https://github.com/opena2a-org/agent-identity-management) · [Browser Guard](https://github.com/opena2a-org/AI-BrowserGuard) · [DVAA](https://github.com/opena2a-org/damn-vulnerable-ai-agent)
 
-Two detection layers run in parallel:
+Inline content classifier for AI agent I/O. Detects PII, credentials, and regulated data before your agent ships it to a cloud LLM, with an optional preview semantic layer that targets prompt-injection and exfiltration patterns. Apache 2.0.
 
-- A deterministic **regex layer** with adversarial-mutation handling (NFKC homoglyph folding, zero-width strip, targeted whitespace compaction, bounded Base64/URL decode). Always on, ~sub-ms.
-- An optional **semantic Guard layer (preview)** powered by [NanoMind](https://huggingface.co/opena2a/nanomind-security-classifier). It targets prompt-injection, tool-misuse, data-extraction, and exfiltration patterns the regex layer can't see. The current model has a high benign false-positive rate and is **not yet production-ready** - see [Guard status](#guard-status-preview-not-production-ready). Active only when `@nanomind/daemon` is running locally; aicomply runs regex-only otherwise.
-
-## Why this exists
-
-Every agent that calls a hosted LLM (Anthropic, OpenAI, Bedrock, Vertex, …) copies the conversation - system prompt, tool outputs, retrieved documents, user input - into a third party's logs. If your agent reads a support ticket containing an SSN, that SSN goes to the provider. If your agent reads `.env` to summarize it, your AWS key goes too. Most agent stacks have no inline check between "tool returned content" and "send to model."
-
-`aicomply` is that check. It runs inline, sub-millisecond, with no external calls of its own. You hand it the content; it returns a verdict (`CLEAN` / `VIOLATION` / `DENY`) and structured findings. You decide what to do next - block, redact, log, or pass.
+[![npm version](https://img.shields.io/npm/v/@opena2a/aicomply.svg)](https://www.npmjs.com/package/@opena2a/aicomply)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Tests](https://github.com/opena2a-org/aicomply/actions/workflows/release.yml/badge.svg)](https://github.com/opena2a-org/aicomply/actions/workflows/release.yml)
 
 ## Try it (CLI, no integration code)
 
@@ -31,7 +26,12 @@ echo "My SSN is 123-45-6789, please update the record." | npx @opena2a/aicomply 
   VIOLATION  (stdin)   1 finding
     SSN          123-•••89          confidence 0.95  layer regex
 
-Verdict: VIOLATION  ·  block, redact, or log before this content reaches an LLM.
+  Semantic Guard layer: inactive (preview; no nanomind-daemon on http://127.0.0.1:47200).
+  It targets prompt-injection / exfiltration the regex layer cannot see, but the
+  current model over-flags benign text - preview only, not for production gating.
+  Try it: npm i @nanomind/daemon && npx nanomind-daemon start
+
+Verdict: VIOLATION  ·  1 finding across 1 input. Block, redact, or log before this content reaches an LLM.
 ```
 
 Detected values are masked in output, so the CLI never prints a full secret to your
@@ -44,6 +44,17 @@ git diff --cached | npx @opena2a/aicomply scan -q || echo "sensitive content sta
 ```
 
 The CLI is a try-path. The library API below is the production surface.
+
+## Why this exists
+
+Every agent that calls a hosted LLM (Anthropic, OpenAI, Bedrock, Vertex, …) copies the conversation - system prompt, tool outputs, retrieved documents, user input - into a third party's logs. If your agent reads a support ticket containing an SSN, that SSN goes to the provider. If your agent reads `.env` to summarize it, your AWS key goes too. Most agent stacks have no inline check between "tool returned content" and "send to model."
+
+`aicomply` is that check. It runs inline, sub-millisecond, with no external calls of its own. You hand it the content; it returns a verdict (`CLEAN` / `VIOLATION` / `DENY`) and structured findings. You decide what to do next - block, redact, log, or pass.
+
+Two detection layers run in parallel:
+
+- A deterministic **regex layer** with adversarial-mutation handling (NFKC homoglyph folding, zero-width strip, targeted whitespace compaction, bounded Base64/URL decode). Always on, ~sub-ms.
+- An optional **semantic Guard layer (preview)** powered by [NanoMind](https://huggingface.co/opena2a/nanomind-security-classifier). It targets prompt-injection, tool-misuse, data-extraction, and exfiltration patterns the regex layer can't see. The current model has a high benign false-positive rate and is **not yet production-ready** - see [Guard status](#guard-status-preview-not-production-ready). Active only when `@nanomind/daemon` is running locally; aicomply runs regex-only otherwise.
 
 ## Install
 
