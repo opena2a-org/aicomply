@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import urllib.request
-
 import pytest
 
 from aicomply.classifier.guard_client.nanomind_adapter import NANOMIND_INFER_ENDPOINT
@@ -30,25 +28,16 @@ def test_guard_output_raises_on_pii():
         answer()
 
 
-def test_default_guard_call_goes_to_the_closed_port_from_conftest(monkeypatch):
+def test_default_guard_call_goes_to_the_closed_port_from_conftest(recorded_urls):
     # conftest.py is the one place tests are kept away from a local daemon. The
     # decorators here run the real adapter, and its request goes to conftest's
     # closed port, never to the default 127.0.0.1:47200.
-    real_urlopen = urllib.request.urlopen
-    urls: list[str] = []
-
-    def recording_urlopen(req, *args, **kwargs):
-        urls.append(req.full_url)
-        return real_urlopen(req, *args, **kwargs)
-
-    monkeypatch.setattr(urllib.request, "urlopen", recording_urlopen)
-
     @guard_output()
     def answer() -> str:
         return "All good, order 300843 shipped."
 
     assert answer() == "All good, order 300843 shipped."
-    assert urls == ["http://127.0.0.1:1" + NANOMIND_INFER_ENDPOINT]
+    assert recorded_urls == ["http://127.0.0.1:1" + NANOMIND_INFER_ENDPOINT]
 
 
 def test_guard_output_allows_clean():
