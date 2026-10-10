@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import urllib.request
 from pathlib import Path
 
 import pytest
@@ -43,19 +42,11 @@ def test_layers_on_regex_only_path():
     assert res.layers == ["normalize", "regex"]
 
 
-def test_layers_on_unreachable_daemon_omit_guard(monkeypatch: pytest.MonkeyPatch):
+def test_layers_on_unreachable_daemon_omit_guard(recorded_urls: list[str]):
     # The real adapter runs and its request goes to conftest.py's closed port.
-    real_urlopen = urllib.request.urlopen
-    urls: list[str] = []
-
-    def recording_urlopen(req, *args, **kwargs):
-        urls.append(req.full_url)
-        return real_urlopen(req, *args, **kwargs)
-
-    monkeypatch.setattr(urllib.request, "urlopen", recording_urlopen)
     res = comply("SSN 516-81-3086")
     assert res.layers == ["normalize", "regex"]
-    assert urls == ["http://127.0.0.1:1" + NANOMIND_INFER_ENDPOINT]
+    assert recorded_urls == ["http://127.0.0.1:1" + NANOMIND_INFER_ENDPOINT]
 
 
 def test_layers_add_guard_when_the_daemon_answered(monkeypatch: pytest.MonkeyPatch):

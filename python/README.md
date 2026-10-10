@@ -138,4 +138,5 @@ not yet ported.
 
 ## License
 
-Apache-2.0.
+Apache-2.0 - see [LICENSE](https://github.com/opena2a-org/aicomply/blob/main/python/LICENSE).
+The wheel installs the same file as `aicomply-<version>.dist-info/licenses/LICENSE`.
