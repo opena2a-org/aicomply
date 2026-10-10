@@ -4,7 +4,17 @@ from __future__ import annotations
 
 import pytest
 
+import aicomply.classifier.dual_layer as dual_layer
 from aicomply.integrations import ComplianceViolation, guard_io, guard_output
+
+
+@pytest.fixture(autouse=True)
+def _no_guard_daemon(monkeypatch: pytest.MonkeyPatch):
+    # The decorators default to use_guard=True, which consults a NanoMind daemon
+    # when one answers on 127.0.0.1:47200 (or at MOCK_NANOMIND_URL). These tests
+    # cover the decorators over the regex layer, so the daemon is unreachable
+    # here whatever runs on this machine.
+    monkeypatch.setattr(dual_layer, "classify_with_nanomind_daemon", lambda *a, **k: None)
 
 
 def test_decorators_are_reexported_at_top_level():

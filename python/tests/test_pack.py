@@ -33,6 +33,14 @@ def _with_pattern(pid: str, **override) -> bytes:
     return json.dumps(doc).encode()
 
 
+def _without_key(pid: str, key: str) -> bytes:
+    doc = json.loads(_BYTES)
+    doc["patterns"] = [
+        {k: v for k, v in p.items() if k != key} if p["id"] == pid else p for p in doc["patterns"]
+    ]
+    return json.dumps(doc).encode()
+
+
 def test_package_copy_is_byte_identical_to_the_repository_pack():
     # Both runtimes must read the same pack; `npm run pack:sync` writes the copy.
     assert PACKAGE_PACK.read_bytes() == _BYTES
@@ -90,6 +98,7 @@ def test_non_portable_construct_accepts(source):
         ),
         (_with_pattern("ssn", validator="luhnModN"), "validator luhnModN"),
         (_with_pattern("ssn", validator="__class__"), "validator __class__"),
+        (_without_key("ssn", "validator"), "ssn: validator is required"),
         (_with_pattern("ssn", type="PHONE"), "type PHONE"),
         (_with_pattern("ssn", flags="m"), "flags"),
         (_with_pattern("ssn", confidence=1.5), "confidence"),

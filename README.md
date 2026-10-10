@@ -62,6 +62,10 @@ Two detection layers run in parallel:
 npm install @opena2a/aicomply
 ```
 
+The package reads its pattern pack, `pack/patterns.json`, from the package root at
+runtime. When bundling, mark `@opena2a/aicomply` as external so it loads from
+`node_modules`; when copying the package, copy `pack/` together with `dist/`.
+
 **Python?** `pip install aicomply` — same detection engine (regex + optional NanoMind
 Guard), parity-tested against the same corpus. Ships `@guard_io`/`@guard_output`
 decorators and a LangChain callback. See [`python/`](python/).

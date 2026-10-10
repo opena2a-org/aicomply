@@ -164,6 +164,11 @@ export function compilePack(bytes: Buffer): CompiledPack {
       fail(`pattern ${id}: confidence must be a number in (0, 1]`);
     }
 
+    // The key is required in both runtimes; null is how an entry says it has
+    // no validator, so a missing key is a malformed entry, not "none".
+    if (!Object.prototype.hasOwnProperty.call(entry, 'validator')) {
+      fail(`pattern ${id}: validator is required (a validator name, or null for none)`);
+    }
     let validate: Validator | undefined;
     if (entry.validator !== null) {
       const name = entry.validator;
@@ -206,7 +211,24 @@ export function compilePack(bytes: Buffer): CompiledPack {
  */
 export const PACK_PATH = join(__dirname, '..', '..', '..', 'pack', 'patterns.json');
 
-export const PACK: CompiledPack = compilePack(readFileSync(PACK_PATH));
+/**
+ * Read the pack bytes. The pack is a runtime asset beside `dist/`, so a bundle
+ * or a copy of `dist/` alone cannot find it; say which file is missing and how
+ * to ship it rather than surfacing a bare ENOENT at import.
+ */
+export function readPackFile(path: string): Buffer {
+  try {
+    return readFileSync(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    fail(
+      `${path} not found. The package reads pack/patterns.json from its root at runtime: ` +
+        'when bundling, mark @opena2a/aicomply as external; when copying the package, copy pack/ with dist/.',
+    );
+  }
+}
+
+export const PACK: CompiledPack = compilePack(readPackFile(PACK_PATH));
 
 /** Version of the pattern pack this build loaded. */
 export const PACK_VERSION: string = PACK.version;

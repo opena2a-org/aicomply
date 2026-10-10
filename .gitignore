@@ -20,5 +20,6 @@ credentials.json
 # Packed tarballs (smoke-test artifacts)
 *.tgz
 
-# Per-runtime conformance records (written by the conformance runners in CI)
+# Per-runtime conformance records (written by scripts/conformance.mjs and
+# python/bench/conformance.py)
 /conformance/

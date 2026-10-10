@@ -198,8 +198,14 @@ def compile_pack(data: bytes) -> CompiledPack:
         ):
             raise _fail(f"pattern {pid}: confidence must be a number in (0, 1]")
 
+        # The key is required in both runtimes; null is how an entry says it has
+        # no validator, so a missing key is a malformed entry, not "none".
+        if "validator" not in entry:
+            raise _fail(
+                f"pattern {pid}: validator is required (a validator name, or null for none)"
+            )
         validate: Validator | None = None
-        name = entry.get("validator")
+        name = entry["validator"]
         if name is not None:
             if not isinstance(name, str) or name not in VALIDATORS:
                 raise _fail(f"pattern {pid}: validator {name} is not implemented by this runtime")

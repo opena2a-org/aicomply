@@ -39,7 +39,7 @@ export interface ConformanceCase {
   id: string;
   text: string;
   expected: ConformanceOutcome;
-  /** Where the case came from, e.g. `bench/corpus/ssn.jsonl:12` or an issue. */
+  /** Where the case came from, e.g. `bench/corpus/ssn.jsonl:12` or a pull request. */
   origin?: string;
   /**
    * Set on every corpus-seeded case: names the token-shaped text as FAKE
@@ -56,7 +56,11 @@ export interface ConformanceFailure {
   actual: ConformanceOutcome;
 }
 
-/** The record CI writes per runtime and the release workflows read. */
+/**
+ * The record each runtime's conformance runner writes to
+ * `conformance/<runtime>.json` (`scripts/conformance.mjs`,
+ * `python/bench/conformance.py`).
+ */
 export interface ConformanceRecord {
   runtime: string;
   /** Version of this runtime's package (package.json `version`). */
