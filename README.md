@@ -45,11 +45,11 @@ git diff --cached | npx @opena2a/aicomply scan -q || echo "sensitive content sta
 
 The CLI is a try-path. The library API below is the production surface.
 
-## Why this exists
+## How it works
 
-Every agent that calls a hosted LLM (Anthropic, OpenAI, Bedrock, Vertex, …) copies the conversation - system prompt, tool outputs, retrieved documents, user input - into a third party's logs. If your agent reads a support ticket containing an SSN, that SSN goes to the provider. If your agent reads `.env` to summarize it, your AWS key goes too. Most agent stacks have no inline check between "tool returned content" and "send to model."
+`aicomply` is an inline check between "tool returned content" and "send to model," which most agent stacks lack even though every agent that calls a hosted LLM (Anthropic, OpenAI, Bedrock, Vertex, …) copies the conversation - system prompt, tool outputs, retrieved documents, user input - into a third party's logs. If your agent reads a support ticket containing an SSN, that SSN goes to the provider. If your agent reads `.env` to summarize it, your AWS key goes too.
 
-`aicomply` is that check. It runs inline, sub-millisecond, with no external calls of its own. You hand it the content; it returns a verdict (`CLEAN` / `VIOLATION` / `DENY`) and structured findings. You decide what to do next - block, redact, log, or pass.
+It runs inline, sub-millisecond, with no external calls of its own. You hand it the content; it returns a verdict (`CLEAN` / `VIOLATION` / `DENY`) and structured findings. You decide what to do next - block, redact, log, or pass.
 
 Two detection layers run in parallel:
 
