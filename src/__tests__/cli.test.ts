@@ -191,6 +191,32 @@ describe('aicomply CLI', () => {
     expect(payload[0].findings[0].maskedValue).not.toContain('AKIAIOSFODNN7EXAMPLE');
   });
 
+  it('prints no characters of a detected value', async () => {
+    // A 7-character passport or record number used to print 6 of its 7
+    // characters (A123•••56) and an SSN 5 of its 9 digits (123-•••89).
+    const f = fixture('short.txt', 'Passport: A123456\nMRN: 1234567\nSSN 123-45-6789\n');
+    const cap = capture();
+    const code = await run(['scan', f]);
+    cap.restore();
+    const text = cap.out.join('');
+    expect(code).toBe(1);
+    expect(text).toMatch(/ {4}PASSPORT {5}••• {16}confidence/);
+    expect(text).toMatch(/ {4}MRN {10}••• {16}confidence/);
+    expect(text).toMatch(/ {4}SSN {10}••• {16}confidence/);
+    for (const fragment of ['A123', '56 ', '1234', '67 ', '123-', '89 ']) {
+      expect(text).not.toContain(fragment);
+    }
+
+    const capJson = capture();
+    await run(['scan', f, '--json']);
+    capJson.restore();
+    const payload = JSON.parse(capJson.out.join(''));
+    const masked = Object.fromEntries(
+      payload[0].findings.map((x: { type: string; maskedValue: string }) => [x.type, x.maskedValue]),
+    );
+    expect(masked).toEqual({ PASSPORT: '•••', MRN: '•••', SSN: '•••' });
+  });
+
   it('--quiet prints only the verdict word', async () => {
     const f = fixture('pii2.txt', 'SSN 078-05-1120');
     const cap = capture();

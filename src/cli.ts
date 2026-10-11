@@ -123,14 +123,14 @@ EXAMPLES
   aicomply scan src/*.txt -q
 `;
 
-/** Mask a detected value so the CLI never prints a full secret to a terminal or log. */
-function maskValue(value: string): string {
-  const v = value ?? '';
-  if (v.length <= 4) return '•'.repeat(v.length || 1);
-  const head = v.slice(0, 4);
-  const tail = v.length > 8 ? v.slice(-2) : '';
-  return `${head}${'•'.repeat(Math.max(3, v.length - head.length - tail.length))}${tail}`;
-}
+/**
+ * What the CLI prints in place of a detected value. The library's redacted
+ * `value` can still carry most of a short match (a 7-character passport
+ * number keeps 6 of its characters), and a finding does not record the
+ * matched value's length (`start`/`end` can span a keyword such as
+ * "Passport:"), so no share of the value is printed.
+ */
+const MASKED_VALUE = '•••';
 
 function readStdin(): Promise<string> {
   return new Promise((resolve) => {
@@ -207,11 +207,10 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
     }
     out.write(`   ${res.violations.length} finding${res.violations.length === 1 ? '' : 's'}\n`);
     for (const v of res.violations as Violation[]) {
-      const masked = maskValue(v.value);
       const layer = v.classifier;
       const view = v.view && v.view !== 'normalized' ? `  view ${v.view}` : '';
       out.write(
-        `    ${v.type.padEnd(12)} ${masked.padEnd(18)} confidence ${v.confidence.toFixed(2)}  layer ${layer}${view}\n`,
+        `    ${v.type.padEnd(12)} ${MASKED_VALUE.padEnd(18)} confidence ${v.confidence.toFixed(2)}  layer ${layer}${view}\n`,
       );
     }
     out.write('\n');
@@ -257,7 +256,7 @@ function renderJson(sources: Source[], results: ComplyResult[]): void {
     guardActive: guardActive(results[i]),
     findings: results[i].violations.map((v) => ({
       type: v.type,
-      maskedValue: maskValue(v.value),
+      maskedValue: MASKED_VALUE,
       confidence: v.confidence,
       classifier: v.classifier,
       view: v.view ?? 'normalized',

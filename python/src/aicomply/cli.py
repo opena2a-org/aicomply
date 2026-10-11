@@ -121,15 +121,12 @@ EXAMPLES
 """
 
 
-def _mask_value(value: str) -> str:
-    """Mask a detected value so the CLI never prints a full secret."""
-    v = value or ""
-    if len(v) <= 4:
-        return "•" * (len(v) or 1)
-    head = v[:4]
-    tail = v[-2:] if len(v) > 8 else ""
-    middle = "•" * max(3, len(v) - len(head) - len(tail))
-    return f"{head}{middle}{tail}"
+# What the CLI prints in place of a detected value. The library's redacted
+# ``value`` can still carry most of a short match (a 7-character passport number
+# keeps 6 of its characters), and a finding does not record the matched value's
+# length (``start``/``end`` can span a keyword such as "Passport:"), so no share
+# of the value is printed.
+_MASKED_VALUE = "•••"
 
 
 def _read_stdin() -> str:
@@ -203,10 +200,9 @@ def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
         n = len(res.violations)
         out.write(f"   {n} finding{'' if n == 1 else 's'}\n")
         for v in res.violations:
-            masked = _mask_value(v.value)
             view = f"  view {v.view}" if v.view and v.view != "normalized" else ""
             out.write(
-                f"    {v.type:<12} {masked:<18} confidence {v.confidence:.2f}  "
+                f"    {v.type:<12} {_MASKED_VALUE:<18} confidence {v.confidence:.2f}  "
                 f"layer {v.classifier}{view}\n"
             )
         out.write("\n")
@@ -241,7 +237,7 @@ def _render_json(sources: list[_Source], results: list[ComplyResult]) -> None:
             "findings": [
                 {
                     "type": v.type,
-                    "maskedValue": _mask_value(v.value),
+                    "maskedValue": _MASKED_VALUE,
                     "confidence": v.confidence,
                     "classifier": v.classifier,
                     "view": v.view or "normalized",

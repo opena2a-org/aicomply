@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from aicomply.cli import _mask_value, run
+from aicomply.cli import run
 
 
 def test_version(capsys):
@@ -87,8 +87,21 @@ def test_missing_file_exit_2(capsys):
     assert "cannot read" in capsys.readouterr().err
 
 
-def test_mask_value():
-    assert _mask_value("AKIA7IEO7LTOBPA48822").startswith("AKIA")
-    assert "7IEO7LTOBPA" not in _mask_value("AKIA7IEO7LTOBPA48822")
-    assert _mask_value("ab") == "••"
-    assert _mask_value("") == "•"
+def test_scan_prints_no_characters_of_a_detected_value(tmp_path, capsys):
+    # A 7-character passport or record number used to print 6 of its 7
+    # characters (A123•••56) and an SSN 5 of its 9 digits (123-•••89).
+    f = tmp_path / "short.txt"
+    f.write_text("Passport: A123456\nMRN: 1234567\nSSN 123-45-6789\n")
+    assert run(["scan", str(f)]) == 1
+    out = capsys.readouterr().out
+    pad = " " * 16
+    assert f"    PASSPORT     •••{pad}confidence" in out
+    assert f"    MRN          •••{pad}confidence" in out
+    assert f"    SSN          •••{pad}confidence" in out
+    for fragment in ("A123", "56 ", "1234", "67 ", "123-", "89 "):
+        assert fragment not in out
+
+    assert run(["scan", str(f), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    masked = {x["type"]: x["maskedValue"] for x in payload[0]["findings"]}
+    assert masked == {"PASSPORT": "•••", "MRN": "•••", "SSN": "•••"}
