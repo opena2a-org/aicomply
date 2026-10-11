@@ -376,8 +376,10 @@ export class ClassificationSession {
    * Run compliance classification, applying L2 registry logic when sourcePackage
    * is provided. Uses the session's warmed cache - no Registry network I/O in
    * the hot path. The Guard attempt still runs unless `useGuard: false` is set.
-   * A `registryCache` or Guard daemon settings passed on this call, on either
-   * argument, take precedence over the session's.
+   * Guard daemon settings passed on this call, on either argument, take
+   * precedence over the session's, as does a `registryCache` on `options`. A
+   * `registryCache` on `dualLayerOptions` does not: the session's cache is
+   * used in its place.
    * As with the comply() function, `options` is an options object or a bare
    * string to classify, and anything else is rejected with a TypeError.
    */
@@ -395,12 +397,11 @@ export class ClassificationSession {
     // names the parameter the caller passed it on.
     assertGuardOptions(dualLayerOptions?.guardOptions, 'comply: dualLayerOptions.guardOptions');
     const guardOptions = opts.guardOptions ?? dualLayerOptions?.guardOptions ?? this.guardOptions;
-    // A value on `opts` takes the place of the one on `dualLayerOptions` in
-    // comply(), so the session's cache is set here only when neither has one.
-    const registryCache = opts.registryCache ?? dualLayerOptions?.registryCache ?? this.cache;
+    // Set on `opts`, the session's cache takes the place of a registryCache
+    // on `dualLayerOptions` in comply(); only one on `opts` replaces it.
     const optionsWithCache: ComplyOptions = {
       ...opts,
-      registryCache,
+      registryCache: opts.registryCache ?? this.cache,
       ...(guardOptions !== undefined && { guardOptions }),
     };
     return comply(optionsWithCache, dualLayerOptions);
