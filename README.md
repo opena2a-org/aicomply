@@ -191,7 +191,7 @@ Inputs are canonicalized before patterns run:
 - **Whitespace-injected** values are scanned in a compact view that strips spaces only between digit/separator characters, so prose word boundaries stay intact (`1 2 3 - 4 5 - 6 7 8 9` matches; `My SSN is 123-45-6789` still works).
 - **Base64 / URL-encoded** payloads are extracted and scanned in addition to the canonical stream (bounded recursion, length-gated, ASCII-printable round-trip required).
 
-Every finding carries a `view` field (`normalized` / `compact` / `decoded-base64` / `decoded-url`) and best-effort original-content anchoring so you can audit which canonicalization surfaced each match.
+Every pattern match carries a `view` field (`normalized` / `compact` / `decoded-base64` / `decoded-url`) and best-effort original-content anchoring so you can audit which canonicalization surfaced each match. Findings that do not come from a pattern match have no `view`: Guard findings, `POLICY_DENY` / `POLICY_WARN`, `SUPPLY_CHAIN_ALERT` and `FLEET_ANOMALY_ELEVATED`. The CLI's `--json` output prints `"view": null` for them.
 
 ## Measured accuracy
 

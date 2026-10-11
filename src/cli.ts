@@ -249,7 +249,7 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
   }
 }
 
-function renderJson(sources: Source[], results: ComplyResult[]): void {
+export function renderJson(sources: Source[], results: ComplyResult[]): void {
   const payload = sources.map((src, i) => ({
     source: src.label,
     verdict: results[i].verdict,
@@ -259,7 +259,9 @@ function renderJson(sources: Source[], results: ComplyResult[]): void {
       maskedValue: MASKED_VALUE,
       confidence: v.confidence,
       classifier: v.classifier,
-      view: v.view ?? 'normalized',
+      // Only pattern matches come from a content view. A Guard finding has
+      // none, so it prints null rather than claiming the normalized stream.
+      view: v.view ?? null,
     })),
   }));
   process.stdout.write(JSON.stringify(payload, null, 2) + '\n');

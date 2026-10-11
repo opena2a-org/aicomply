@@ -15,6 +15,7 @@ ClassifierName = Literal["regex", "guard"]
 # A processing layer that ran on the content.
 ComplyLayer = Literal["normalize", "regex", "guard"]
 # 'normalized' is the canonical view; the others mirror DecodedExtraction.source.
+# Set on every pattern match; a Guard finding has no view (None).
 ViolationView = Literal["normalized", "compact", "decoded-base64", "decoded-url"]
 
 

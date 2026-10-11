@@ -240,7 +240,9 @@ def _render_json(sources: list[_Source], results: list[ComplyResult]) -> None:
                     "maskedValue": _MASKED_VALUE,
                     "confidence": v.confidence,
                     "classifier": v.classifier,
-                    "view": v.view or "normalized",
+                    # Only pattern matches come from a content view; a Guard
+                    # finding has none and prints null.
+                    "view": v.view,
                 }
                 for v in res.violations
             ],

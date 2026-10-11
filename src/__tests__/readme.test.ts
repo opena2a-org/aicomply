@@ -189,6 +189,20 @@ describe('README', () => {
       expect({ form, matched: whole.length }).toEqual({ form, matched: 1 });
     }
   });
+
+  it('scopes the view field to pattern matches, as comply() returns it', async () => {
+    // A policy finding is tagged `classifier: 'regex'` but is not a pattern
+    // match, so it has no view; the README must not say every finding does.
+    expect(README).not.toMatch(/Every finding carries a `view` field/);
+    expect(README).toMatch(/Every pattern match carries a `view` field/);
+
+    const result = await comply({ content: 'My SSN is 123-45-6789.', policyPack: 'default' });
+    const views = result.violations.map((v) => ({ type: v.type, view: v.view }));
+    expect(views).toEqual([
+      { type: 'SSN', view: 'normalized' },
+      { type: 'POLICY_DENY:pii-ssn', view: undefined },
+    ]);
+  });
 });
 
 /**

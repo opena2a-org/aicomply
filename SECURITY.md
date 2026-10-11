@@ -68,9 +68,12 @@ Covered mutation classes:
   decoded views (bounded depth 2, length ≥ 24 chars, ASCII-printable
   round-trip gate).
 
-Findings carry a `view` field (`normalized` / `compact` / `decoded-base64`
-/ `decoded-url`) and original-content anchoring so consumers can audit
-which canonicalization surfaced each match.
+Pattern matches carry a `view` field (`normalized` / `compact` /
+`decoded-base64` / `decoded-url`) and original-content anchoring so
+consumers can audit which canonicalization surfaced each match. Guard,
+`POLICY_DENY` / `POLICY_WARN`, `SUPPLY_CHAIN_ALERT` and
+`FLEET_ANOMALY_ELEVATED` findings do not come from a pattern match and
+have no `view`.
 
 ### Measured accuracy (1.0 baseline)
 
