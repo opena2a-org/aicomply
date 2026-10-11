@@ -425,6 +425,32 @@ describe('npm publish lifecycle', () => {
     expect(pkg.scripts.conformance).toBe('npm run build && node scripts/conformance.mjs');
   });
 
+  /** A `key:` line: its indentation and any `- ` before the key, then its value. */
+  const KEY = /^(\s*(?:-\s+)?)[\w-]+:(?:\s+(.*))?$/;
+
+  /** `value` without the tags and anchors that may stand before its text. */
+  function withoutProperties(value: string): string {
+    return value.replace(/^(?:[!&]\S*(?:\s+|$))*/, '');
+  }
+
+  /** How the lines of a value are read: kept apart, folded into one, or not known yet. */
+  type ValueStyle = 'literal' | 'folded' | 'pending';
+
+  /**
+   * How a value whose text, past its tags and anchors, starts with `value`
+   * reads its lines, and the column a `>` block's lines start at (see
+   * `workflowLines`), for a value under a key at `column`. A `>` header
+   * carries a chomping indicator and an indentation indicator in either
+   * order, and may end in a comment.
+   */
+  function openedValue(value: string, column: number): [ValueStyle, number | null | undefined] {
+    if (value.startsWith('|')) return ['literal', null];
+    const header = /^>(?:[+-]?(\d)?|(\d)[+-])\s*(?:#.*)?$/.exec(value);
+    if (header === null) return ['folded', null];
+    const indicator = header[1] ?? header[2];
+    return ['folded', indicator === undefined ? undefined : column + Number(indicator)];
+  }
+
   /**
    * The workflow's uncommented lines as the shell gets them: `\`-continued
    * lines joined, and the lines YAML folds into one joined too, whether a `>`
@@ -436,28 +462,72 @@ describe('npm publish lifecycle', () => {
    * but it counts as a line for the block's indentation and for the line
    * after it. A tag or an anchor may stand before a `|` or `>` header.
    *
+   * A key with nothing after its colon, or only tags, anchors or a comment,
+   * takes its value from the deeper-indented lines after it: a mapping or a
+   * sequence when the first of them is a key or a `- ` entry, a block scalar
+   * when it is a `|` or `>` header, and otherwise a scalar folded onto the
+   * key's line.
+   *
+   * A `\` that ends a line joins the next line onto it only when that line
+   * belongs to the same value, indented deeper than the key of its step, as
+   * YAML ends the value at any other line. A `#` line takes no part in a join:
+   * the shell ends a comment at the line break, so its `\` continues nothing.
    * The shell joins a `\`-continued line onto the word the `\` ends only when
    * the next line keeps no indentation; in a `|` block, and on a more-indented
    * line of a `>` block, YAML keeps the indentation and the shell gets two
    * words. Where the `\` follows a word it is kept in the joined line, followed
    * by a space, for `withoutInstallFlags` and `publishTargets` to see; after a
-   * space it is joined with a space.
+   * space it is joined with a space. In a `>` block, the last of the lines
+   * joined decides whether the line after them is kept apart.
    */
   function workflowLines(workflow: string): string[] {
+    const raw = workflow.split(/\r?\n/);
     const lines: string[] = [];
-    // Column of the key whose scalar is being folded, when one is.
-    let foldedUnder: number | null = null;
+    // Column of the key whose value the lines indented deeper than it belong
+    // to, when one is.
+    let under: number | null = null;
+    // How that value reads its lines; pending until the line it starts on.
+    let style: ValueStyle = 'folded';
     // Column the lines of a `>` block start at: the header's indentation
     // indicator past the key's column, or else the column of the block's
     // first line. Undefined until that line, null for any other scalar.
     let blockIndent: number | null | undefined = null;
     // Whether the last line was indented deeper than its `>` block.
     let afterDeeper = false;
-    const joined = workflow.replace(/(?<!\S)\\\r?\n\s*/g, ' ').replace(/\\\r?\n\s*/g, '\\ ');
-    for (const line of joined.split(/\r?\n/)) {
-      const comment = /^\s*#/.test(line);
-      const indent = line.search(/\S/);
-      if (foldedUnder !== null && (indent === -1 || indent > foldedUnder)) {
+    for (let i = 0; i < raw.length; i++) {
+      const comment = /^\s*#/.test(raw[i]);
+      const indent = raw[i].search(/\S/);
+      if (under !== null && style === 'pending' && (indent === -1 || indent > under)) {
+        // Blank lines, comments, tags and anchors come before the value.
+        if (indent === -1 || comment) continue;
+        const value = withoutProperties(raw[i].trim());
+        if (value === '') continue;
+        if (/^\s*(?:-|[\w-]+:)(?:\s|$)/.test(raw[i])) under = null;
+        else {
+          [style, blockIndent] = openedValue(value, under);
+          afterDeeper = false;
+          // A header line carries no text; a scalar's first line is folded below.
+          if (style === 'literal' || blockIndent !== null) continue;
+        }
+      }
+      const valueKey = under !== null && (indent === -1 || indent > under) ? under : null;
+      const head = valueKey === null ? KEY.exec(raw[i]) : null;
+      const stepKey = valueKey ?? (head !== null ? head[1].length : indent);
+      let line = raw[i];
+      let lastIndent = indent;
+      while (
+        !comment && line.endsWith('\\') && i + 1 < raw.length &&
+        !/^\s*#/.test(raw[i + 1]) && raw[i + 1].search(/\S/) > stepKey
+      ) {
+        const next = raw[++i];
+        line = /(?<!\S)\\$/.test(line) ? `${line.slice(0, -1)} ${next.trimStart()}` : `${line} ${next.trimStart()}`;
+        lastIndent = next.search(/\S/);
+      }
+      if (valueKey !== null && style === 'literal') {
+        if (!comment) lines.push(line);
+        continue;
+      }
+      if (valueKey !== null) {
         if (indent === -1) {
           lines.push('');
           continue;
@@ -467,23 +537,66 @@ describe('npm publish lifecycle', () => {
         const deeper = blockIndent !== null && indent > blockIndent;
         if (deeper || afterDeeper) lines.push(comment ? '' : line);
         else if (!comment) lines[lines.length - 1] += ` ${line.trim()}`;
-        afterDeeper = deeper;
+        afterDeeper = blockIndent !== null && lastIndent > blockIndent;
         continue;
       }
       if (comment) continue;
-      const key = /^(\s*(?:-\s+)?)[\w-]+:\s+(\S.*)$/.exec(line);
-      const value = key === null ? '' : key[2].replace(/^(?:[!&]\S*\s+)*/, '');
-      foldedUnder = key !== null && !value.startsWith('|') ? key[1].length : null;
-      // A `>` header carries a chomping indicator and an indentation
-      // indicator in either order, and may end in a comment.
-      const header = key === null ? null : /^>(?:[+-]?(\d)?|(\d)[+-])\s*(?:#.*)?$/.exec(value);
-      const indicator = header?.[1] ?? header?.[2];
-      if (key === null || header === null) blockIndent = null;
-      else blockIndent = indicator === undefined ? undefined : key[1].length + Number(indicator);
+      const key = KEY.exec(line);
       afterDeeper = false;
-      lines.push(key !== null && header !== null ? line.slice(0, -key[2].length) : line);
+      if (key === null) {
+        under = null;
+        blockIndent = null;
+        lines.push(line);
+        continue;
+      }
+      under = key[1].length;
+      const text = key[2] ?? '';
+      const value = withoutProperties(text);
+      if (value === '' || value.startsWith('#')) [style, blockIndent] = ['pending', null];
+      else [style, blockIndent] = openedValue(value, under);
+      // The key's line keeps a plain or quoted value and a `|` header, and
+      // leaves out a `>` header and anything that is not yet the value.
+      const kept = style === 'pending' || blockIndent !== null ? line.slice(0, line.length - text.length).trimEnd() : line;
+      lines.push(kept);
     }
     return lines;
+  }
+
+  /** What each YAML double-quoted escape stands for, other than `\x`, `\u` and `\U`. */
+  const YAML_ESCAPES: Record<string, string> = {
+    '0': '\0', a: '\x07', b: '\b', t: '\t', '\t': '\t', n: '\n', v: '\v', f: '\f', r: '\r', e: '\x1b',
+    ' ': ' ', '"': '"', '/': '/', '\\': '\\', N: '\x85', _: '\xa0', L: ' ', P: ' ',
+  };
+
+  /** `line` with each YAML double-quoted escape replaced by what it stands for. */
+  function yamlUnescaped(line: string): string {
+    return line.replace(
+      /\\(?:x([\da-fA-F]{2})|u([\da-fA-F]{4})|U([\da-fA-F]{8})|([\s\S]))/g,
+      (escape, x?: string, u?: string, big?: string, c?: string) => {
+        const hex = x ?? u ?? big;
+        if (hex === undefined) return YAML_ESCAPES[c ?? ''] ?? escape;
+        const point = parseInt(hex, 16);
+        return point <= 0x10ffff ? String.fromCodePoint(point) : escape;
+      },
+    );
+  }
+
+  /** `line` without shell quotes and `\` escapes, a `\` before a line break joining the two lines. */
+  function shellUnquoted(line: string): string {
+    return line.replace(/\\\n|\\([\s\S])|["']/g, (_quote, c?: string) => c ?? '');
+  }
+
+  /**
+   * The ways the shell may get `line`: as written and with YAML's
+   * double-quoted escapes decoded, which is what a `run:` value in double
+   * quotes is, and each of those with the shell's quotes and `\` escapes
+   * removed, split at the line breaks the decoding makes. A word a quote or an
+   * escape hides from one reading is plain in another.
+   */
+  function readings(line: string): string[] {
+    const decoded = yamlUnescaped(line);
+    const all = [line, shellUnquoted(line), decoded, shellUnquoted(decoded)];
+    return [...new Set(all.flatMap((reading) => reading.split('\n')))];
   }
 
   /** The `npm publish` flags that take the next word as their value. */
@@ -493,12 +606,15 @@ describe('npm publish lifecycle', () => {
    * What each `npm publish` on `line` is handed to publish. npm skips
    * prepublishOnly for a tarball and publishes another folder under that
    * folder's own scripts, and a variable or a command substitution can expand
-   * to either, so the workflow's publish must name nothing.
+   * to either, so the workflow's publish must name nothing. npm options may
+   * stand between `npm` and `publish`, each with a word after it; that word
+   * counts as a target unless the option is one in `VALUE_FLAGS`, so a
+   * workspace named there is one.
    */
   function publishTargets(line: string): string[] {
     const targets: string[] = [];
-    for (const [, rest] of line.matchAll(/\bnpm\\?\s+publish\b([^;&|#]*)/g)) {
-      const words = rest.split(/\s+/).filter((w) => w !== '');
+    for (const [, before, after] of line.matchAll(/\bnpm\\?((?:\s+-\S+(?:\s+[^-\s]\S*)?)*)\s+publish\b([^;&|#]*)/g)) {
+      const words = `${before} ${after}`.split(/\s+/).filter((w) => w !== '');
       for (let i = 0; i < words.length; i++) {
         if (!words[i].startsWith('-')) targets.push(words[i]);
         else if (VALUE_FLAGS.includes(words[i])) i++;
@@ -589,11 +705,12 @@ describe('npm publish lifecycle', () => {
    * writes. So every line that mentions it is refused, except where the
    * command it stands in begins with an install, such as
    * `npm ci --ignore-scripts`, and `withoutInstallFlags` finds no quote,
-   * redirection or `\` that could put it on another command.
+   * redirection or `\` that could put it on another command. A line is
+   * refused when any of its `readings` is.
    */
   function scriptsSwitchedOff(workflow: string, npmrc: string | null): string[] {
-    const found = workflowLines(workflow).filter(
-      (l) => publishTargets(l).length > 0 || /ignore[-_]scripts/i.test(withoutInstallFlags(l)),
+    const found = workflowLines(workflow).filter((l) =>
+      readings(l).some((r) => publishTargets(r).length > 0 || /ignore[-_]scripts/i.test(withoutInstallFlags(r))),
     );
     const rc = (npmrc ?? '')
       .split('\n')
@@ -629,6 +746,8 @@ describe('npm publish lifecycle', () => {
     ['a hardened install continued onto the next line', ['        run: |', '          npm ci --ignore-scripts \\', '            --no-audit', PUBLISH], null],
     ['a hardened install after a quote that closes', ['      - run: echo "a; b" && npm ci --ignore-scripts', PUBLISH], null],
     ['a hardened install after a redirection', ['      - run: npm run build > build.log && npm ci --ignore-scripts', PUBLISH], null],
+    ['a hardened install in a value that starts after its key', ['      - run:', '          npm ci --ignore-scripts', PUBLISH], null],
+    ['the registry named between npm and the publish', ['      - run: npm --registry https://registry.npmjs.org/ publish --provenance --access public'], null],
   ])('lets a publish through with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).toEqual([]);
   });
@@ -699,6 +818,22 @@ describe('npm publish lifecycle', () => {
     ['the flag on an install name a continued line completes', ['        run: |', '          npm i\\', '          t --ignore-scripts'], null],
     ['a tarball after a new key ends a more-indented line', ['      - run: >', '          echo a', '            echo b', '      - run: npm publish --provenance --access public', '          "$TARBALL"'], null],
     ['a tarball after npm and a continued publish on a more-indented line', ['      - run: |', '          npm\\', '            publish ./aicomply-2.2.3.tgz'], null],
+    ['a tarball on the line after a comment that ends in a backslash', ['      - run: |', '          # note \\', '          npm publish ./x.tgz'], null],
+    ['a tarball on the line after a continued last line of a | block', ['      - run: |', '          npm test \\', '      - run: npm publish --provenance --access public', '          "$TARBALL"'], null],
+    ['a tarball on the line after a continued last line of a > block', ['      - run: >', '          # note', '            npm test \\', '      - run: npm publish --provenance --access public', '          "$TARBALL"'], null],
+    ['a tarball on the second line of a value that starts after its key', ['      - run:', '          npm publish --provenance --access public', '          "$TARBALL"'], null],
+    ['a tarball handed to a double-quoted npm', ['      - run: |', '          "npm" publish ./x.tgz'], null],
+    ['a tarball handed to a single-quoted npm', ['      - run: |', "          'npm' publish ./x.tgz"], null],
+    ['a tarball handed to an npm with an escaped letter', ['      - run: |', '          n\\pm publish ./x.tgz'], null],
+    ['a tarball after a YAML line break escape', ['      - run: "echo ok\\nnpm publish ./x.tgz"'], null],
+    ['a tarball after a YAML escape of ;', ['      - run: "echo ok\\x3bnpm publish ./x.tgz"'], null],
+    ['a tarball handed to a publish after an npm option that takes a value', ['      - run: npm --registry https://registry.npmjs.org/ publish ./x.tgz'], null],
+    ['a tarball handed to a publish after a workspace option', ['      - run: npm -w pkg publish ./x.tgz'], null],
+    ['the flag under a tag whose block header is on the next line', ['      - run: !!str', '          |', '          npm ci', '          npm publish --ignore-scripts'], null],
+    ['a workspace named between npm and the publish', ['      - run: npm -w pkg publish'], null],
+    ['the flag spelled with a YAML escape', ['      - run: "npm publish --ignore\\x2dscripts"'], null],
+    ['the flag split by shell quotes', ["      - run: npm publish --ignore'-'scripts"], null],
+    ['the flag on the line after a continued line that ends more indented in a folded scalar', ['      - run: >', '          npm ci \\', '            echo x', '          npm publish --ignore-scripts'], null],
   ])('refuses a publish with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
   });
