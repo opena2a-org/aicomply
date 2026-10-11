@@ -108,7 +108,7 @@ Drop it into your agent's tool-result handler, your message-egress wrapper, or a
 | PII        | SSN, passport numbers, medical record numbers, NPI             |
 | Financial  | PAN (Luhn-validated), IBAN (mod-97-validated)                  |
 | Credentials| AWS keys, GitHub tokens, Bearer tokens, generic `api_key=` |
-| Government | CUI, FOUO, CONTROLLED markings                                 |
+| Government | `CUI//SP-PRVCY`, `CUI//BASIC`, `CONTROLLED UNCLASSIFIED INFORMATION`, `FOR OFFICIAL USE ONLY` |
 
 Pattern source lives at [`pack/patterns.json`](https://github.com/opena2a-org/aicomply/blob/main/pack/patterns.json), the one pattern pack the TypeScript and Python packages both load (`PACK_VERSION` and `PACK_SHA256` say which one you have) - not secret, designed to be reviewed and tuned for your context. Each runtime must reproduce every case in [`pack/conformance/`](./pack/conformance) exactly: `npm run conformance` and `python python/bench/conformance.py`. The release gates refuse a record that does not match what ships: `npm publish` runs `npm run release:gate` after the conformance run, and `python python/bench/release_gate.py` is the same check for the Python package, run by hand against the wheel and sdist that `python -m build` wrote before an upload; the PyPI workflow does not run it yet.
 
