@@ -41,9 +41,12 @@ export interface Violation {
   confidence: number;
   classifier: 'regex' | 'guard';
   /**
-   * Which content view this match came from. 'normalized' is the default
-   * (NFKC + zero-width-stripped). 'compact' / 'decoded-*' indicate the
+   * Which content view this match came from. 'normalized' is the canonical
+   * stream (NFKC + zero-width-stripped). 'compact' / 'decoded-*' indicate the
    * match only surfaced after additional adversarial-mutation handling.
+   * Set on every pattern match; absent on Guard, POLICY_DENY / POLICY_WARN,
+   * SUPPLY_CHAIN_ALERT and FLEET_ANOMALY_ELEVATED findings, which do not
+   * come from a content view.
    */
   view?: ViolationView;
   /**

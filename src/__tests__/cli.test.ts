@@ -189,6 +189,23 @@ describe('aicomply CLI', () => {
     expect(payload[0].verdict).toBe('VIOLATION');
     expect(payload[0].findings[0]).toHaveProperty('maskedValue');
     expect(payload[0].findings[0].maskedValue).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    expect(payload[0].findings[0].view).toBe('normalized');
+  });
+
+  it('--json prints a null view for a finding that has none', async () => {
+    // A Guard finding does not come from a content view. The JSON used to
+    // default it to 'normalized', claiming a canonicalization that never ran.
+    const { renderJson } = await import('../cli');
+    const guard = guardResult('guard');
+    delete (guard.violations[0] as { view?: unknown }).view;
+    const cap = capture();
+    try {
+      renderJson([{ label: 'x.txt', content: 'c' } as never], [guard]);
+    } finally {
+      cap.restore();
+    }
+    const payload = JSON.parse(cap.out.join(''));
+    expect(payload[0].findings[0]).toHaveProperty('view', null);
   });
 
   it('prints no characters of a detected value', async () => {

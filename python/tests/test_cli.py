@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 
-from aicomply.cli import run
+from aicomply.cli import _render_json, _Source, run
+from aicomply.types import ClassifierResult, ComplyResult, Violation
 
 
 def test_version(capsys):
@@ -73,6 +74,28 @@ def test_scan_json_output(tmp_path, capsys):
     assert payload[0]["findings"][0]["type"] == "PAN"
     assert "maskedValue" in payload[0]["findings"][0]
     assert "4111111111111111" not in json.dumps(payload)
+    assert payload[0]["findings"][0]["view"] == "normalized"
+
+
+def test_json_prints_null_view_for_a_finding_without_one(capsys):
+    # A Guard finding does not come from a content view; the JSON used to
+    # default it to "normalized", claiming a canonicalization that never ran.
+    guard = Violation(
+        type="tool_misuse", value="***GUARD***", start=0, end=1,
+        confidence=1.0, classifier="guard",
+    )
+    result = ComplyResult(
+        verdict="VIOLATION",
+        violations=[guard],
+        classifier_results={
+            "regex": ClassifierResult(classifier="regex", verdict="CLEAN"),
+            "guard": ClassifierResult(classifier="guard", verdict="VIOLATION", violations=[guard]),
+        },
+    )
+    _render_json([_Source(label="x.txt", content="c")], [result])
+    payload = json.loads(capsys.readouterr().out)
+    assert "view" in payload[0]["findings"][0]
+    assert payload[0]["findings"][0]["view"] is None
 
 
 def test_scan_quiet(tmp_path, capsys):
