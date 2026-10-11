@@ -290,8 +290,9 @@ result.violations[0].view;  // 'normalized'
 > design, so a flagged result carries the very PII or credentials it detected.
 > Do not pass them to an audit log, trace, or error reporter unmasked. Log
 > `verdict` and the masked `violations` instead, or redact the raw fields before
-> persisting them. `violations[i].value` is also raw; mask it (see the CLI's
-> `maskValue`) before display.
+> persisting them. `violations[i].value` is already masked: a regex finding
+> keeps its first 4 and last 2 characters (`123-...89`), or is fully starred at
+> 6 characters or fewer, and a Guard finding reads `***GUARD***`.
 
 ## License
 
