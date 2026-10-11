@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
+import types
+
 import pytest
 
 from aicomply.classifier.guard_client.nanomind_adapter import NANOMIND_INFER_ENDPOINT
@@ -157,3 +161,88 @@ def test_langchain_handler_import_is_optional():
     else:
         handler = lc_mod.AIComplyCallbackHandler()
         assert handler is not None
+
+
+_SSN_COMPLETION = "The customer SSN is 516-81-3086."
+_CLEAN_COMPLETION = "All good, order 300843 shipped."
+_LANGCHAIN_MODEL_KINDS = ("chat", "completion")
+
+
+def _fake_langchain_model(kind: str, response: str, **handler_options):
+    """A LangChain fake chat or completion model that answers ``response``.
+
+    The handler is attached the way the README shows, so these tests go through
+    LangChain's own callback dispatch instead of calling the handler directly.
+    """
+    pytest.importorskip("langchain_core")
+    from langchain_core.language_models.fake import FakeListLLM
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    from aicomply.integrations.langchain import AIComplyCallbackHandler
+
+    model_class = FakeListChatModel if kind == "chat" else FakeListLLM
+    handler = AIComplyCallbackHandler(**handler_options)
+    return model_class(responses=[response], callbacks=[handler])
+
+
+def _completion_text(output) -> str:
+    """What the caller reads: a chat model returns a message, a completion model a string."""
+    return output if isinstance(output, str) else output.content
+
+
+@pytest.mark.parametrize("kind", _LANGCHAIN_MODEL_KINDS)
+def test_langchain_handler_stops_invoke_that_emits_pii(kind):
+    llm = _fake_langchain_model(kind, _SSN_COMPLETION)
+
+    with pytest.raises(ComplianceViolation, match="SSN"):
+        llm.invoke("Summarize this support ticket")
+
+
+@pytest.mark.parametrize("kind", _LANGCHAIN_MODEL_KINDS)
+def test_langchain_handler_stops_ainvoke_that_emits_pii(kind):
+    llm = _fake_langchain_model(kind, _SSN_COMPLETION)
+
+    with pytest.raises(ComplianceViolation, match="SSN"):
+        asyncio.run(llm.ainvoke("Summarize this support ticket"))
+
+
+@pytest.mark.parametrize("kind", _LANGCHAIN_MODEL_KINDS)
+def test_langchain_handler_returns_a_clean_completion(kind):
+    llm = _fake_langchain_model(kind, _CLEAN_COMPLETION)
+
+    assert _completion_text(llm.invoke("Where is my order?")) == _CLEAN_COMPLETION
+
+
+@pytest.mark.parametrize("kind", _LANGCHAIN_MODEL_KINDS)
+def test_langchain_handler_redacts_what_invoke_returns(kind):
+    llm = _fake_langchain_model(kind, _SSN_COMPLETION, on_violation="redact", use_guard=False)
+
+    returned = _completion_text(llm.invoke("Summarize this support ticket"))
+
+    assert returned == "The customer SSN is [REDACTED]."
+
+
+@pytest.mark.parametrize("kind", _LANGCHAIN_MODEL_KINDS)
+def test_langchain_handler_allow_returns_the_completion_unchanged(kind):
+    llm = _fake_langchain_model(kind, _SSN_COMPLETION, on_violation="allow", use_guard=False)
+
+    assert _completion_text(llm.invoke("Summarize this support ticket")) == _SSN_COMPLETION
+
+
+@pytest.mark.parametrize(
+    ("on_violation", "reraised"), [("raise", True), ("redact", False), ("allow", False)]
+)
+def test_langchain_handler_sets_raise_error_only_for_raise(monkeypatch, on_violation, reraised):
+    # LangChain logs and drops a handler's exception unless the handler's
+    # raise_error is true. The stand-in base class keeps this check running on
+    # an install without langchain-core, where the invoke() tests above skip.
+    from aicomply.integrations import langchain as lc_mod
+
+    class BaseCallbackHandler:
+        raise_error = False
+
+    stand_in = types.ModuleType("langchain_core.callbacks.base")
+    stand_in.BaseCallbackHandler = BaseCallbackHandler
+    monkeypatch.setitem(sys.modules, "langchain_core.callbacks.base", stand_in)
+
+    assert lc_mod.AIComplyCallbackHandler(on_violation).raise_error is reraised
