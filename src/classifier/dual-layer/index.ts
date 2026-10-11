@@ -142,6 +142,22 @@ export function assertSourcePackage(value: unknown): asserts value is string | u
 }
 
 /**
+ * Reject a guardOptions that is set but not an object. A misplaced URL string
+ * (guardOptions: 'http://...') would otherwise be read as an object with no
+ * baseUrl and the default address used instead. `name` is how the error
+ * refers to the value, e.g. 'comply: options.guardOptions'.
+ */
+export function assertGuardOptions(
+  value: unknown,
+  name: string,
+): asserts value is NanoMindAdapterOptions | undefined {
+  if (value !== undefined && (value === null || typeof value !== 'object' || Array.isArray(value))) {
+    const got = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+    throw new TypeError(`${name} must be an object like { baseUrl: 'http://host:port' }, got ${got}`);
+  }
+}
+
+/**
  * Apply the Registry L2 step to a classified result when the caller named a
  * source package and gave a cache to look it up in or an onRegistryUnknown
  * action. Exported so comply() runs the same step on empty content, which it
@@ -200,6 +216,7 @@ export async function classifyDualLayer(
   }
   assertRegistryUnknownAction(options?.onRegistryUnknown);
   assertSourcePackage(options?.sourcePackage);
+  assertGuardOptions(options?.guardOptions, 'classifyDualLayer: options.guardOptions');
 
   // Pre-regex adversarial normalization (threat-model scope 2026-05-28).
   // NFKC + zero-width strip produce normalizedContent; the compact form

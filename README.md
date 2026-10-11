@@ -49,7 +49,7 @@ The CLI is a try-path. The library API below is the production surface.
 
 `aicomply` is an inline check between "tool returned content" and "send to model," which most agent stacks lack even though every agent that calls a hosted LLM (Anthropic, OpenAI, Bedrock, Vertex, …) copies the conversation - system prompt, tool outputs, retrieved documents, user input - into a third party's logs. If your agent reads a support ticket containing an SSN, that SSN goes to the provider. If your agent reads `.env` to summarize it, your AWS key goes too.
 
-It runs inline, sub-millisecond. You hand it the content; it returns a verdict (`CLEAN` / `VIOLATION` / `DENY`) and structured findings. You decide what to do next - block, redact, log, or pass.
+It runs inline. With no Guard daemon running, the default, only the regex layer runs, and that layer is sub-millisecond; with a daemon reachable, a call also waits for the Guard layer. You hand it the content; it returns a verdict (`CLEAN` / `VIOLATION` / `DENY`) and structured findings. You decide what to do next - block, redact, log, or pass.
 
 Two detection layers run one after the other, the regex layer first and then the Guard layer, so a call takes the sum of their latencies:
 

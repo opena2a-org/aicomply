@@ -69,6 +69,7 @@ export { PACK_VERSION, PACK_SHA256 } from './classifier/regex/pack';
 import {
   classifyDualLayer,
   applyRegistry,
+  assertGuardOptions,
   assertRegistryUnknownAction,
   assertSourcePackage,
 } from './classifier/dual-layer';
@@ -161,14 +162,8 @@ export async function comply(
   assertRegistryUnknownAction(dualLayerOptions?.onRegistryUnknown);
   assertSourcePackage(opts.sourcePackage);
   assertSourcePackage(dualLayerOptions?.sourcePackage);
-  // A misplaced URL string (guardOptions: 'http://...') would otherwise be
-  // read as an object with no baseUrl and the default address used instead.
-  if (opts.guardOptions !== undefined && !isPlainObject(opts.guardOptions)) {
-    const got = describeValue(opts.guardOptions);
-    throw new TypeError(
-      `comply: options.guardOptions must be an object like { baseUrl: 'http://host:port' }, got ${got}`,
-    );
-  }
+  assertGuardOptions(opts.guardOptions, 'comply: options.guardOptions');
+  assertGuardOptions(dualLayerOptions?.guardOptions, 'comply: dualLayerOptions.guardOptions');
   if (!opts.content) {
     // Empty / missing content: nothing to classify, but the Registry lookup
     // depends on the source, not the content, so it still runs. A caller who
@@ -278,10 +273,12 @@ export class ClassificationSession {
    * Create a session with a warmed registry cache.
    * Resolves after warm() completes (both fleet and supply-chain endpoints fetched).
    * `options.guardOptions` sets the Guard daemon address for every comply() call
-   * that does not pass its own.
+   * that does not pass its own. A `guardOptions` that is not an object is
+   * rejected here, before the Registry is fetched.
    */
   static async create(options: ClassificationSessionOptions = {}): Promise<ClassificationSession> {
     const { guardOptions, ...registryOptions } = options;
+    assertGuardOptions(guardOptions, 'ClassificationSession.create: options.guardOptions');
     const cache = new RegistryIntelligenceCache(registryOptions);
     await cache.warm();
     return new ClassificationSession(cache, guardOptions);
@@ -297,6 +294,9 @@ export class ClassificationSession {
     options: ComplyOptions,
     dualLayerOptions?: DualLayerOptions,
   ): Promise<ComplyResult> {
+    // Checked before the value is copied onto `options` below, so the error
+    // names the parameter the caller passed it on.
+    assertGuardOptions(dualLayerOptions?.guardOptions, 'comply: dualLayerOptions.guardOptions');
     const guardOptions = options.guardOptions ?? dualLayerOptions?.guardOptions ?? this.guardOptions;
     const optionsWithCache: ComplyOptions = {
       ...options,

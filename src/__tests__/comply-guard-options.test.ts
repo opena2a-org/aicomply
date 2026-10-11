@@ -9,9 +9,11 @@
 
 import { createServer } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
-import { comply, ClassificationSession } from '..';
+import { comply, classifyDualLayer, ClassificationSession } from '..';
+import type { DualLayerOptions } from '..';
 import { RegistryIntelligenceCache } from '../registry';
-import type { ComplyOptions } from '../types';
+import type { ClassificationSessionOptions, ComplyOptions } from '../types';
+import * as guardAdapter from '../classifier/guard-client/nanomind-adapter';
 import type { NanoMindInferResponse } from '../classifier/guard-client/types';
 
 interface StubDaemon {
@@ -128,11 +130,68 @@ describe('comply({ guardOptions })', () => {
       comply({ content: 'hello world', guardOptions: null } as unknown as ComplyOptions),
     ).rejects.toThrow(/got null$/);
   });
+
+  it('rejects a guardOptions on the second parameter that is not an object, before any Guard request', async () => {
+    const adapter = jest.spyOn(guardAdapter, 'classifyWithNanoMindDaemon').mockResolvedValue(null);
+    const bad = { guardOptions: 'http://10.0.0.5:47200' } as unknown as DualLayerOptions;
+
+    await expect(comply({ content: 'hello world' }, bad)).rejects.toThrow(TypeError);
+    await expect(comply({ content: 'hello world' }, bad)).rejects.toThrow(
+      "comply: dualLayerOptions.guardOptions must be an object like { baseUrl: 'http://host:port' }, got string",
+    );
+    await expect(
+      comply({ content: 'hello world' }, { guardOptions: null } as unknown as DualLayerOptions),
+    ).rejects.toThrow(/got null$/);
+    // Empty content returns before the Guard step; the mistake is reported all the same.
+    await expect(comply({ content: '' }, bad)).rejects.toThrow(TypeError);
+    expect(adapter).not.toHaveBeenCalled();
+  });
+});
+
+describe('classifyDualLayer({ guardOptions })', () => {
+  it('rejects a guardOptions that is not an object, before any Guard request', async () => {
+    const adapter = jest.spyOn(guardAdapter, 'classifyWithNanoMindDaemon').mockResolvedValue(null);
+    const bad = { guardOptions: 'http://10.0.0.5:47200' } as unknown as DualLayerOptions;
+
+    await expect(classifyDualLayer('hello world', bad)).rejects.toThrow(TypeError);
+    await expect(classifyDualLayer('hello world', bad)).rejects.toThrow(
+      "classifyDualLayer: options.guardOptions must be an object like { baseUrl: 'http://host:port' }, got string",
+    );
+    expect(adapter).not.toHaveBeenCalled();
+  });
 });
 
 describe('ClassificationSession guardOptions', () => {
   beforeEach(() => {
     jest.spyOn(RegistryIntelligenceCache.prototype, 'warm').mockResolvedValue(undefined);
+  });
+
+  it('rejects a guardOptions that is not an object at create(), before the Registry is fetched', async () => {
+    const bad = { guardOptions: 'http://10.0.0.5:47200' } as unknown as ClassificationSessionOptions;
+
+    await expect(ClassificationSession.create(bad)).rejects.toThrow(TypeError);
+    await expect(ClassificationSession.create(bad)).rejects.toThrow(
+      "ClassificationSession.create: options.guardOptions must be an object like { baseUrl: 'http://host:port' }, got string",
+    );
+    await expect(
+      ClassificationSession.create({ guardOptions: null } as unknown as ClassificationSessionOptions),
+    ).rejects.toThrow(/got null$/);
+    expect(RegistryIntelligenceCache.prototype.warm).not.toHaveBeenCalled();
+  });
+
+  it('names the second parameter when session.comply() is given a guardOptions there that is not an object', async () => {
+    const session = await ClassificationSession.create({
+      guardOptions: { baseUrl: 'http://127.0.0.1:1', timeoutMs: 500 },
+    });
+
+    await expect(
+      session.comply(
+        { content: 'hello world' },
+        { guardOptions: 'http://10.0.0.5:47200' } as unknown as DualLayerOptions,
+      ),
+    ).rejects.toThrow(
+      "comply: dualLayerOptions.guardOptions must be an object like { baseUrl: 'http://host:port' }, got string",
+    );
   });
 
   it('sends every session.comply() to the daemon given to create()', async () => {
