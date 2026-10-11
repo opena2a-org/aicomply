@@ -7,6 +7,7 @@
 
 export type {
   ComplyOptions,
+  ClassificationSessionOptions,
   ComplyResult,
   ComplyLayer,
   PackIdentity,
@@ -70,7 +71,13 @@ import { packIdentity } from './classifier/regex/pack';
 import { RegistryIntelligenceCache } from './registry';
 import { loadPolicyPack } from './policy';
 import type { DualLayerOptions } from './classifier/dual-layer';
-import type { ComplyOptions, ComplyResult, RegistryCacheOptions } from './types';
+import type { NanoMindAdapterOptions } from './classifier/guard-client/nanomind-adapter';
+import type {
+  ClassificationSessionOptions,
+  ComplyOptions,
+  ComplyResult,
+  RegistryCacheOptions,
+} from './types';
 
 export type { DualLayerOptions } from './classifier/dual-layer';
 
@@ -100,6 +107,9 @@ export type { DualLayerOptions } from './classifier/dual-layer';
  * reports 'miss' or 'error' (AC-002). Set `onRegistryUnknown` to 'violation'
  * or 'deny' to have either one decide the verdict.
  *
+ * The Guard layer calls the nanomind daemon at `http://127.0.0.1:47200` unless
+ * `options.guardOptions.baseUrl` names another address.
+ *
  * @param options - Either a bare string to classify, or an options object with
  *   `content` plus optional policy/risk/registry context. `comply('text')` is
  *   shorthand for `comply({ content: 'text' })`.
@@ -116,8 +126,8 @@ export async function comply(
   // than the unhelpful "options must be an object".
   const opts: ComplyOptions =
     typeof options === 'string' ? { content: options } : (options as ComplyOptions);
-  if (opts === null || typeof opts !== 'object' || Array.isArray(opts)) {
-    const got = opts === null ? 'null' : Array.isArray(opts) ? 'array' : typeof opts;
+  if (!isPlainObject(opts)) {
+    const got = describeValue(opts);
     throw new TypeError(
       `comply: expected a string or an options object like comply({ content: '...' }), got ${got}`,
     );
@@ -141,6 +151,14 @@ export async function comply(
   // Checked before the empty-content return so a mistyped action fails on
   // every call, not only on the ones that reach the Registry lookup.
   assertRegistryUnknownAction(opts.onRegistryUnknown);
+  // A misplaced URL string (guardOptions: 'http://...') would otherwise be
+  // read as an object with no baseUrl and the default address used instead.
+  if (opts.guardOptions !== undefined && !isPlainObject(opts.guardOptions)) {
+    const got = describeValue(opts.guardOptions);
+    throw new TypeError(
+      `comply: options.guardOptions must be an object like { baseUrl: 'http://host:port' }, got ${got}`,
+    );
+  }
   if (!opts.content) {
     // Empty / missing content. Populate the audit fields so consumers can
     // rely on `originalContent` / `normalizedContent` / `normalizations`
@@ -167,9 +185,19 @@ export async function comply(
     ...(opts.riskContext !== undefined && { riskContext: opts.riskContext }),
     ...(opts.useGuard !== undefined && { useGuard: opts.useGuard }),
     ...(opts.onRegistryUnknown !== undefined && { onRegistryUnknown: opts.onRegistryUnknown }),
+    ...(opts.guardOptions !== undefined && { guardOptions: opts.guardOptions }),
   };
 
   return classifyDualLayer(opts.content, mergedOptions);
+}
+
+function isPlainObject(value: unknown): value is object {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function describeValue(value: unknown): string {
+  if (value === null) return 'null';
+  return Array.isArray(value) ? 'array' : typeof value;
 }
 
 /**
@@ -202,39 +230,50 @@ export async function warmRegistryCache(
  * multiple comply() calls (e.g., an agent session or a request batch).
  *
  * @example
- * const session = await ClassificationSession.create({ baseUrl: 'https://api.oa2a.org' });
+ * const session = await ClassificationSession.create({
+ *   baseUrl: 'https://api.oa2a.org',
+ *   guardOptions: { baseUrl: 'http://10.0.0.5:47200' }, // optional; Guard daemon address
+ * });
  * const result = await session.comply({ content, sourcePackage: 'my-agent' });
  * session.refreshCache(); // non-blocking; call when convenient
  */
 export class ClassificationSession {
   private readonly cache: RegistryIntelligenceCache;
+  private readonly guardOptions: NanoMindAdapterOptions | undefined;
 
-  private constructor(cache: RegistryIntelligenceCache) {
+  private constructor(cache: RegistryIntelligenceCache, guardOptions?: NanoMindAdapterOptions) {
     this.cache = cache;
+    this.guardOptions = guardOptions;
   }
 
   /**
    * Create a session with a warmed registry cache.
    * Resolves after warm() completes (both fleet and supply-chain endpoints fetched).
+   * `options.guardOptions` sets the Guard daemon address for every comply() call
+   * that does not pass its own.
    */
-  static async create(options?: RegistryCacheOptions): Promise<ClassificationSession> {
-    const cache = new RegistryIntelligenceCache(options);
+  static async create(options: ClassificationSessionOptions = {}): Promise<ClassificationSession> {
+    const { guardOptions, ...registryOptions } = options;
+    const cache = new RegistryIntelligenceCache(registryOptions);
     await cache.warm();
-    return new ClassificationSession(cache);
+    return new ClassificationSession(cache, guardOptions);
   }
 
   /**
    * Run compliance classification, applying L2 registry logic when sourcePackage
    * is provided. Uses the session's warmed cache - no Registry network I/O in
    * the hot path. The Guard attempt still runs unless `useGuard: false` is set.
+   * Guard daemon settings passed on this call take precedence over the session's.
    */
   async comply(
     options: ComplyOptions,
     dualLayerOptions?: DualLayerOptions,
   ): Promise<ComplyResult> {
+    const guardOptions = options.guardOptions ?? dualLayerOptions?.guardOptions ?? this.guardOptions;
     const optionsWithCache: ComplyOptions = {
       ...options,
       registryCache: options.registryCache ?? this.cache,
+      ...(guardOptions !== undefined && { guardOptions }),
     };
     return comply(optionsWithCache, dualLayerOptions);
   }

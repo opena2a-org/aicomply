@@ -4,6 +4,7 @@
 
 import type { RegistryIntelligenceCache, RegistryCacheOptions, RegistryLookupResult } from './registry';
 import type { NormalizationStep } from './normalize/types';
+import type { NanoMindAdapterOptions } from './classifier/guard-client/nanomind-adapter';
 export type { RegistryCacheOptions };
 
 /**
@@ -122,6 +123,22 @@ export interface ComplyOptions {
    * `sourcePackage` set and no `registryCache`, the lookup counts as an error.
    */
   onRegistryUnknown?: RegistryUnknownAction;
+  /**
+   * Where to reach the nanomind daemon for the Guard layer, e.g.
+   * `{ baseUrl: 'http://10.0.0.5:47200' }`. Defaults to
+   * `http://127.0.0.1:47200`. An unreachable address falls back to
+   * regex-only, as the default address does.
+   */
+  guardOptions?: NanoMindAdapterOptions;
+}
+
+/**
+ * Options for `ClassificationSession.create()`: the Registry cache settings
+ * plus the Guard daemon settings every `session.comply()` call uses unless
+ * the call passes its own `guardOptions`.
+ */
+export interface ClassificationSessionOptions extends RegistryCacheOptions {
+  guardOptions?: NanoMindAdapterOptions;
 }
 
 /** A processing layer that ran on the content. */

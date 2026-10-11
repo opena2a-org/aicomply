@@ -135,7 +135,14 @@ npm install @nanomind/daemon
 npx nanomind-daemon start &   # listens on http://127.0.0.1:47200
 ```
 
-aicomply auto-detects the daemon on the default URL. Pass `baseUrl` to `classifyWithNanoMindDaemon()` to reach a daemon elsewhere. The `MOCK_NANOMIND_URL` and `MOCK_GUARD_SOCKET` overrides are for tests and local development: they are honoured only when `NODE_ENV` is `test` or `development` and ignored otherwise, including when `NODE_ENV` is unset. No code change required in the consumer: as long as the daemon is reachable, `comply()` returns `classifierResults.guard` populated alongside the regex result.
+aicomply auto-detects the daemon on the default URL. No code change is required in the consumer: as long as the daemon is reachable there, `comply()` returns `classifierResults.guard` populated alongside the regex result. To reach a daemon on another address, pass `guardOptions`:
+
+```typescript
+const result = await comply({ content: agentInput, guardOptions: { baseUrl: 'http://10.0.0.5:47200' } });
+const session = await ClassificationSession.create({ guardOptions: { baseUrl: 'http://10.0.0.5:47200' } });
+```
+
+`guardOptions` also takes `timeoutMs` (default 5000) and `agentId`, and is the same object `classifyWithNanoMindDaemon(content, options)` accepts. The `MOCK_NANOMIND_URL` and `MOCK_GUARD_SOCKET` overrides are for tests and local development: they are honoured only when `NODE_ENV` is `test` or `development` and ignored otherwise, including when `NODE_ENV` is unset.
 
 If the daemon is not installed, not running, or unreachable, aicomply silently falls back to regex-only - the v1.0 behavior. The Guard is a defense-in-depth layer, not a gate.
 

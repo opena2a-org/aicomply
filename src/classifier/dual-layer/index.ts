@@ -20,6 +20,7 @@
 import { classifyWithRegex } from '../regex';
 import { packIdentity } from '../regex/pack';
 import { classifyWithNanoMindDaemon } from '../guard-client/nanomind-adapter';
+import type { NanoMindAdapterOptions } from '../guard-client/nanomind-adapter';
 import { verifyClassification } from '../../arp/verify';
 import { RegistryIntelligenceCache } from '../../registry';
 import type { RegistryLookupResult } from '../../registry';
@@ -40,6 +41,12 @@ import type {
 export interface DualLayerOptions {
   guardVerifyOptions?: NanoMindGuardVerifyOptions;
   guardResult?: NanoMindGuardResult;
+  /**
+   * Connection settings for the nanomind daemon (`baseUrl`, `timeoutMs`,
+   * `agentId`). Used when no pre-computed `guardResult` is supplied.
+   * Defaults to `http://127.0.0.1:47200`.
+   */
+  guardOptions?: NanoMindAdapterOptions;
   /**
    * Registry cache instance. When provided, L2 threshold/block logic runs
    * against the pre-warmed cache (AC-005: synchronous lookup only).
@@ -213,7 +220,7 @@ export async function classifyDualLayer(
     // to the daemon address, so `useGuard: false` skips it entirely.
     const guardResult = options?.useGuard === false
       ? null
-      : await classifyWithNanoMindDaemon(content);
+      : await classifyWithNanoMindDaemon(content, options?.guardOptions);
 
     const allViolations: Violation[] = [...regexResult.violations];
     if (guardResult) {
