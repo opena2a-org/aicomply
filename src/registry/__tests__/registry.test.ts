@@ -5,6 +5,7 @@
  *   - warm-start happy path (fleet + supply-chain)
  *   - AC-002: cache miss treated as unknown, not clean
  *   - AC-002: fetch error treated as unknown
+ *   - AC-005: lookup() does no network I/O
  *   - cache TTL expiry
  *   - lookup before warm returns error
  */
@@ -160,6 +161,27 @@ describe('RegistryIntelligenceCache', () => {
 
       const result = cache.lookup('example-agent');
       expect(result.status).toBe('error');
+    });
+  });
+
+  describe('AC-005: lookup() does no network I/O', () => {
+    it('does not fetch before warm()', () => {
+      mockFetch([FLEET_SIGNAL], []);
+      const cache = new RegistryIntelligenceCache();
+      cache.lookup('example-agent');
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('does not fetch on a hit, a miss or an entry past its TTL', async () => {
+      mockFetch([FLEET_SIGNAL], []);
+      const cache = new RegistryIntelligenceCache({ cacheTtlMs: 0 });
+      await cache.warm();
+      const fetched = (global.fetch as jest.Mock).mock.calls.length;
+
+      expect(cache.lookup('example-agent').status).toBe('hit');
+      expect(cache.lookup('example-agent').status).toBe('hit');
+      expect(cache.lookup('unknown-package').status).toBe('miss');
+      expect((global.fetch as jest.Mock).mock.calls.length).toBe(fetched);
     });
   });
 

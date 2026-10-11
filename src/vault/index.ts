@@ -1,5 +1,5 @@
 /**
- * Session vault -- in-memory AES-256-GCM encrypted storage.
+ * Session vault -- in-memory AES-256-GCM encrypted storage (D9).
  *
  * Provides temporary encrypted storage for sensitive content
  * during compliance processing. Keys are derived per-session

@@ -5,7 +5,7 @@
  * - Regex catches violations independently
  * - Valid signed Guard + clean regex = CLEAN
  * - Valid signed Guard with violation + clean regex = VIOLATION
- * - Invalid signature = DENY (parse-to-deny)
+ * - Invalid signature = DENY (parse-to-deny, CR-001)
  * - Regex catches even when Guard says clean
  */
 
