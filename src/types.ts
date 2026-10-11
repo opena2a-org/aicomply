@@ -2,9 +2,23 @@
  * Core types for the AIComply compliance classifier.
  */
 
-import type { RegistryIntelligenceCache, RegistryCacheOptions } from './registry';
+import type { RegistryIntelligenceCache, RegistryCacheOptions, RegistryLookupResult } from './registry';
 import type { NormalizationStep } from './normalize/types';
 export type { RegistryCacheOptions };
+
+/**
+ * What the Registry cache had for a source package. Derived structurally
+ * from `RegistryLookupResult['status']` so the two cannot drift.
+ *   - 'hit':   the package is in the fleet index or has supply-chain alerts.
+ *   - 'miss':  the fleet index loaded and the package is in neither index.
+ *   - 'error': the fleet index has never loaded (cache not warmed, or every
+ *              fetch so far failed), or no cache was supplied to look the
+ *              package up in.
+ */
+export type RegistryLookupStatus = RegistryLookupResult['status'];
+
+/** The verdict a caller asks for when the Registry lookup is a miss or an error. */
+export type RegistryUnknownAction = 'violation' | 'deny';
 export type { NormalizationStep, NormalizationTransform, DecodedExtraction } from './normalize/types';
 
 export type Verdict = 'CLEAN' | 'VIOLATION' | 'DENY';
@@ -97,6 +111,14 @@ export interface ComplyOptions {
    * supplied through the second argument is still verified.
    */
   useGuard?: boolean;
+  /**
+   * What to do when the Registry cannot vouch for `sourcePackage`: the lookup
+   * is a miss or an error (see `registrySignals.status`). Unset, the verdict
+   * is left as the classifiers set it. 'violation' raises CLEAN to VIOLATION;
+   * 'deny' sets DENY. Either appends a REGISTRY_UNKNOWN violation. With
+   * `sourcePackage` set and no `registryCache`, the lookup counts as an error.
+   */
+  onRegistryUnknown?: RegistryUnknownAction;
 }
 
 /** A processing layer that ran on the content. */
@@ -127,6 +149,13 @@ export interface ComplyResult {
    * Present when registry data was consulted (Task 6 / Section 3.1).
    */
   registrySignals?: {
+    /**
+     * Outcome of the Registry lookup. Always set when registrySignals is
+     * present. Only 'hit' means the Registry had data for the package: on
+     * 'miss' and 'error' the scores below are null, and the verdict reflects
+     * the lookup only when the caller set `onRegistryUnknown`.
+     */
+    status?: RegistryLookupStatus;
     fleetAnomalyScore: number | null;
     /** Anomaly score after applying the trust-level sensitivity multiplier. */
     effectiveAnomalyScore: number | null;

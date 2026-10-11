@@ -13,7 +13,8 @@
  * Registry L2 logic (AC-002, AC-005):
  *   - fleetAnomalySignal > 0.30 => classification threshold lowered by 0.15
  *   - Any active supply-chain alert on the source package => hard block (DENY)
- *   - Cache miss / error => treat as unknown, do NOT treat as clean
+ *   - Cache miss / error => reported as registrySignals.status, never as a
+ *     hit; changes the verdict only when the caller sets onRegistryUnknown
  */
 
 import { classifyWithRegex } from '../regex';
@@ -21,9 +22,10 @@ import { packIdentity } from '../regex/pack';
 import { classifyWithNanoMindDaemon } from '../guard-client/nanomind-adapter';
 import { verifyClassification } from '../../arp/verify';
 import { RegistryIntelligenceCache } from '../../registry';
+import type { RegistryLookupResult } from '../../registry';
 import { assembleRiskContext } from '../../risk';
 import { normalize } from '../../normalize';
-import type { ClassifierResult, ComplyLayer, ComplyResult, PolicyPack, RiskContext, Violation, ViolationView } from '../../types';
+import type { ClassifierResult, ComplyLayer, ComplyResult, PolicyPack, RegistryUnknownAction, RiskContext, Violation, ViolationView } from '../../types';
 import type {
   NanoMindGuardResult,
   NanoMindGuardVerifyOptions,
@@ -67,6 +69,12 @@ export interface DualLayerOptions {
    * classify with the regex layer alone.
    */
   useGuard?: boolean;
+  /**
+   * Verdict to give when the Registry lookup for sourcePackage is a miss or
+   * an error. Unset, the verdict is left as the classifiers set it. With
+   * sourcePackage set and no registryCache, the lookup counts as an error.
+   */
+  onRegistryUnknown?: RegistryUnknownAction;
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +109,19 @@ function sensitivityMultiplier(trustLevel: number | undefined): number {
 }
 
 /**
+ * Reject an onRegistryUnknown value that is neither action. Read as unset, a
+ * JavaScript caller's typo would leave the verdict alone on a miss or error.
+ */
+export function assertRegistryUnknownAction(
+  value: unknown,
+): asserts value is RegistryUnknownAction | undefined {
+  if (value !== undefined && value !== 'violation' && value !== 'deny') {
+    const got = typeof value === 'string' ? JSON.stringify(value) : value === null ? 'null' : typeof value;
+    throw new TypeError(`onRegistryUnknown must be 'violation' or 'deny' (got ${got})`);
+  }
+}
+
+/**
  * Run content through both classification layers and merge results.
  *
  * When guardResult and guardVerifyOptions are provided, the Guard
@@ -121,6 +142,7 @@ export async function classifyDualLayer(
       `classifyDualLayer: options.useGuard must be a boolean (got ${typeof options.useGuard})`,
     );
   }
+  assertRegistryUnknownAction(options?.onRegistryUnknown);
 
   // Pre-regex adversarial normalization (threat-model scope 2026-05-28).
   // NFKC + zero-width strip produce normalizedContent; the compact form
@@ -216,15 +238,21 @@ export async function classifyDualLayer(
   // AC-005: synchronous cache lookup only - never fetch in the hot path.
   // ---------------------------------------------------------------------------
   let result: ComplyResult;
-  if (options?.registryCache && options?.sourcePackage) {
+  // A caller who set onRegistryUnknown gets it for a source package with no
+  // cache to look it up in as well: that lookup is an error, not a skipped check.
+  if (options?.sourcePackage && (options.registryCache || options.onRegistryUnknown)) {
     const assembled = options.riskContext !== undefined
       ? assembleRiskContext(options.riskContext)
       : undefined;
+    const lookup: RegistryLookupResult = options.registryCache
+      ? options.registryCache.lookup(options.sourcePackage)
+      : { status: 'error', reason: 'no registry cache supplied' };
     result = applyRegistryL2(
       baseResult,
-      options.registryCache,
+      lookup,
       options.sourcePackage,
       assembled?.trustLevel,
+      options.onRegistryUnknown,
     );
   } else {
     result = baseResult;
@@ -336,31 +364,49 @@ export function scanAllViews(norm: ReturnType<typeof normalize>): ClassifierResu
  *     by 0.15 - implemented here as: if the current verdict is CLEAN but the
  *     anomaly score is elevated, re-evaluate with the lowered threshold and
  *     promote to VIOLATION.
- *   - Cache miss / error => treat as unknown, not clean (AC-002). We do NOT
- *     promote CLEAN to VIOLATION on a miss alone, but we record the delta so
- *     callers can decide. A subsequent warm() + re-classify is the correct path.
+ *   - Cache miss / error => reported as registrySignals.status, never as a
+ *     hit (AC-002). The verdict is left alone unless the caller set
+ *     onRegistryUnknown: 'violation' raises CLEAN to VIOLATION, 'deny' sets
+ *     DENY, and either appends a REGISTRY_UNKNOWN violation. Without it, a
+ *     subsequent warm() + re-classify is the correct path.
  */
 function applyRegistryL2(
   base: Omit<ComplyResult, 'registrySignals'>,
-  cache: RegistryIntelligenceCache,
+  lookup: RegistryLookupResult,
   packageName: string,
   trustLevel?: number,
+  onUnknown?: RegistryUnknownAction,
 ): ComplyResult {
-  const lookup = cache.lookup(packageName);
   const mult = sensitivityMultiplier(trustLevel);
 
   if (lookup.status === 'error' || lookup.status === 'miss') {
-    // AC-002: unknown is NOT clean. Surface the signal; do not silently pass.
+    // AC-002: unknown is never reported as a hit. The status says which kind.
+    const registrySignals: ComplyResult['registrySignals'] = {
+      status: lookup.status,
+      fleetAnomalyScore: null,
+      effectiveAnomalyScore: null,
+      trustSensitivityMultiplier: mult,
+      thresholdDelta: 0,
+      supplyChainBlock: false,
+      packageName,
+    };
+    if (onUnknown === undefined) {
+      return { ...base, registrySignals };
+    }
+    const unknownViolation: Violation = {
+      type: 'REGISTRY_UNKNOWN',
+      value: `status=${lookup.status}`,
+      start: 0,
+      end: 0,
+      confidence: 1.0,
+      classifier: 'regex',
+    };
     return {
       ...base,
-      registrySignals: {
-        fleetAnomalyScore: null,
-        effectiveAnomalyScore: null,
-        trustSensitivityMultiplier: mult,
-        thresholdDelta: 0,
-        supplyChainBlock: false,
-        packageName,
-      },
+      // 'violation' never lowers a DENY the classifiers already reached.
+      verdict: onUnknown === 'deny' || base.verdict === 'DENY' ? 'DENY' : 'VIOLATION',
+      violations: [...base.violations, unknownViolation],
+      registrySignals,
     };
   }
 
@@ -386,6 +432,7 @@ function applyRegistryL2(
       verdict: 'DENY',
       violations: [...base.violations, blockViolation],
       registrySignals: {
+        status: 'hit',
         fleetAnomalyScore: fleetScore,
         effectiveAnomalyScore: effectiveScore,
         trustSensitivityMultiplier: mult,
@@ -427,6 +474,7 @@ function applyRegistryL2(
     verdict: adjustedVerdict,
     violations,
     registrySignals: {
+      status: 'hit',
       fleetAnomalyScore: fleetScore,
       effectiveAnomalyScore: effectiveScore,
       trustSensitivityMultiplier: mult,

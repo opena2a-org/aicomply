@@ -18,6 +18,8 @@ export type {
   PolicyPack,
   PolicyRule,
   RegistryCacheOptions,
+  RegistryLookupStatus,
+  RegistryUnknownAction,
   NormalizationStep,
   NormalizationTransform,
   DecodedExtraction,
@@ -63,7 +65,7 @@ export { scanPatterns, luhnCheck } from './classifier/regex/patterns';
 export type { PatternMatch, PatternType } from './classifier/regex/patterns';
 export { PACK_VERSION, PACK_SHA256 } from './classifier/regex/pack';
 
-import { classifyDualLayer } from './classifier/dual-layer';
+import { classifyDualLayer, assertRegistryUnknownAction } from './classifier/dual-layer';
 import { packIdentity } from './classifier/regex/pack';
 import { RegistryIntelligenceCache } from './registry';
 import { loadPolicyPack } from './policy';
@@ -92,6 +94,11 @@ export type { DualLayerOptions } from './classifier/dual-layer';
  * sends one POST carrying the content verbatim to the nanomind-daemon address
  * (`http://127.0.0.1:47200/v1/infer`) and falls back to regex-only when nothing
  * answers. Pass `useGuard: false` to make no such request.
+ *
+ * A package the Registry has no data for, or a Registry that could not be
+ * reached, does not change the verdict by default: `registrySignals.status`
+ * reports 'miss' or 'error' (AC-002). Set `onRegistryUnknown` to 'violation'
+ * or 'deny' to have either one decide the verdict.
  *
  * @param options - Either a bare string to classify, or an options object with
  *   `content` plus optional policy/risk/registry context. `comply('text')` is
@@ -131,6 +138,9 @@ export async function comply(
   if (useGuard !== undefined && typeof useGuard !== 'boolean') {
     throw new TypeError(`comply: useGuard must be a boolean (got ${typeof useGuard})`);
   }
+  // Checked before the empty-content return so a mistyped action fails on
+  // every call, not only on the ones that reach the Registry lookup.
+  assertRegistryUnknownAction(opts.onRegistryUnknown);
   if (!opts.content) {
     // Empty / missing content. Populate the audit fields so consumers can
     // rely on `originalContent` / `normalizedContent` / `normalizations`
@@ -156,6 +166,7 @@ export async function comply(
     ...(opts.policyPack !== undefined && { policyPack: loadPolicyPack(opts.policyPack) }),
     ...(opts.riskContext !== undefined && { riskContext: opts.riskContext }),
     ...(opts.useGuard !== undefined && { useGuard: opts.useGuard }),
+    ...(opts.onRegistryUnknown !== undefined && { onRegistryUnknown: opts.onRegistryUnknown }),
   };
 
   return classifyDualLayer(opts.content, mergedOptions);

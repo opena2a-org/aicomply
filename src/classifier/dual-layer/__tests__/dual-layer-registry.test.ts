@@ -5,11 +5,14 @@
  *   - fleetAnomalySignal > 0.30 => threshold -= 0.15 => CLEAN -> VIOLATION
  *   - Any active supply-chain alert on package => hard DENY
  *   - Cache miss => unknown (AC-002), verdict unchanged, signals recorded
+ *   - registrySignals.status tells hit, miss and error apart
+ *   - onRegistryUnknown => miss / error becomes VIOLATION or DENY
  *   - No registry options => L2 not applied
  */
 
 import { classifyDualLayer } from '..';
 import { RegistryIntelligenceCache } from '../../../registry';
+import type { SupplyChainAlert } from '../../../registry';
 
 // ---------------------------------------------------------------------------
 // Helpers to mock the registry cache
@@ -21,6 +24,27 @@ function makeCache(lookupResult: ReturnType<RegistryIntelligenceCache['lookup']>
 }
 
 const SAFE_CONTENT = 'This is safe content with no PII.';
+
+const ALERT: SupplyChainAlert = {
+  id: 'sca-status',
+  name: 'known-pkg',
+  type: 'library',
+  severity: 'high',
+  reason: 'Status test',
+  publishedAt: '2026-04-14T00:00:00Z',
+};
+
+function hitWith(alerts: SupplyChainAlert[]): ReturnType<RegistryIntelligenceCache['lookup']> {
+  return {
+    status: 'hit',
+    intelligence: {
+      packageName: 'known-pkg',
+      fleetAnomalySignal: null,
+      supplyChainAlerts: alerts,
+      fetchedAt: Date.now(),
+    },
+  };
+}
 
 afterEach(() => {
   jest.restoreAllMocks();
@@ -223,6 +247,147 @@ describe('Registry L2: AC-002 unknown/miss handling', () => {
 
     expect(result.registrySignals?.fleetAnomalyScore).toBeNull();
     expect(result.registrySignals?.packageName).toBe('some-pkg');
+  });
+});
+
+describe('Registry L2: registrySignals.status names the lookup outcome', () => {
+  it('reports miss and error apart, and neither as a hit', async () => {
+    const miss = await classifyDualLayer(SAFE_CONTENT, {
+      registryCache: makeCache({ status: 'miss' }),
+      sourcePackage: 'any-package',
+    });
+    const error = await classifyDualLayer(SAFE_CONTENT, {
+      registryCache: makeCache({ status: 'error', reason: 'registry cache not warmed' }),
+      sourcePackage: 'any-package',
+    });
+
+    expect(miss.registrySignals?.status).toBe('miss');
+    expect(error.registrySignals?.status).toBe('error');
+    expect(miss.registrySignals).not.toEqual(error.registrySignals);
+  });
+
+  it('reports hit when the Registry has the package and nothing against it', async () => {
+    const result = await classifyDualLayer(SAFE_CONTENT, {
+      registryCache: makeCache(hitWith([])),
+      sourcePackage: 'known-pkg',
+    });
+
+    expect(result.verdict).toBe('CLEAN');
+    expect(result.registrySignals?.status).toBe('hit');
+  });
+
+  it('reports hit on a supply-chain block', async () => {
+    const result = await classifyDualLayer(SAFE_CONTENT, {
+      registryCache: makeCache(hitWith([ALERT])),
+      sourcePackage: 'known-pkg',
+    });
+
+    expect(result.verdict).toBe('DENY');
+    expect(result.registrySignals?.status).toBe('hit');
+  });
+});
+
+describe('Registry L2: onRegistryUnknown', () => {
+  const unknowns: Array<[string, ReturnType<RegistryIntelligenceCache['lookup']>]> = [
+    ['miss', { status: 'miss' }],
+    ['error', { status: 'error', reason: 'registry cache not warmed' }],
+  ];
+
+  it.each(unknowns)('%s: the verdict stays as classified when unset', async (_status, lookup) => {
+    const result = await classifyDualLayer(SAFE_CONTENT, {
+      registryCache: makeCache(lookup),
+      sourcePackage: 'any-package',
+    });
+
+    expect(result.verdict).toBe('CLEAN');
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it.each(unknowns)("%s: becomes VIOLATION with 'violation'", async (status, lookup) => {
+    const result = await classifyDualLayer(SAFE_CONTENT, {
+      registryCache: makeCache(lookup),
+      sourcePackage: 'any-package',
+      onRegistryUnknown: 'violation',
+    });
+
+    expect(result.verdict).toBe('VIOLATION');
+    expect(result.registrySignals?.status).toBe(status);
+    expect(result.violations.filter(v => v.type === 'REGISTRY_UNKNOWN')).toEqual([
+      expect.objectContaining({ value: `status=${status}`, confidence: 1.0 }),
+    ]);
+  });
+
+  it.each(unknowns)("%s: becomes DENY with 'deny'", async (status, lookup) => {
+    const result = await classifyDualLayer(SAFE_CONTENT, {
+      registryCache: makeCache(lookup),
+      sourcePackage: 'any-package',
+      onRegistryUnknown: 'deny',
+    });
+
+    expect(result.verdict).toBe('DENY');
+    expect(result.registrySignals?.status).toBe(status);
+    expect(result.violations.some(v => v.type === 'REGISTRY_UNKNOWN')).toBe(true);
+    // Every DENY drops the content echo, whatever raised it.
+    expect(result.originalContent).toBeUndefined();
+    expect(result.normalizedContent).toBeUndefined();
+  });
+
+  it('keeps the classifier findings beside the Registry one', async () => {
+    const result = await classifyDualLayer('SSN: 123-45-6789', {
+      registryCache: makeCache({ status: 'miss' }),
+      sourcePackage: 'any-package',
+      onRegistryUnknown: 'violation',
+    });
+
+    expect(result.verdict).toBe('VIOLATION');
+    expect(result.violations.some(v => v.type === 'SSN')).toBe(true);
+    expect(result.violations.some(v => v.type === 'REGISTRY_UNKNOWN')).toBe(true);
+  });
+
+  it.each(['violation', 'deny'] as const)('does not touch a hit with %s', async (action) => {
+    const result = await classifyDualLayer(SAFE_CONTENT, {
+      registryCache: makeCache(hitWith([])),
+      sourcePackage: 'known-pkg',
+      onRegistryUnknown: action,
+    });
+
+    expect(result.verdict).toBe('CLEAN');
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it('counts a source package with no Registry cache to look it up in as an error', async () => {
+    const unset = await classifyDualLayer(SAFE_CONTENT, { sourcePackage: 'any-package' });
+    expect(unset.verdict).toBe('CLEAN');
+    expect(unset.registrySignals).toBeUndefined();
+
+    const deny = await classifyDualLayer(SAFE_CONTENT, {
+      sourcePackage: 'any-package',
+      onRegistryUnknown: 'deny',
+    });
+    expect(deny.verdict).toBe('DENY');
+    expect(deny.registrySignals?.status).toBe('error');
+    expect(deny.registrySignals?.packageName).toBe('any-package');
+    expect(deny.violations.some(v => v.type === 'REGISTRY_UNKNOWN')).toBe(true);
+  });
+
+  it('has nothing to look up without a source package', async () => {
+    const result = await classifyDualLayer(SAFE_CONTENT, {
+      registryCache: makeCache({ status: 'miss' }),
+      onRegistryUnknown: 'deny',
+    });
+
+    expect(result.verdict).toBe('CLEAN');
+    expect(result.registrySignals).toBeUndefined();
+  });
+
+  it('rejects a value that is neither action, so a typo cannot pass as unset', async () => {
+    await expect(
+      classifyDualLayer(SAFE_CONTENT, {
+        registryCache: makeCache({ status: 'miss' }),
+        sourcePackage: 'any-package',
+        onRegistryUnknown: 'block' as unknown as 'deny',
+      }),
+    ).rejects.toThrow(/onRegistryUnknown must be 'violation' or 'deny' \(got "block"\)/);
   });
 });
 

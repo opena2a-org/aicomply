@@ -7,6 +7,8 @@
  *   - Supply-chain hard block => DENY via comply()
  *   - Fleet anomaly > 0.30 => VIOLATION via comply()
  *   - Cache miss => signals present, verdict unchanged
+ *   - Unreachable Registry and absent package => distinct registrySignals.status
+ *   - onRegistryUnknown => miss / error becomes VIOLATION or DENY via comply()
  *   - comply() without registry options => no L2 signals
  *   - ClassificationSession.comply() uses session cache when caller omits registryCache
  *   - ClassificationSession.comply() respects caller-supplied registryCache override
@@ -250,6 +252,92 @@ describe('comply(): cache miss handling', () => {
 
     expect(result.registrySignals?.fleetAnomalyScore).toBeNull();
     expect(result.registrySignals?.packageName).toBe('some-agent');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// comply() - a package the Registry cannot vouch for (AC-002)
+//
+// These run the real cache against a stubbed fetch, so the status comes from
+// what the Registry returned and not from a mocked lookup().
+// ---------------------------------------------------------------------------
+
+describe('comply(): a package the Registry cannot vouch for', () => {
+  const BASE_URL = 'https://registry.invalid';
+
+  /** Registry endpoints refuse the connection, as an unreachable host does. */
+  function registryUnreachable(): void {
+    jest.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
+  }
+
+  /** Registry endpoints answer with empty indexes; every other URL refuses. */
+  function registryEmpty(): void {
+    jest.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === `${BASE_URL}/api/v1/registry/fleet/anomaly-signal`) {
+        return new Response(JSON.stringify({ agents: [] }));
+      }
+      if (url === `${BASE_URL}/api/v1/intelligence/alerts?type=supply_chain`) {
+        return new Response(JSON.stringify({ alerts: [], total: 0 }));
+      }
+      throw new TypeError('fetch failed');
+    });
+  }
+
+  it('tells an unreachable Registry from a package absent from its index', async () => {
+    registryUnreachable();
+    const down = await ClassificationSession.create({ baseUrl: BASE_URL });
+    const unreachable = await down.comply({ content: 'hello world', sourcePackage: 'any-package' });
+    jest.restoreAllMocks();
+
+    registryEmpty();
+    const up = await ClassificationSession.create({ baseUrl: BASE_URL });
+    const absent = await up.comply({ content: 'hello world', sourcePackage: 'any-package' });
+
+    expect(unreachable.registrySignals?.status).toBe('error');
+    expect(absent.registrySignals?.status).toBe('miss');
+    expect(unreachable.registrySignals).not.toEqual(absent.registrySignals);
+    // Neither changes the verdict unless the caller asks for it.
+    expect(unreachable.verdict).toBe('CLEAN');
+    expect(absent.verdict).toBe('CLEAN');
+  });
+
+  it("fails closed on an unreachable Registry with onRegistryUnknown: 'deny'", async () => {
+    registryUnreachable();
+    const session = await ClassificationSession.create({ baseUrl: BASE_URL });
+
+    const result = await session.comply({
+      content: 'hello world',
+      sourcePackage: 'any-package',
+      onRegistryUnknown: 'deny',
+    });
+
+    expect(result.verdict).toBe('DENY');
+    expect(result.registrySignals?.status).toBe('error');
+    expect(result.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN']);
+  });
+
+  it("flags a package absent from the index with onRegistryUnknown: 'violation'", async () => {
+    registryEmpty();
+    const session = await ClassificationSession.create({ baseUrl: BASE_URL });
+
+    const result = await session.comply({
+      content: 'hello world',
+      sourcePackage: 'any-package',
+      onRegistryUnknown: 'violation',
+    });
+
+    expect(result.verdict).toBe('VIOLATION');
+    expect(result.registrySignals?.status).toBe('miss');
+    expect(result.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN']);
+  });
+
+  it('rejects an onRegistryUnknown value that is neither action, with or without content', async () => {
+    const bad = 'block' as unknown as 'deny';
+    await expect(comply({ content: SAFE_CONTENT, onRegistryUnknown: bad })).rejects.toThrow(TypeError);
+    await expect(comply({ content: '', onRegistryUnknown: bad })).rejects.toThrow(
+      /onRegistryUnknown must be 'violation' or 'deny' \(got "block"\)/,
+    );
   });
 });
 

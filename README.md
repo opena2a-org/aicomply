@@ -238,11 +238,23 @@ const result = await session.comply({
 
 The cache warms once on `create()`. Subsequent `comply()` calls make no Registry request (contract AC-005 in [SECURITY.md](./SECURITY.md)). Each call still makes the Guard request described in [What the Guard attempt sends](#what-the-guard-attempt-sends) unless you pass `useGuard: false`.
 
+`result.registrySignals.status` says what the Registry had for the package: `hit`, `miss` (not in the index) or `error` (the index did not load, for example because the Registry was unreachable). A `miss` or an `error` leaves the verdict as the classifiers set it. To fail closed, pass `onRegistryUnknown`:
+
+```typescript
+const result = await session.comply({
+  content: agentInput,
+  sourcePackage: 'my-agent-name',
+  onRegistryUnknown: 'deny', // or 'violation'
+});
+```
+
+Either value appends a `REGISTRY_UNKNOWN` violation (contract AC-002).
+
 ## Verdict semantics
 
 - **`CLEAN`**: no findings; safe to forward
 - **`VIOLATION`**: one or more findings; the `violations` array is the audit trail
-- **`DENY`**: hard block (a policy pack triggered, or supply-chain Registry said the source package is untrusted); treat as fatal
+- **`DENY`**: hard block (a policy pack triggered, supply-chain Registry said the source package is untrusted, or `onRegistryUnknown: 'deny'` met a package the Registry had no data for); treat as fatal
 
 ## Inspecting per-classifier results
 
