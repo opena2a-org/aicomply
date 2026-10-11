@@ -85,9 +85,18 @@ export interface ComplyOptions {
   /**
    * Pre-warmed Registry intelligence cache. Must be warmed before calling
    * comply() - use ClassificationSession or warmRegistryCache() to ensure
-   * warm() has completed (AC-005: no network I/O in the hot path).
+   * warm() has completed (AC-005: no Registry network I/O in the hot path).
    */
   registryCache?: RegistryIntelligenceCache;
+  /**
+   * Whether to attempt the semantic Guard layer. Defaults to true: comply()
+   * sends one POST carrying the content verbatim to the nanomind-daemon
+   * address (`http://127.0.0.1:47200/v1/infer`) for each non-empty input and
+   * falls back to regex-only when nothing answers. Set to false to make no
+   * such request; the result is then regex-only. A signed Guard result
+   * supplied through the second argument is still verified.
+   */
+  useGuard?: boolean;
 }
 
 /** A processing layer that ran on the content. */

@@ -232,8 +232,16 @@ regex-only.
    self-hosted Registry; otherwise traffic egresses to the OpenA2A backend.
 4. **Telemetry.** This package does not emit telemetry directly. The
    Registry cache *fetches* from the Registry - the Registry sees those
-   reads. No PII content is transmitted from `comply()`.
-5. **Synthetic-corpus baseline is not a field SLA.** The accuracy numbers
+   reads. `comply()` sends no content to the Registry.
+5. **The Guard attempt posts the input to a loopback port.** For each
+   non-empty input, `comply()` makes one request,
+   `POST http://127.0.0.1:47200/v1/infer`, with the input verbatim in the
+   body. The address is loopback, so the request does not leave the host,
+   and with nothing listening the connection is refused and the result is
+   regex-only. Whichever local process holds port 47200 receives every
+   classified input, whether or not it is the nanomind-daemon. Pass
+   `useGuard: false` to `comply()` to make no request.
+6. **Synthetic-corpus baseline is not a field SLA.** The accuracy numbers
    in this document are measured against `bench/corpus/*.jsonl`, which is
    designed-attacker-aware but not exhaustive of real-world adversarial
    input. Regression-gating is in CI; field accuracy is a separate
@@ -258,7 +266,7 @@ if affected:
 | ID      | Contract |
 |---------|----------|
 | AC-002  | Cache miss treated as unknown, never as CLEAN |
-| AC-005  | No network I/O in the classification hot path |
+| AC-005  | No Registry network I/O in the classification hot path. The Guard loopback request is separate; see known limitation 5 |
 | CR-001  | Parse-to-deny on invalid Guard signature |
 | CR-007  | Local-verify path for ATX-style credentials (not used in V1) |
 | D7      | `@noble/post-quantum` for hybrid signing, not FIPS-validated |

@@ -60,6 +60,13 @@ export interface DualLayerOptions {
    * multiplier before comparing against the anomaly threshold.
    */
   riskContext?: RiskContext;
+  /**
+   * Whether to attempt the nanomind-daemon when no signed Guard result is
+   * supplied. Defaults to true. The attempt is one POST carrying the content
+   * verbatim to the daemon address; set to false to make no such request and
+   * classify with the regex layer alone.
+   */
+  useGuard?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +114,14 @@ export async function classifyDualLayer(
   content: string,
   options?: DualLayerOptions,
 ): Promise<ComplyResult> {
+  // `useGuard: false` is how a caller keeps content off the Guard request, so
+  // a near miss such as the string 'false' must not be read as "attempt it".
+  if (options?.useGuard !== undefined && typeof options.useGuard !== 'boolean') {
+    throw new TypeError(
+      `classifyDualLayer: options.useGuard must be a boolean (got ${typeof options.useGuard})`,
+    );
+  }
+
   // Pre-regex adversarial normalization (threat-model scope 2026-05-28).
   // NFKC + zero-width strip produce normalizedContent; the compact form
   // and any Base64/URL-decoded segments are scanned in addition.
@@ -172,8 +187,11 @@ export async function classifyDualLayer(
     // Attempt Guard classification via the nanomind-daemon adapter.
     // Returns null when the daemon is unreachable, the response is
     // malformed, or the response times out — silent fallback to
-    // regex-only is the documented contract.
-    const guardResult = await classifyWithNanoMindDaemon(content);
+    // regex-only is the documented contract. The attempt sends the content
+    // to the daemon address, so `useGuard: false` skips it entirely.
+    const guardResult = options?.useGuard === false
+      ? null
+      : await classifyWithNanoMindDaemon(content);
 
     const allViolations: Violation[] = [...regexResult.violations];
     if (guardResult) {
