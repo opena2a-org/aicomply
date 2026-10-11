@@ -5,13 +5,16 @@
  * fence opening by line 28, and a sample output that is what the CLI actually
  * prints for the documented input. LICENSE, which the license badge vouches
  * for, is pinned to the canonical Apache-2.0 text. Every `nanomind-daemon`
- * command the READMEs show names a subcommand the installed daemon lists.
+ * command the READMEs show names a subcommand the installed daemon lists. The
+ * CommonJS sample runs as a CommonJS file, and the README names the one build
+ * the package ships.
  */
 
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import { readFileSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
+import { compileFunction } from 'vm';
 import * as pkg from '../index';
 import { comply } from '../index';
 import { renderHuman } from '../cli';
@@ -60,6 +63,16 @@ function valueClaim(): string {
     parts.push(LINES[i].replace(/^>\s?/, ''));
   }
   return parts.join(' ');
+}
+
+/** The body of the README's CommonJS sample, the fence that opens with `require`. */
+function commonJsSample(): string {
+  const requireLine = lineOf(/^const \{ comply \} = require\('@opena2a\/aicomply'\);$/);
+  expect(requireLine).toBeGreaterThan(1);
+  expect(LINES[requireLine - 2]).toBe('```javascript');
+  const endLine = lineOf(/^```$/, requireLine + 1);
+  expect(endLine).toBeGreaterThan(requireLine);
+  return LINES.slice(requireLine - 1, endLine - 1).join('\n');
 }
 
 describe('README', () => {
@@ -211,6 +224,56 @@ describe('README', () => {
     expect(bulletLine).toBeGreaterThan(0);
     expect(LINES[bulletLine - 1]).toContain('no findings from the layers that ran');
     expect(README).not.toMatch(/safe\s+to\s+forward/i);
+  });
+
+  it('names the one build the package ships', () => {
+    // package.json has no ESM entry beside `main`; ESM reaches the CommonJS
+    // build through Node's interop. Adding one means updating this README claim.
+    const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+    expect(pkg.type ?? 'commonjs').toBe('commonjs');
+    expect(pkg.module).toBeUndefined();
+    expect(pkg.exports).toBeUndefined();
+    expect(README).toContain('The package is a CommonJS build');
+    expect(README).not.toMatch(/ships\s+both/i);
+  });
+
+  it('runs the CommonJS sample as written in a CommonJS file', async () => {
+    const logged: string[] = [];
+    const calls: Promise<unknown>[] = [];
+    const tracked = (...args: Parameters<typeof comply>) => {
+      const call = comply(...args);
+      calls.push(call);
+      return call;
+    };
+    const sampleRequire = (id: string) => {
+      if (id !== '@opena2a/aicomply') throw new Error(`the sample requires ${id}`);
+      return { comply: tracked };
+    };
+    const sampleConsole = {
+      log: (...args: unknown[]) => logged.push(args.map(String).join(' ')),
+      error: (...args: unknown[]) => logged.push(args.map(String).join(' ')),
+    };
+
+    // Node compiles a .cjs file as the body of a function with these
+    // parameters, so an `await` outside an async function throws the same
+    // SyntaxError here that `node sample.cjs` prints.
+    const run = compileFunction(
+      commonJsSample(),
+      ['exports', 'require', 'module', '__filename', '__dirname', 'console'],
+      { filename: 'sample.cjs' },
+    );
+    const sampleModule = { exports: {} };
+    run(sampleModule.exports, sampleRequire, sampleModule, 'sample.cjs', ROOT, sampleConsole);
+
+    // Wait for every comply() call, including those started after an earlier one resolves.
+    let settled = -1;
+    while (settled !== calls.length) {
+      settled = calls.length;
+      await Promise.all(calls);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect(calls).toHaveLength(2);
+    expect(logged).toEqual(['VIOLATION']);
   });
 });
 
