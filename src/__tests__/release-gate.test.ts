@@ -686,17 +686,64 @@ describe('npm publish lifecycle', () => {
    * stand between `npm` and `publish`, each with a word after it; that word
    * counts as a target unless the option is one in `VALUE_FLAGS`, so a
    * workspace named there is one.
+   *
+   * The line is read once. From each `npm` the options are walked to the
+   * first `publish`, and where a word that is neither an option, its value
+   * nor `publish` stops the walk, the search for the next `npm` starts at
+   * that word: an `npm` the walk passed over reaches no `publish` it did not.
    */
   function publishTargets(line: string): string[] {
     const targets: string[] = [];
-    for (const [, before, after] of line.matchAll(/\bnpm\\?((?:\s+-\S+(?:\s+[^-\s]\S*)?)*)\s+publish\b([^;&|#]*)/g)) {
-      const words = `${before} ${after}`.split(/\s+/).filter((w) => w !== '');
+    const npm = /\bnpm\\?(?=\s)/g;
+    const next = /\s+(\S+)/y;
+    const rest = /[^;&|#]*/y;
+    while (npm.exec(line) !== null) {
+      const words: string[] = [];
+      // Whether the word before is an option, which may take this word as its value.
+      let option = false;
+      let published = false;
+      let word: RegExpExecArray | null;
+      next.lastIndex = npm.lastIndex;
+      while ((word = next.exec(line)) !== null) {
+        if (/^publish\b/.test(word[1])) {
+          published = true;
+          break;
+        }
+        if (/^-\S/.test(word[1])) option = true;
+        else if (option && !word[1].startsWith('-')) option = false;
+        else break;
+        words.push(word[1]);
+      }
+      if (word === null) break;
+      const at = next.lastIndex - word[1].length;
+      if (!published) {
+        npm.lastIndex = at;
+        continue;
+      }
+      rest.lastIndex = at + 'publish'.length;
+      words.push(...(rest.exec(line)?.[0] ?? '').split(/\s+/).filter((w) => w !== ''));
+      npm.lastIndex = rest.lastIndex;
       for (let i = 0; i < words.length; i++) {
         if (!words[i].startsWith('-')) targets.push(words[i]);
         else if (VALUE_FLAGS.includes(words[i])) i++;
       }
     }
     return targets;
+  }
+
+  /**
+   * `line` without the quotes of a quoted value its key's line holds whole,
+   * past any tags and anchors and before any comment. YAML takes those quotes
+   * away, so the shell never gets the closing one as a word. A value a line
+   * does not close is left as it is.
+   */
+  function withoutValueQuotes(line: string): string {
+    const head = KEY.exec(line);
+    if (head === null) return line;
+    const value = withoutProperties(head[2] ?? '');
+    const quoted = /^(?:"((?:[^"\\]|\\[\s\S])*)"|'((?:[^']|'')*)')(\s*(?:#.*)?)$/.exec(value);
+    if (quoted === null) return line;
+    return `${line.slice(0, line.length - value.length)}${quoted[1] ?? quoted[2]}${quoted[3]}`;
   }
 
   /**
@@ -782,11 +829,16 @@ describe('npm publish lifecycle', () => {
    * command it stands in begins with an install, such as
    * `npm ci --ignore-scripts`, and `withoutInstallFlags` finds no quote,
    * redirection or `\` that could put it on another command. A line is
-   * refused when any of its `readings` is.
+   * refused when any of its `readings` is. The publish's targets are read
+   * from the line `withoutValueQuotes`, as the quote that closes the value is
+   * no word of the publish; the flag is read from the line as written, where
+   * `withoutInstallFlags` counts the quote that opens the value.
    */
   function scriptsSwitchedOff(workflow: string, npmrc: string | null): string[] {
-    const found = workflowLines(workflow).filter((l) =>
-      readings(l).some((r) => publishTargets(r).length > 0 || /ignore[-_]scripts/i.test(withoutInstallFlags(r))),
+    const found = workflowLines(workflow).filter(
+      (l) =>
+        readings(withoutValueQuotes(l)).some((r) => publishTargets(r).length > 0) ||
+        readings(l).some((r) => /ignore[-_]scripts/i.test(withoutInstallFlags(r))),
     );
     const rc = (npmrc ?? '')
       .split('\n')
@@ -835,6 +887,12 @@ describe('npm publish lifecycle', () => {
     ['a flag a backslash continues onto the next line of a double-quoted value that starts after its key', ['      - run:', '          "npm publish --provenance\\', './x.tgz"'], null],
     ['a flag an escaped backslash continues onto the next line of a double-quoted value', ['      - run: "npm publish --provenance\\\\', './x.tgz"'], null],
     ['a flag an escaped backslash and a backslash continue onto the next line of a double-quoted value', ['      - run: "npm publish --provenance\\\\\\', './x.tgz"'], null],
+    ['nothing after it in a double-quoted value', ['      - run: "npm publish"'], null],
+    ['nothing after it in a single-quoted value', ["      - run: 'npm publish'"], null],
+    ['nothing after it in a double-quoted value followed by a comment', ['      - run: "npm publish" # release'], null],
+    ['nothing after it in a tagged double-quoted value', ['      - run: !!str "npm publish"'], null],
+    ['nothing after it in a double-quoted value that starts after its key', ['      - run:', '          "npm publish"'], null],
+    ['a message that puts a lone dash between npm and publish', ['      - run: echo "already on npm - skipping publish"', PUBLISH], null],
   ])('lets a publish through with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).toEqual([]);
   });
@@ -938,6 +996,11 @@ describe('npm publish lifecycle', () => {
     ['a tarball after two backslashes that end a line of a single-quoted value', ["      - run: 'npm publish --provenance\\\\", "./x.tgz'"], null],
     ['a tarball after two escaped backslashes that end a line of a double-quoted value', ['      - run: "npm publish --provenance\\\\\\\\', './x.tgz"'], null],
     ['the space a backslash keeps before a flag on the next line of a single-quoted value', ["      - run: 'npm publish \\", "--access public'"], null],
+    ['a tarball handed to a publish in a double-quoted value', ['      - run: "npm publish ./x.tgz"'], null],
+    ['a tarball handed to a publish in a single-quoted value', ["      - run: 'npm publish ./x.tgz'"], null],
+    ['an empty word handed to the publish', ['      - run: npm publish ""'], null],
+    ['an empty word handed to a publish in a double-quoted value', ['      - run: "npm publish \\"\\""'], null],
+    ['an empty word handed to a publish in a single-quoted value', ["      - run: 'npm publish '''''"], null],
   ])('refuses a publish with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
   });
@@ -955,6 +1018,18 @@ describe('npm publish lifecycle', () => {
     const started = Date.now();
     expect(scriptsSwitchedOff(`      - run: "${run}\nnpm publish ./x.tgz"`, null)).not.toEqual([]);
     expect(scriptsSwitchedOff(`      - run: '${run}\nnpm publish ./x.tgz'`, null)).not.toEqual([]);
+    // The same publish without the tarball goes through, so the refusals
+    // above come from the tarball on the continued line.
+    expect(scriptsSwitchedOff(`      - run: "${run}\nnpm publish"`, null)).toEqual([]);
+    expect(scriptsSwitchedOff(`      - run: '${run}\nnpm publish'`, null)).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('reads a long run of npm options in time that grows with its length', () => {
+    const options = 'npm -a '.repeat(30000);
+    const started = Date.now();
+    expect(scriptsSwitchedOff(`      - run: ${options}x`, null)).toEqual([]);
+    expect(scriptsSwitchedOff(`      - run: ${options}publish`, null)).not.toEqual([]);
     expect(Date.now() - started).toBeLessThan(1000);
   });
 
