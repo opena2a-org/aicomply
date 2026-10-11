@@ -27,8 +27,8 @@ Starting at `1.0.0`, `@opena2a/aicomply` follows [semantic versioning](https://s
 
 Security fixes target the **latest two minor lines** for 90 days after a new
 minor ships, and the latest major line indefinitely. Pre-1.0 lines (`0.x`)
-are no longer supported as of `1.0.0`. Pin exact versions in production
-(`"@opena2a/aicomply": "1.0.0"`, no caret) and consume fixes by bumping.
+are no longer supported as of `1.0.0`. In production, pin the exact version
+you tested (no caret) and consume fixes by bumping it.
 
 Breaking changes are announced via the `0.x` -> `1.0.0` transition note in
 the release and re-stated in CHANGELOG entries when subsequent majors arrive.
@@ -266,7 +266,7 @@ regex-only.
 
 ## Hardening checklist for consumers
 
-- Pin exact version: `"@opena2a/aicomply": "0.1.0"` (no caret).
+- Pin the exact version you tested, with no caret or tilde.
 - Run `npm audit signatures` after install to verify provenance attestations.
 - For high-stakes paths, treat `CLEAN` as advisory and apply your own
   defense-in-depth (length caps, allowlists, downstream sanitization).
