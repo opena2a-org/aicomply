@@ -333,6 +333,7 @@ describe('policy pack validation', () => {
     ['a lower-case action', withRule({ action: 'deny' }), "Rule block-ssn: invalid action 'deny'"],
     ['patterns that are not an array', withRule({ patterns: 'SSN' }), 'Rule block-ssn: patterns must be an array of strings'],
     ['a rule with no id', withRule({ id: undefined }), 'Rule 0: missing id'],
+    ['a rule with an empty id', withRule({ id: '' }), "Rule 0: id must be a non-empty string (got '')"],
   ])('rejects %s on the second argument of comply()', async (_label, policyPack, problem) => {
     const options = { policyPack } as unknown as { policyPack: PolicyPack };
     for (const content of [SAFE_CONTENT, '']) {
@@ -347,6 +348,45 @@ describe('policy pack validation', () => {
     const call = classifyDualLayer(SSN_CONTENT, { policyPack: withRule({ action: 'deny' }) });
     await expect(call).rejects.toThrow(
       "classifyDualLayer: options.policyPack is not a valid policy pack: Rule block-ssn: invalid action 'deny'",
+    );
+  });
+
+  it.each([
+    ['a number', 5, 'number'],
+    ['zero', 0, 'number'],
+    ['a boolean', true, 'boolean'],
+    ['null', null, 'null'],
+    ['an empty string', '', "''"],
+  ])('names the type of an id that is %s, instead of calling the id missing', async (_label, id, got) => {
+    const policyPack = withRule({ id });
+    const problem = `Rule 0: id must be a non-empty string (got ${got})`;
+
+    expect(validatePolicyConfig(policyPack)).toEqual([problem]);
+    const call = comply({ content: SSN_CONTENT, useGuard: false }, { policyPack });
+    await expect(call).rejects.toThrow(TypeError);
+    await expect(call).rejects.toThrow(
+      new TypeError(`comply: dualLayerOptions.policyPack is not a valid policy pack: ${problem}`),
+    );
+  });
+
+  it('rejects an empty slot in a sparse rules array, which the policy step would read as undefined', async () => {
+    // Slots 0 and 2 are holes: forEach() skips them, an index loop does not.
+    const rules: unknown[] = [];
+    rules[1] = DENY_PACK.rules[0];
+    rules.length = 3;
+    const policyPack = { ...DENY_PACK, rules } as unknown as PolicyPack;
+    const problems = ['Rule 0: must be an object (got undefined)', 'Rule 2: must be an object (got undefined)'];
+
+    expect(validatePolicyConfig(policyPack)).toEqual(problems);
+    for (const content of [SSN_CONTENT, '']) {
+      const call = comply({ content, useGuard: false }, { policyPack });
+      await expect(call).rejects.toThrow(TypeError);
+      await expect(call).rejects.toThrow(
+        new TypeError(`comply: dualLayerOptions.policyPack is not a valid policy pack: ${problems.join('; ')}`),
+      );
+    }
+    await expect(classifyDualLayer(SSN_CONTENT, { useGuard: false, policyPack })).rejects.toThrow(
+      new TypeError(`classifyDualLayer: options.policyPack is not a valid policy pack: ${problems.join('; ')}`),
     );
   });
 
@@ -465,5 +505,20 @@ describe('loadPolicyPack() and validatePolicyConfig()', () => {
       'Rule x: missing action',
       'Rule x: patterns must be an array of strings',
     ]);
+  });
+
+  it('reports the missing id and patterns of a REDACT rule, which comply() does not read', async () => {
+    const policyPack = { name: 'p', version: '1', rules: [{ action: 'REDACT' }] };
+
+    expect(validatePolicyConfig(policyPack)).toEqual([
+      'Rule 0: missing id',
+      'Rule 0: patterns must be an array of strings',
+    ]);
+    // The same pack is applied by comply(), where the REDACT rule is skipped.
+    const result = await comply(
+      { content: SSN_CONTENT, useGuard: false },
+      { policyPack: policyPack as unknown as PolicyPack },
+    );
+    expect(result.violations.map(v => v.type)).toEqual(['SSN']);
   });
 });

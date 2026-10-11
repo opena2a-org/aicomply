@@ -113,6 +113,8 @@ export function loadPolicyPack(name?: string): PolicyPack {
  * Accepts any value, so a caller can check input it has not typed:
  * a value that is not an object, a `rules` that is not an array, or a rule
  * whose `patterns` is not an array of strings is reported, never thrown on.
+ * An id that is present and not a non-empty string is reported with its type,
+ * and an empty slot in a sparse `rules` array as a rule that is not an object.
  * comply() rejects fewer packs: see policyStepProblems().
  */
 export function validatePolicyConfig(config: PolicyPackConfig | unknown): string[] {
@@ -130,9 +132,7 @@ export function validatePolicyConfig(config: PolicyPackConfig | unknown): string
   }
   if (rules.length === 0) errors.push('Policy pack must have at least one rule');
 
-  rules.forEach((rule: unknown, index) => {
-    errors.push(...ruleProblems(rule, index, false));
-  });
+  errors.push(...rulesProblems(rules, false));
 
   return errors;
 }
@@ -157,10 +157,20 @@ export function policyStepProblems(pack: unknown): string[] {
   if (!Array.isArray(rules)) {
     return [`Policy pack rules must be an array (got ${describe(rules)})`];
   }
+  return rulesProblems(rules, true);
+}
+
+/**
+ * The problems with each rule of `rules`, in index order. Every index is
+ * read, so an empty slot in a sparse array is reported as a rule that is not
+ * an object: `forEach` skips such a slot, and the policy step then reads it
+ * as `undefined`.
+ */
+function rulesProblems(rules: unknown[], redactSkipped: boolean): string[] {
   const errors: string[] = [];
-  rules.forEach((rule: unknown, index) => {
-    errors.push(...ruleProblems(rule, index, true));
-  });
+  for (let index = 0; index < rules.length; index++) {
+    errors.push(...ruleProblems(rules[index], index, redactSkipped));
+  }
   return errors;
 }
 
@@ -175,7 +185,14 @@ function ruleProblems(rule: unknown, index: number, redactSkipped: boolean): str
   const label = typeof id === 'string' && id !== '' ? id : String(index);
   const readsRule = !(redactSkipped && action === 'REDACT');
   const errors: string[] = [];
-  if (readsRule && (typeof id !== 'string' || id === '')) errors.push(`Rule ${index}: missing id`);
+  if (readsRule && id === undefined) {
+    errors.push(`Rule ${index}: missing id`);
+  } else if (readsRule && (typeof id !== 'string' || id === '')) {
+    // An id that is present is named with its type, so `id: 5` is not
+    // reported as an id that was left out.
+    const got = id === '' ? "''" : describe(id);
+    errors.push(`Rule ${index}: id must be a non-empty string (got ${got})`);
+  }
   if (action === undefined || action === '') {
     errors.push(`Rule ${label}: missing action`);
   } else if (typeof action !== 'string' || !POLICY_ACTIONS.includes(action)) {
