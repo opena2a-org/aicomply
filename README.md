@@ -214,7 +214,7 @@ These are baseline numbers on a deterministic synthetic corpus, not a field SLA.
 
 For full threat-model scope see [SECURITY.md](./SECURITY.md). The honest list:
 
-- **Semantic / contextual violations.** A request to "summarize all our user emails" is not a regex hit. The semantic layer ([NanoMind-Guard](./src/classifier/guard-client)) is wired but its model binary depends on external training that has not shipped - the IPC client falls back silently to regex-only when no socket is reachable.
+- **Semantic / contextual violations.** A request to "summarize all our user emails" is not a regex hit. The semantic Guard layer targets these, but it is a preview: the NanoMind model has shipped and `@nanomind/daemon` serves it, yet it over-flags benign text (see [Guard status](#guard-status-preview-not-production-ready)). The Guard is off unless a daemon is running; when none is reachable over HTTP, `comply()` falls back silently to regex-only.
 - **Cyrillic / Greek look-alikes that are not NFKC-equivalent** (e.g. Cyrillic `а` vs Latin `a`). Those are separate semantic letters; NFKC does not fold them.
 - **Soft hyphen (U+00AD) and combining marks.** Out of scope for 1.0, deferred to 1.1. An attacker can still hide PII by injecting these characters between digits.
 - **Encodings other than Base64 and URL.** Hex, base32, ROT13, HTML entities, quoted-printable are not decoded.

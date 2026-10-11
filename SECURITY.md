@@ -177,7 +177,7 @@ regex-only.
   should write to stderr without consent); the Guard is treated as a
   defense-in-depth layer whose presence is
   optional. Operators who need observability should health-check the
-  socket out-of-band before relying on Guard for compliance gates.
+  daemon out-of-band before relying on Guard for compliance gates.
 - **Side-channel resistance.** Timing of `comply()` may leak coarse
   information about input length and pattern density. Not designed
   against timing attacks.
@@ -193,11 +193,15 @@ regex-only.
   `comply()` to fail closed on both. A failed supply-chain alert fetch
   is not reported on its own: when the fleet index loaded, the status is
   `hit` or `miss` from the data that did load.
-- **NanoMind-Guard semantic classifier.** The IPC client is wired and
-  testable as of 1.0, but the real Guard binary depends on NanoMind
-  Phase 2b training (external to this repo). Until that ships, `comply()`
-  falls back to regex-only - which is sufficient for the syntactic
-  classes above but does not provide semantic context detection.
+- **NanoMind-Guard semantic classifier.** The model has shipped
+  (`nanomind-security-classifier` tme-v0.5.0, served by `@nanomind/daemon`
+  over HTTP), but the Guard is a preview: the current model over-flags
+  benign text (measured 2026-06-25 against `@nanomind/daemon` 0.3.0: 7 of
+  10 ordinary-benign sentences flagged at the 0.8 block threshold), so it
+  is not a production control. It is off unless a daemon is running;
+  without one, `comply()` falls back to regex-only - which is sufficient
+  for the syntactic classes above but does not provide semantic context
+  detection.
 
 ### Out of repo scope
 - Vulnerabilities in the Registry server backend (`opena2a-registry` repo).
@@ -229,9 +233,12 @@ regex-only.
 
 ## Known limitations affecting security posture
 
-1. **Single-layer until Guard ships.** The IPC client is wired and testable,
-   but no NanoMind-Guard binary is published yet. Phase 2b training is the
-   external gate. Until then `comply()` is regex-only.
+1. **Semantic Guard is a preview and off by default.** `comply()` adds the
+   Guard layer only when `@nanomind/daemon` is reachable over HTTP (default
+   `http://127.0.0.1:47200`); otherwise it is regex-only. The shipped model
+   (tme-v0.5.0) over-flags benign text, so do not rely on the Guard as a
+   production gate until a recalibrated model ships. See
+   [Guard status](./README.md#guard-status-preview-not-production-ready).
 2. **Pattern source is public.** A determined attacker can find regex
    bypasses by inspecting `pack/patterns.json`. The patterns
    are not secret and not designed to be - they are designed to be reviewed
