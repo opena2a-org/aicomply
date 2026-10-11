@@ -12,6 +12,7 @@ import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import { readFileSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
+import * as pkg from '../index';
 import { comply } from '../index';
 import { renderHuman } from '../cli';
 
@@ -45,6 +46,18 @@ function scanExample(): { input: string; fenceLine: number; output: string } {
   expect(endLine).toBeGreaterThan(fenceLine);
   const output = LINES.slice(fenceLine, endLine - 1).join('\n');
   return { input, fenceLine, output };
+}
+
+/** What the README says about `violations[i].value`, from that token to the end of its blockquote. */
+function valueClaim(): string {
+  const token = '`violations[i].value`';
+  const at = LINES.findIndex((l) => l.startsWith('>') && l.includes(token));
+  expect(at).toBeGreaterThanOrEqual(0);
+  const parts = [LINES[at].slice(LINES[at].indexOf(token))];
+  for (let i = at + 1; i < LINES.length && LINES[i].startsWith('>'); i++) {
+    parts.push(LINES[i].replace(/^>\s?/, ''));
+  }
+  return parts.join(' ');
 }
 
 describe('README', () => {
@@ -111,6 +124,22 @@ describe('README', () => {
 
     const printed = chunks.join('').replace(/^\n+/, '').replace(/\n+$/, '');
     expect(output).toBe(printed);
+  });
+
+  it('says violations[i].value is masked as comply returns it, naming only exported helpers', async () => {
+    const claim = valueClaim();
+    expect(claim).toMatch(/\bmasked\b/);
+    expect(claim).not.toMatch(/\braw\b/);
+
+    const ssn = '123-45-6789';
+    const result = await comply({ content: `My SSN is ${ssn}.` });
+    const value = result.violations[0].value;
+    expect(value).not.toBe(ssn);
+    expect(claim).toContain(`\`${value}\``);
+
+    // A function the README points a reader to must be importable from the package.
+    const named = [...claim.matchAll(/`([a-z][A-Za-z0-9]*)`/g)].map((m) => m[1]);
+    for (const name of named) expect(Object.keys(pkg)).toContain(name);
   });
 });
 
