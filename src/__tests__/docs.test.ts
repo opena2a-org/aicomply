@@ -9,7 +9,7 @@
  */
 
 import { execFileSync } from 'child_process';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 
@@ -50,8 +50,15 @@ function trackedMarkdown(root = ROOT, env: NodeJS.ProcessEnv = process.env): str
   return listed.split('\0').filter(Boolean);
 }
 
-/** Why `git ls-files` failed in `root`, and what to do about it. */
+/**
+ * Why `git ls-files` failed in `root`, and what to do about it. A `root` that
+ * is not a directory fails to start git with the same ENOENT as a git that is
+ * not on PATH, so it is checked first.
+ */
 function gitFailure(root: string, err: unknown): string {
+  if (!statSync(root, { throwIfNoEntry: false })?.isDirectory()) {
+    return `${root} is not a directory, so the docs test cannot list the Markdown git tracks. Pass the root of a git clone of the repository.`;
+  }
   const e = err as NodeJS.ErrnoException & { stderr?: string };
   if (e.code === 'ENOENT') {
     return `git is not on PATH; the docs test needs it to list the Markdown git tracks in ${root}. Install git and run the test again.`;
@@ -60,7 +67,10 @@ function gitFailure(root: string, err: unknown): string {
   if (/not a git repository/i.test(said)) {
     return `${root} is not a git checkout, so the docs test cannot list the Markdown git tracks (git: ${said}). Run the test from a git clone of the repository.`;
   }
-  return `git ls-files failed in ${root}, so the docs test cannot list the Markdown git tracks (git: ${said}).`;
+  return (
+    `git ls-files failed in ${root}, so the docs test cannot list the Markdown git tracks (git: ${said}). ` +
+    `Run git ls-files in ${root} to see the whole error, fix what it reports and run the test again.`
+  );
 }
 
 /** `file:line` for each match of `re` in `text`. */
@@ -220,5 +230,38 @@ describe('docs', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('says git is not on PATH when git cannot be started', () => {
+    const empty = realpathSync(mkdtempSync(join(tmpdir(), 'aicomply-docs-path-')));
+    try {
+      expect(() => trackedMarkdown(ROOT, { ...process.env, PATH: empty })).toThrow(
+        `git is not on PATH; the docs test needs it to list the Markdown git tracks in ${ROOT}. Install git and run the test again.`,
+      );
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it('names a root that does not exist in place of git missing from PATH', () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'aicomply-docs-')));
+    const missing = join(dir, 'missing');
+    try {
+      expect(() => trackedMarkdown(missing)).toThrow(
+        `${missing} is not a directory, so the docs test cannot list the Markdown git tracks. Pass the root of a git clone of the repository.`,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('names any other git error and how to see all of it', () => {
+    const err = Object.assign(new Error('Command failed: git ls-files'), {
+      stderr: 'fatal: unable to read index\nmore detail\n',
+    });
+    expect(gitFailure(ROOT, err)).toBe(
+      `git ls-files failed in ${ROOT}, so the docs test cannot list the Markdown git tracks (git: fatal: unable to read index). ` +
+        `Run git ls-files in ${ROOT} to see the whole error, fix what it reports and run the test again.`,
+    );
   });
 });
