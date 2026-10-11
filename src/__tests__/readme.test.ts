@@ -75,6 +75,31 @@ function commonJsSample(): string {
   return LINES.slice(requireLine - 1, endLine - 1).join('\n');
 }
 
+/**
+ * Each `validatePolicyConfig(...)` call in the README's validatePolicyConfig()
+ * sample, with the pack it passes and the array its `//` comment shows.
+ */
+function validatePolicyConfigExamples(): { call: string; pack: unknown; shown: unknown }[] {
+  const importLine = lineOf(/^import \{ validatePolicyConfig \} from '@opena2a\/aicomply';$/);
+  expect(importLine).toBeGreaterThan(1);
+  const endLine = lineOf(/^```$/, importLine + 1);
+  expect(endLine).toBeGreaterThan(importLine);
+  const examples: { call: string; pack: unknown; shown: unknown }[] = [];
+  for (let i = importLine; i < endLine - 1; i++) {
+    const call = /^validatePolicyConfig\((.*)\);$/.exec(LINES[i]);
+    if (!call) continue;
+    const comment = /^\/\/ (.*)$/.exec(LINES[i + 1]);
+    expect({ call: LINES[i], comment: comment !== null }).toEqual({ call: LINES[i], comment: true });
+    examples.push({ call: LINES[i], pack: literal(call[1]), shown: literal(comment![1]) });
+  }
+  return examples;
+}
+
+/** The value of a JavaScript literal as the README writes it. */
+function literal(source: string): unknown {
+  return new Function(`return (${source});`)();
+}
+
 describe('README', () => {
   it('opens with the OpenA2A family header in lines 1-6', () => {
     const header = LINES.slice(0, 6);
@@ -241,6 +266,19 @@ describe('README', () => {
     expect(ticked(denied)).toEqual(patterns('DENY'));
     expect(ticked(warned)).toEqual(patterns('WARN'));
     expect(README).toContain('Pass your own pack as `policyPack` on the second argument');
+  });
+
+  it('shows validatePolicyConfig() messages as it returns them, for a rule named by index and one named by id', () => {
+    // A rule with a non-empty string id is named by that id in quotes
+    // (`Rule 'block-ssn': ...`), any other rule by its index (`Rule 0: ...`).
+    const examples = validatePolicyConfigExamples();
+    expect(examples.length).toBeGreaterThan(0);
+    for (const { call, pack, shown } of examples) {
+      expect({ call, returns: pkg.validatePolicyConfig(pack) }).toEqual({ call, returns: shown });
+    }
+    const messages = examples.flatMap(({ shown }) => shown as string[]);
+    expect(messages.some((m) => /^Rule \d+: /.test(m))).toBe(true);
+    expect(messages.some((m) => /^Rule '[^']+': /.test(m))).toBe(true);
   });
 
   it('describes CLEAN as what the layers found, in the words the CLI prints', () => {
