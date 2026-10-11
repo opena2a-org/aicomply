@@ -158,12 +158,30 @@ export function assertGuardOptions(
 }
 
 /**
+ * Apply the two steps that follow classification: Registry L2 threshold/block
+ * logic (Section 3.1, lines 239-263; AC-005: synchronous cache lookup only,
+ * never a fetch in the hot path), then policy pack enforcement, where DENY
+ * rules hard-block and WARN rules add violations. Policy runs second so it
+ * sees the verdict and violations the Registry step resolved. REDACT is out
+ * of scope in V1 and skipped silently.
+ *
+ * Exported so comply() runs both steps on empty content, which it does not
+ * classify: neither one depends on the content.
+ */
+export function applyRegistryAndPolicy(
+  base: Omit<ComplyResult, 'registrySignals'>,
+  options?: DualLayerOptions,
+): ComplyResult {
+  const result = applyRegistry(base, options);
+  return options?.policyPack ? applyPolicyPack(result, options.policyPack) : result;
+}
+
+/**
  * Apply the Registry L2 step to a classified result when the caller named a
  * source package and gave a cache to look it up in or an onRegistryUnknown
- * action. Exported so comply() runs the same step on empty content, which it
- * does not classify: the lookup depends on the source, not the content.
+ * action.
  */
-export function applyRegistry(
+function applyRegistry(
   base: Omit<ComplyResult, 'registrySignals'>,
   options?: DualLayerOptions,
 ): ComplyResult {
@@ -307,20 +325,9 @@ export async function classifyDualLayer(
     };
   }
 
-  // ---------------------------------------------------------------------------
-  // Registry L2 threshold/block logic (Section 3.1, lines 239-263)
-  // AC-005: synchronous cache lookup only - never fetch in the hot path.
-  // ---------------------------------------------------------------------------
-  let result = applyRegistry(baseResult, options);
-
-  // ---------------------------------------------------------------------------
-  // Policy pack enforcement: DENY rules hard-block, WARN rules add violations.
-  // Applied after Registry L2 so policy sees the fully-resolved verdict.
-  // REDACT is out of scope in V1 - skipped silently.
-  // ---------------------------------------------------------------------------
-  if (options?.policyPack) {
-    result = applyPolicyPack(result, options.policyPack);
-  }
+  // Registry L2, then the policy pack: the same two steps comply() runs on
+  // empty content.
+  const result = applyRegistryAndPolicy(baseResult, options);
 
   // Attach normalization metadata so consumers have an audit trail of
   // what canonicalization the input went through. On ANY DENY verdict

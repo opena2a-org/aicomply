@@ -6,10 +6,12 @@
  *   - WARN rule: appends POLICY_WARN violation, does not escalate verdict
  *   - REDACT rule: skipped silently (V1 out-of-scope)
  *   - No policy: behaviour unchanged
+ *   - Empty content via comply(): the pack still sees the Registry step's violations
  */
 
 import { classifyDualLayer } from '..';
 import { comply } from '../../..';
+import type { RegistryIntelligenceCache } from '../../../registry';
 import type { PolicyPack } from '../../../types';
 
 // ---------------------------------------------------------------------------
@@ -232,5 +234,74 @@ describe('comply(): policyPack threading end-to-end', () => {
     // Should be VIOLATION (from regex), not DENY (from policy)
     expect(result.verdict).toBe('VIOLATION');
     expect(result.violations.every(v => !v.type.startsWith('POLICY_'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Empty content: comply() does not classify it, but the Registry step can
+// still add a violation, and the policy pack has to see that one too.
+// ---------------------------------------------------------------------------
+
+describe('comply(): policy pack on empty content', () => {
+  const UNKNOWN_PACKAGE = {
+    useGuard: false,
+    sourcePackage: 'any-package',
+    registryCache: { lookup: () => ({ status: 'miss' }) } as unknown as RegistryIntelligenceCache,
+    onRegistryUnknown: 'violation',
+  } as const;
+
+  const policyOn = (action: 'DENY' | 'WARN'): PolicyPack => ({
+    name: 'test-registry',
+    version: '1.0.0',
+    rules: [
+      {
+        id: 'unknown-package',
+        name: 'Unknown package',
+        description: 'Acts on a package the Registry has no data for',
+        patterns: ['REGISTRY_UNKNOWN'],
+        action,
+        severity: 'high',
+      },
+    ],
+  });
+
+  it('applies a DENY rule to empty content, as to any other content', async () => {
+    const policyPack = policyOn('DENY');
+    const empty = await comply({ content: '', ...UNKNOWN_PACKAGE }, { policyPack });
+    const text = await comply({ content: SAFE_CONTENT, ...UNKNOWN_PACKAGE }, { policyPack });
+
+    expect(text.verdict).toBe('DENY');
+    expect(empty.verdict).toBe('DENY');
+    expect(empty.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN', 'POLICY_DENY:unknown-package']);
+    expect(empty.violations).toEqual(text.violations);
+    // Every DENY drops the content echo, a policy DENY on empty content included.
+    expect(empty.originalContent).toBeUndefined();
+    expect(empty.normalizedContent).toBeUndefined();
+  });
+
+  it('applies a WARN rule to empty content without raising the verdict', async () => {
+    const policyPack = policyOn('WARN');
+    const empty = await comply({ content: '', ...UNKNOWN_PACKAGE }, { policyPack });
+    const text = await comply({ content: SAFE_CONTENT, ...UNKNOWN_PACKAGE }, { policyPack });
+
+    expect(empty.verdict).toBe('VIOLATION');
+    expect(empty.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN', 'POLICY_WARN:unknown-package']);
+    expect(empty.violations).toEqual(text.violations);
+    expect(empty.originalContent).toBe('');
+  });
+
+  it('applies the pack named on the options object as well', async () => {
+    // The default pack has no rule on a Registry finding, so nothing is added.
+    const result = await comply({ content: '', ...UNKNOWN_PACKAGE, policyPack: 'default' });
+
+    expect(result.verdict).toBe('VIOLATION');
+    expect(result.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN']);
+  });
+
+  it('leaves empty content CLEAN when the Registry step added nothing', async () => {
+    const result = await comply({ content: '' }, { policyPack: policyOn('DENY') });
+
+    expect(result.verdict).toBe('CLEAN');
+    expect(result.violations).toEqual([]);
   });
 });
