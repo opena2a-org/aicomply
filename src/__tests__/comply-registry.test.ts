@@ -535,24 +535,9 @@ describe('ClassificationSession', () => {
   });
 
   it('comply() respects caller-supplied registryCache over session cache', async () => {
-    jest
-      .spyOn(RegistryIntelligenceCache.prototype, 'warm')
-      .mockResolvedValue(undefined);
-
-    // Session cache would say CLEAN (no anomaly)
-    jest
-      .spyOn(RegistryIntelligenceCache.prototype, 'lookup')
-      .mockReturnValue({
-        status: 'hit',
-        intelligence: {
-          packageName: 'agent-y',
-          fleetAnomalySignal: null,
-          supplyChainAlerts: [],
-          fetchedAt: Date.now(),
-        },
-      });
-
-    // Caller-supplied cache says DENY
+    // Caller-supplied cache says DENY. It is made before the prototype is
+    // spied on, so it keeps its own lookup mock: made after, it would get the
+    // prototype's mock back and hand the session cache this alert as well.
     const callerCache = makeCache({
       status: 'hit',
       intelligence: {
@@ -570,6 +555,23 @@ describe('ClassificationSession', () => {
       },
     });
 
+    jest
+      .spyOn(RegistryIntelligenceCache.prototype, 'warm')
+      .mockResolvedValue(undefined);
+
+    // Session cache would say CLEAN (no anomaly)
+    const sessionLookup = jest
+      .spyOn(RegistryIntelligenceCache.prototype, 'lookup')
+      .mockReturnValue({
+        status: 'hit',
+        intelligence: {
+          packageName: 'agent-y',
+          fleetAnomalySignal: null,
+          supplyChainAlerts: [],
+          fetchedAt: Date.now(),
+        },
+      });
+
     const session = await ClassificationSession.create();
     const result = await session.comply(
       { content: SAFE_CONTENT, sourcePackage: 'agent-y', registryCache: callerCache },
@@ -577,6 +579,8 @@ describe('ClassificationSession', () => {
 
     expect(result.verdict).toBe('DENY');
     expect(result.registrySignals?.supplyChainBlock).toBe(true);
+    expect(callerCache.lookup).toHaveBeenCalledWith('agent-y');
+    expect(sessionLookup).not.toHaveBeenCalled();
   });
 
   it('comply() classifies a bare string, as the comply() function does', async () => {
