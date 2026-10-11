@@ -84,7 +84,7 @@ OPTIONS
   --help, -h    This help
 
 EXIT CODES
-  0  CLEAN          no findings, safe to forward
+  0  CLEAN          no findings from the layers that ran
   1  VIOLATION/DENY findings present (usable as a CI gate)
   2  usage error
 
@@ -113,7 +113,7 @@ OPTIONS
   --help, -h    This help
 
 EXIT CODES
-  0  CLEAN          no findings, safe to forward
+  0  CLEAN          no findings from the layers that ran
   1  VIOLATION/DENY findings present (usable as a CI gate)
   2  usage error
 
@@ -240,7 +240,9 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
   }
 
   if (worst === 'CLEAN') {
-    out.write('Verdict: CLEAN  ·  safe to forward.\n');
+    // CLEAN is also the verdict for an input no layer detects, so the line
+    // states what was checked and makes no claim about the content.
+    out.write('Verdict: CLEAN  ·  no findings from the layers that ran.\n');
   } else {
     out.write(
       `Verdict: ${worst}  ·  ${totalFindings} finding${totalFindings === 1 ? '' : 's'} across ${sources.length} input${sources.length === 1 ? '' : 's'}. ` +

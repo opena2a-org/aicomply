@@ -259,7 +259,7 @@ Either value appends a `REGISTRY_UNKNOWN` violation (contract AC-002).
 
 ## Verdict semantics
 
-- **`CLEAN`**: no findings; safe to forward
+- **`CLEAN`**: no findings from the layers that ran (`result.layers` lists them). This states what was checked, not that the content is safe: an input the layers do not detect is `CLEAN` too (see [What this package does NOT detect](#what-this-package-does-not-detect)). On high-stakes paths, treat it as advisory ([hardening checklist](./SECURITY.md#hardening-checklist-for-consumers))
 - **`VIOLATION`**: one or more findings; the `violations` array is the audit trail
 - **`DENY`**: hard block (a policy pack triggered, supply-chain Registry said the source package is untrusted, or `onRegistryUnknown: 'deny'` met a package the Registry had no data for); treat as fatal
 

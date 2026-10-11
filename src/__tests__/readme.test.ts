@@ -203,6 +203,15 @@ describe('README', () => {
       { type: 'POLICY_DENY:pii-ssn', view: undefined },
     ]);
   });
+
+  it('describes CLEAN as what the layers found, in the words the CLI prints', () => {
+    // CLEAN is also the verdict for the inputs listed under "What this package
+    // does NOT detect", so the README must not present it as safe to forward.
+    const bulletLine = lineOf(/^- \*\*`CLEAN`\*\*:/);
+    expect(bulletLine).toBeGreaterThan(0);
+    expect(LINES[bulletLine - 1]).toContain('no findings from the layers that ran');
+    expect(README).not.toMatch(/safe\s+to\s+forward/i);
+  });
 });
 
 /**

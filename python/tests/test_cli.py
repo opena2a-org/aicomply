@@ -55,6 +55,36 @@ def test_scan_clean_file_exit_0(tmp_path, capsys):
     assert "CLEAN" in out
 
 
+# CLEAN states what the layers that ran found. It is also the verdict for an
+# input the README lists as not detected, so it must never read as a statement
+# that the content is safe.
+def test_clean_verdict_states_what_was_checked(tmp_path, capsys):
+    f = tmp_path / "clean.txt"
+    f.write_text("The weather is nice today.")
+    assert run(["scan", str(f)]) == 0
+    out = capsys.readouterr().out
+    assert out.rstrip().splitlines()[-1] == (
+        "Verdict: CLEAN  ·  no findings from the layers that ran."
+    )
+
+
+def test_soft_hyphen_ssn_is_not_called_safe(tmp_path, capsys):
+    f = tmp_path / "soft-hyphen.txt"
+    f.write_text("SSN 12­3-45-6789\n", encoding="utf-8")
+    run(["scan", str(f)])
+    verdict_line = capsys.readouterr().out.rstrip().splitlines()[-1]
+    assert verdict_line.startswith("Verdict: ")
+    assert "safe" not in verdict_line.lower()
+
+
+def test_help_describes_exit_code_0_as_what_was_checked(capsys):
+    for argv in (["--help"], ["scan", "--help"]):
+        assert run(argv) == 0
+        out = capsys.readouterr().out
+        assert "  0  CLEAN          no findings from the layers that ran\n" in out
+        assert "safe" not in out.lower()
+
+
 def test_scan_pii_file_exit_1(tmp_path, capsys):
     f = tmp_path / "pii.txt"
     f.write_text("SSN 516-81-3086 and AKIA7IEO7LTOBPA48822")
