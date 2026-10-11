@@ -433,9 +433,28 @@ describe('npm publish lifecycle', () => {
     return value.replace(/^(?:[!&]\S*(?:\s+|$))*/, '');
   }
 
-  /** Whether `value`, past its tags and anchors, opens a quote that it does not close. */
-  function quoteOpen(value: string): boolean {
-    return /^(?:"(?:[^"\\]|\\[\s\S])*\\?|'(?:[^']|'')*)$/.test(withoutProperties(value));
+  /** The quote `value`, past its tags and anchors, opens and does not close, or '' when there is none. */
+  function openQuote(value: string): string {
+    const open = /^(?:"(?:[^"\\]|\\[\s\S])*\\?|'(?:[^']|'')*)$/.exec(withoutProperties(value));
+    return open === null ? '' : open[0][0];
+  }
+
+  /**
+   * `line`, which ends in a run of `\` inside a value quoted with `quote`,
+   * with `next`, the value's next line without its indentation, joined onto
+   * it as YAML reads the two and the shell then splits them into words. In a
+   * double-quoted value an odd run ends in YAML's escape of the line break,
+   * which drops the `\`, the line break and the indentation, so the lines
+   * meet. Otherwise YAML keeps the `\`s, one for each pair in a double-quoted
+   * value, and folds the line break into a space, which the shell keeps in
+   * the word when an odd number of them stands before it: the space is left
+   * out there and the `\` kept, for `withoutInstallFlags` to see.
+   */
+  function joinedQuoted(line: string, quote: string, next: string): string {
+    const run = (/\\+$/.exec(line) ?? [''])[0].length;
+    if (quote === '"' && run % 2 === 1) return `${line.slice(0, -1)}${next}`;
+    const kept = quote === '"' ? run / 2 : run;
+    return kept % 2 === 1 ? `${line}${next}` : `${line} ${next}`;
   }
 
   /** How the lines of a value are read: kept apart, folded into one, or not known yet. */
@@ -500,7 +519,9 @@ describe('npm publish lifecycle', () => {
    * line of a `>` block, YAML keeps the indentation and the shell gets two
    * words. Where the `\` follows a word it is kept in the joined line, followed
    * by a space, for `withoutInstallFlags` and `publishTargets` to see; after a
-   * space it is joined with a space. In a `>` block, the last of the lines
+   * space it is joined with a space. A line of a quoted value, where YAML
+   * reads the `\` itself, is joined to the line directly after it as
+   * `joinedQuoted` reads the two. In a `>` block, the last of the lines
    * joined decides whether the line after them is kept apart.
    */
   function workflowLines(workflow: string): string[] {
@@ -558,14 +579,17 @@ describe('npm publish lifecycle', () => {
         const at = foldDepth !== null && lastIndent <= foldDepth && i + 2 < raw.length &&
           raw[i + 1].search(/\S/) === -1 && raw[i + 1].length <= foldDepth &&
           raw[i + 2].search(/\S/) <= foldDepth ? i + 2 : i + 1;
-        // The column the next line must pass to belong to the value: none
-        // while a quote that the value opens on this line is still open on
-        // the lines joined so far.
-        const floor = valueAt !== null && quoteOpen(line.slice(valueAt)) ? -1 : stepKey;
+        // The quote that the value opens on this line and that is still open
+        // on the lines joined so far, if any. The next line need pass no
+        // column to belong to the value while there is one.
+        const quote = valueAt === null ? '' : openQuote(line.slice(valueAt));
+        const floor = quote !== '' ? -1 : stepKey;
         if (at >= raw.length || /^\s*#/.test(raw[at]) || raw[at].search(/\S/) <= floor) break;
+        const adjacent = at === i + 1;
         i = at;
         const next = raw[i];
-        line = /(?<!\S)\\$/.test(line) ? `${line.slice(0, -1)} ${next.trimStart()}` : `${line} ${next.trimStart()}`;
+        if (quote !== '' && adjacent) line = joinedQuoted(line, quote, next.trimStart());
+        else line = /(?<!\S)\\$/.test(line) ? `${line.slice(0, -1)} ${next.trimStart()}` : `${line} ${next.trimStart()}`;
         lastIndent = next.search(/\S/);
       }
       if (valueKey !== null && style === 'literal') {
@@ -798,6 +822,12 @@ describe('npm publish lifecycle', () => {
     ['a blank line and a more-indented line after a continued line of a folded scalar', ['      - run: >', '          npm publish --provenance --access \\', '', '            public ./x.tgz'], null],
     ['a blank line after a continued more-indented line of a folded scalar', ['      - run: >', '          echo start', '            npm publish --provenance --access \\', '', '          public ./x.tgz'], null],
     ['a line of spaces longer than the indentation of a folded scalar after a continued line', ['      - run: >', '          npm publish --provenance --access \\', ' '.repeat(14), '          public ./x.tgz'], null],
+    ['a flag a backslash continues onto the next line of a double-quoted value, no deeper than its key', ['      - run: "npm publish --provenance\\', './x.tgz"'], null],
+    ['a flag a backslash continues onto the next line of a single-quoted value, no deeper than its key', ["      - run: 'npm publish --provenance\\", "./x.tgz'"], null],
+    ['a flag a backslash continues onto a more-indented next line of a single-quoted value', ["      - run: 'npm publish --provenance\\", "          ./x.tgz'"], null],
+    ['a flag a backslash continues onto the next line of a double-quoted value that starts after its key', ['      - run:', '          "npm publish --provenance\\', './x.tgz"'], null],
+    ['a flag an escaped backslash continues onto the next line of a double-quoted value', ['      - run: "npm publish --provenance\\\\', './x.tgz"'], null],
+    ['a flag an escaped backslash and a backslash continue onto the next line of a double-quoted value', ['      - run: "npm publish --provenance\\\\\\', './x.tgz"'], null],
   ])('lets a publish through with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).toEqual([]);
   });
@@ -897,6 +927,10 @@ describe('npm publish lifecycle', () => {
     ['a tarball on a continued line of a double-quoted value that starts after its key, indented no deeper than the key', ['      - run:', '          "npm publish --provenance --access \\', '        public ./x.tgz"'], null],
     ['a tarball on a continued line of a double-quoted value with an escaped quote, indented no deeper than its key', ['      - run: "echo \\"ok\\" && npm publish --provenance --access \\', '        public ./x.tgz"'], null],
     ['a tarball on a continued line of a single-quoted value with an escaped quote, indented no deeper than its key', ["      - run: 'echo ''ok'' && npm publish --provenance\\", "        public ./x.tgz'"], null],
+    ['a tarball handed to an npm a backslash continues onto the next line of a double-quoted value', ['      - run: "np\\', 'm publish ./x.tgz"'], null],
+    ['a tarball after two backslashes that end a line of a single-quoted value', ["      - run: 'npm publish --provenance\\\\", "./x.tgz'"], null],
+    ['a tarball after two escaped backslashes that end a line of a double-quoted value', ['      - run: "npm publish --provenance\\\\\\\\', './x.tgz"'], null],
+    ['the space a backslash keeps before a flag on the next line of a single-quoted value', ["      - run: 'npm publish \\", "--access public'"], null],
   ])('refuses a publish with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
   });
