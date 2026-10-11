@@ -93,6 +93,12 @@ export interface PolicyPack {
 
 export interface ComplyOptions {
   content: string;
+  /**
+   * Name of a built-in policy pack: 'default' is the one there is. To apply
+   * a pack of your own, pass the pack object as `policyPack` on the second
+   * argument of comply(). A name set here takes the place of a pack on the
+   * second argument; any other value is rejected with a TypeError.
+   */
   policyPack?: string;
   riskContext?: RiskContext;
   /**
@@ -167,7 +173,8 @@ export interface ComplyResult {
   };
   /**
    * Registry intelligence signals applied during L2 threshold/block logic.
-   * Present when registry data was consulted (Task 6 / Section 3.1).
+   * Present when the Registry was consulted for `sourcePackage`, whatever
+   * the lookup found (AC-002).
    */
   registrySignals?: {
     /**

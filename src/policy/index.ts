@@ -4,7 +4,7 @@
  * Loads YAML-based policy packs that define compliance rules
  * for different regulatory contexts (HIPAA, PCI-DSS, etc.).
  *
- * STUB: V1 uses built-in default policy. YAML loading in V2.
+ * V1 has one built-in pack, 'default'. YAML loading in V2.
  */
 
 import type { PolicyPack } from '../types';
@@ -73,35 +73,87 @@ const DEFAULT_POLICY: PolicyPack = {
   ],
 };
 
-/**
- * Load a policy pack by name.
- * V1: always returns the default built-in policy.
- * V2: will load from YAML files.
- */
-export function loadPolicyPack(_name?: string): PolicyPack {
-  // V2: load from YAML file, validate against schema
-  return DEFAULT_POLICY;
+/** The built-in packs, by the name `loadPolicyPack()` takes. */
+const BUILT_IN_PACKS: Readonly<Record<string, PolicyPack>> = { default: DEFAULT_POLICY };
+
+const POLICY_ACTIONS: readonly string[] = ['DENY', 'REDACT', 'WARN'];
+
+/** True when `name` names a built-in pack. */
+export function isBuiltInPolicyPackName(name: unknown): name is string {
+  return typeof name === 'string' && Object.prototype.hasOwnProperty.call(BUILT_IN_PACKS, name);
+}
+
+/** The built-in pack names, quoted, for an error message. */
+export function builtInPolicyPackNames(): string {
+  return Object.keys(BUILT_IN_PACKS).map((name) => `'${name}'`).join(', ');
 }
 
 /**
- * Validate a policy pack configuration.
+ * Load a built-in policy pack by name. With no name, returns the default pack.
+ * Any other name throws a TypeError: a pack that was asked for and is not
+ * built in is never replaced by the default one. YAML loading is planned for
+ * V2.
  */
-export function validatePolicyConfig(config: PolicyPackConfig): string[] {
+export function loadPolicyPack(name?: string): PolicyPack {
+  if (name === undefined) return DEFAULT_POLICY;
+  if (!isBuiltInPolicyPackName(name)) {
+    const got = typeof name === 'string' ? JSON.stringify(name) : name === null ? 'null' : typeof name;
+    throw new TypeError(
+      `loadPolicyPack: unknown policy pack ${got}; the built-in packs are ${builtInPolicyPackNames()}`,
+    );
+  }
+  return BUILT_IN_PACKS[name];
+}
+
+/**
+ * Validate a policy pack. Returns one message per problem, and an empty array
+ * for a pack the policy step can apply. Accepts any value, so a caller can
+ * check input it has not typed: a value that is not an object, a `rules` that
+ * is not an array, or a rule whose `patterns` is not an array of strings is
+ * reported, never thrown on.
+ */
+export function validatePolicyConfig(config: PolicyPackConfig | unknown): string[] {
+  if (!isObject(config)) {
+    return [`Policy pack must be an object (got ${describe(config)})`];
+  }
   const errors: string[] = [];
+  const { name, version, rules } = config as Record<string, unknown>;
 
-  if (!config.name) errors.push('Policy pack name is required');
-  if (!config.version) errors.push('Policy pack version is required');
-  if (!config.rules || config.rules.length === 0) {
-    errors.push('Policy pack must have at least one rule');
+  if (typeof name !== 'string' || name === '') errors.push('Policy pack name is required');
+  if (typeof version !== 'string' || version === '') errors.push('Policy pack version is required');
+  if (!Array.isArray(rules)) {
+    errors.push(`Policy pack rules must be an array (got ${describe(rules)})`);
+    return errors;
   }
+  if (rules.length === 0) errors.push('Policy pack must have at least one rule');
 
-  for (const rule of config.rules ?? []) {
-    if (!rule.id) errors.push(`Rule missing id`);
-    if (!rule.action) errors.push(`Rule ${rule.id}: missing action`);
-    if (!['DENY', 'REDACT', 'WARN'].includes(rule.action)) {
-      errors.push(`Rule ${rule.id}: invalid action '${rule.action}'`);
+  rules.forEach((rule: unknown, index) => {
+    if (!isObject(rule)) {
+      errors.push(`Rule ${index}: must be an object (got ${describe(rule)})`);
+      return;
     }
-  }
+    const { id, action, patterns } = rule as Record<string, unknown>;
+    const label = typeof id === 'string' && id !== '' ? id : String(index);
+    if (typeof id !== 'string' || id === '') errors.push(`Rule ${index}: missing id`);
+    if (action === undefined || action === '') {
+      errors.push(`Rule ${label}: missing action`);
+    } else if (typeof action !== 'string' || !POLICY_ACTIONS.includes(action)) {
+      const got = typeof action === 'string' ? `'${action}'` : describe(action);
+      errors.push(`Rule ${label}: invalid action ${got}, expected one of ${POLICY_ACTIONS.join(', ')}`);
+    }
+    if (!Array.isArray(patterns) || !patterns.every((p) => typeof p === 'string')) {
+      errors.push(`Rule ${label}: patterns must be an array of strings`);
+    }
+  });
 
   return errors;
+}
+
+function isObject(value: unknown): value is object {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function describe(value: unknown): string {
+  if (value === null) return 'null';
+  return Array.isArray(value) ? 'array' : typeof value;
 }
