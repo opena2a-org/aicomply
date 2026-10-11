@@ -49,13 +49,32 @@ def _redact_text(text: str, violations: list[Violation]) -> str:
     (e.g. guard-layer whole-content hits) fall back to leaving the text unchanged
     for that span - the verdict already tells the caller it was not CLEAN.
     """
+    redacted = text
+    for start, end in reversed(_redaction_spans(text, violations)):
+        # right-to-left keeps earlier offsets valid
+        redacted = redacted[:start] + "[REDACTED]" + redacted[end:]
+    return redacted
+
+
+def _has_range_in(violation: Violation, text: str) -> bool:
+    """Whether a finding carries a non-empty original-content range inside ``text``."""
+    return (
+        violation.original_start is not None
+        and violation.original_end is not None
+        and 0 <= violation.original_start < violation.original_end <= len(text)
+    )
+
+
+def _redaction_spans(text: str, violations: list[Violation]) -> list[list[int]]:
+    """The disjoint ``[start, end)`` ranges of ``text`` to mask, in order.
+
+    Findings without a range inside ``text`` contribute no span.
+    """
     raw_spans = sorted(
         (
-            (v.original_start, v.original_end)
+            (cast(int, v.original_start), cast(int, v.original_end))
             for v in violations
-            if v.original_start is not None
-            and v.original_end is not None
-            and 0 <= v.original_start < v.original_end <= len(text)
+            if _has_range_in(v, text)
         ),
         key=lambda s: s[0],
     )
@@ -69,11 +88,7 @@ def _redact_text(text: str, violations: list[Violation]) -> str:
             merged[-1][1] = max(merged[-1][1], end)
         else:
             merged.append([start, end])
-
-    redacted = text
-    for start, end in reversed(merged):  # right-to-left keeps earlier offsets valid
-        redacted = redacted[:start] + "[REDACTED]" + redacted[end:]
-    return redacted
+    return merged
 
 
 def guard_output(

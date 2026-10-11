@@ -56,7 +56,7 @@ Two detection layers run one after the other, the regex layer first and then the
 - A deterministic **regex layer** with adversarial-mutation handling (NFKC homoglyph folding, zero-width strip, targeted whitespace compaction, bounded Base64/URL decode). Always on, ~sub-ms.
 - An optional **semantic Guard layer (preview)** powered by [NanoMind](https://huggingface.co/opena2a/nanomind-security-classifier). It targets prompt-injection, tool-misuse, data-extraction, and exfiltration patterns the regex layer can't see. The current model has a high benign false-positive rate and is **not yet production-ready** - see [Guard status](#guard-status-preview-not-production-ready). Active only when `@nanomind/daemon` is running locally; aicomply runs regex-only otherwise.
 
-The Guard attempt is the one network request `comply()` makes. For each non-empty input it POSTs the input verbatim to the loopback address `http://127.0.0.1:47200/v1/infer`, so the request stays on the host, and whichever local process holds that port receives the input. Pass `useGuard: false` to make no request - see [What the Guard attempt sends](#what-the-guard-attempt-sends).
+The Guard attempt is the one network request `comply()` makes. For each non-empty input, unless a signed Guard result is supplied, it POSTs the input verbatim to the loopback address `http://127.0.0.1:47200/v1/infer`, so the request stays on the host, and whichever local process holds that port receives the input. Pass `useGuard: false` to make no request - see [What the Guard attempt sends](#what-the-guard-attempt-sends).
 
 ## Install
 
@@ -154,13 +154,13 @@ If the daemon is not installed, not running, or unreachable, aicomply silently f
 
 ### What the Guard attempt sends
 
-`comply()` attempts the Guard whether or not a daemon is running. For each non-empty input (empty and whitespace-only input is not sent) it makes one request, `POST http://127.0.0.1:47200/v1/infer`, with the input verbatim in the JSON body:
+`comply()` attempts the Guard whether or not a daemon is running. For each non-empty input (empty and whitespace-only input is not sent), unless a signed Guard result is supplied, it makes one request, `POST http://127.0.0.1:47200/v1/infer`, with the input verbatim in the JSON body:
 
 ```json
 {"intent":"INTENT_CHECK","input":"My SSN is 123-45-6789."}
 ```
 
-The address is loopback, so the request does not leave the host, and with nothing listening on port 47200 the connection is refused and the result is regex-only. A local process other than the daemon that holds the port receives every classified input all the same.
+The address is loopback, so the request does not leave the host, and with nothing listening on port 47200 the connection is refused and the result is regex-only. A local process other than the daemon that holds the port receives every classified input all the same. A signed Guard result passed in the second argument as `guardResult` with `guardVerifyOptions` is verified instead, and no request is made.
 
 To make no request, pass `useGuard: false`:
 
@@ -261,7 +261,7 @@ const result = await session.comply({
 });
 ```
 
-Either value appends a `REGISTRY_UNKNOWN` violation (contract AC-002).
+Either value appends a `REGISTRY_UNKNOWN` violation (contract AC-002). The lookup runs for empty content as well, and an empty `sourcePackage` counts as an `error`.
 
 ## Verdict semantics
 

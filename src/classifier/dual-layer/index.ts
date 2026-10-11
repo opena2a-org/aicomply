@@ -79,7 +79,8 @@ export interface DualLayerOptions {
   /**
    * Verdict to give when the Registry lookup for sourcePackage is a miss or
    * an error. Unset, the verdict is left as the classifiers set it. With
-   * sourcePackage set and no registryCache, the lookup counts as an error.
+   * sourcePackage set and no registryCache, or set to an empty string, the
+   * lookup counts as an error.
    */
   onRegistryUnknown?: RegistryUnknownAction;
 }
@@ -129,6 +130,54 @@ export function assertRegistryUnknownAction(
 }
 
 /**
+ * Reject a sourcePackage that is set but not a string. Read as unset, a
+ * JavaScript caller's null or number would skip the Registry lookup that
+ * onRegistryUnknown was set to fail closed on.
+ */
+export function assertSourcePackage(value: unknown): asserts value is string | undefined {
+  if (value !== undefined && typeof value !== 'string') {
+    const got = value === null ? 'null' : typeof value;
+    throw new TypeError(`sourcePackage must be a string (got ${got})`);
+  }
+}
+
+/**
+ * Apply the Registry L2 step to a classified result when the caller named a
+ * source package and gave a cache to look it up in or an onRegistryUnknown
+ * action. Exported so comply() runs the same step on empty content, which it
+ * does not classify: the lookup depends on the source, not the content.
+ */
+export function applyRegistry(
+  base: Omit<ComplyResult, 'registrySignals'>,
+  options?: DualLayerOptions,
+): ComplyResult {
+  // A caller who set onRegistryUnknown gets it for a source package with no
+  // cache to look it up in as well: that lookup is an error, not a skipped
+  // check. The same holds for an empty name, which no Registry entry has.
+  if (options?.sourcePackage === undefined || !(options.registryCache || options.onRegistryUnknown)) {
+    return base;
+  }
+  const assembled = options.riskContext !== undefined
+    ? assembleRiskContext(options.riskContext)
+    : undefined;
+  let lookup: RegistryLookupResult;
+  if (options.sourcePackage === '') {
+    lookup = { status: 'error', reason: 'empty source package name' };
+  } else if (options.registryCache) {
+    lookup = options.registryCache.lookup(options.sourcePackage);
+  } else {
+    lookup = { status: 'error', reason: 'no registry cache supplied' };
+  }
+  return applyRegistryL2(
+    base,
+    lookup,
+    options.sourcePackage,
+    assembled?.trustLevel,
+    options.onRegistryUnknown,
+  );
+}
+
+/**
  * Run content through both classification layers and merge results.
  *
  * When guardResult and guardVerifyOptions are provided, the Guard
@@ -150,6 +199,7 @@ export async function classifyDualLayer(
     );
   }
   assertRegistryUnknownAction(options?.onRegistryUnknown);
+  assertSourcePackage(options?.sourcePackage);
 
   // Pre-regex adversarial normalization (threat-model scope 2026-05-28).
   // NFKC + zero-width strip produce normalizedContent; the compact form
@@ -244,26 +294,7 @@ export async function classifyDualLayer(
   // Registry L2 threshold/block logic (Section 3.1, lines 239-263)
   // AC-005: synchronous cache lookup only - never fetch in the hot path.
   // ---------------------------------------------------------------------------
-  let result: ComplyResult;
-  // A caller who set onRegistryUnknown gets it for a source package with no
-  // cache to look it up in as well: that lookup is an error, not a skipped check.
-  if (options?.sourcePackage && (options.registryCache || options.onRegistryUnknown)) {
-    const assembled = options.riskContext !== undefined
-      ? assembleRiskContext(options.riskContext)
-      : undefined;
-    const lookup: RegistryLookupResult = options.registryCache
-      ? options.registryCache.lookup(options.sourcePackage)
-      : { status: 'error', reason: 'no registry cache supplied' };
-    result = applyRegistryL2(
-      baseResult,
-      lookup,
-      options.sourcePackage,
-      assembled?.trustLevel,
-      options.onRegistryUnknown,
-    );
-  } else {
-    result = baseResult;
-  }
+  let result = applyRegistry(baseResult, options);
 
   // ---------------------------------------------------------------------------
   // Policy pack enforcement: DENY rules hard-block, WARN rules add violations.

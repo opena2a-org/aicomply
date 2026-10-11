@@ -229,13 +229,169 @@ def test_langchain_handler_allow_returns_the_completion_unchanged(kind):
     assert _completion_text(llm.invoke("Summarize this support ticket")) == _SSN_COMPLETION
 
 
+@pytest.mark.parametrize("kind", _LANGCHAIN_MODEL_KINDS)
+def test_langchain_handler_stops_batch_that_emits_pii(kind):
+    llm = _fake_langchain_model(kind, _SSN_COMPLETION)
+
+    with pytest.raises(ComplianceViolation, match="SSN"):
+        llm.batch(["Summarize this support ticket"])
+
+
+@pytest.mark.parametrize("kind", _LANGCHAIN_MODEL_KINDS)
+def test_langchain_handler_stops_abatch_that_emits_pii(kind):
+    llm = _fake_langchain_model(kind, _SSN_COMPLETION)
+
+    with pytest.raises(ComplianceViolation, match="SSN"):
+        asyncio.run(llm.abatch(["Summarize this support ticket"]))
+
+
+@pytest.mark.parametrize("kind", _LANGCHAIN_MODEL_KINDS)
+def test_langchain_handler_redacts_what_batch_returns(kind):
+    llm = _fake_langchain_model(kind, _SSN_COMPLETION, on_violation="redact", use_guard=False)
+
+    returned = [_completion_text(output) for output in llm.batch(["Summarize this support ticket"])]
+
+    assert returned == ["The customer SSN is [REDACTED]."]
+
+
+def _fake_chat_model_with_blocks(blocks: list, **handler_options):
+    """A LangChain fake chat model whose message content is a list of blocks."""
+    pytest.importorskip("langchain_core")
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage
+
+    from aicomply.integrations.langchain import AIComplyCallbackHandler
+
+    handler = AIComplyCallbackHandler(**handler_options)
+    return GenericFakeChatModel(messages=iter([AIMessage(content=blocks)]), callbacks=[handler])
+
+
+def test_langchain_handler_redacts_text_blocks_of_a_chat_message():
+    image = {"type": "image", "url": "https://example.invalid/receipt.png"}
+    llm = _fake_chat_model_with_blocks(
+        [{"type": "text", "text": _SSN_COMPLETION}, image],
+        on_violation="redact",
+        use_guard=False,
+    )
+
+    returned = llm.invoke("Summarize this support ticket").content
+
+    assert returned == [{"type": "text", "text": "The customer SSN is [REDACTED]."}, image]
+
+
+def test_langchain_handler_redacts_a_finding_split_across_text_blocks():
+    llm = _fake_chat_model_with_blocks(
+        ["The customer SSN is 516-81-", {"type": "text", "text": "3086."}],
+        on_violation="redact",
+        use_guard=False,
+    )
+
+    returned = llm.invoke("Summarize this support ticket").content
+
+    assert returned == ["The customer SSN is [REDACTED]", {"type": "text", "text": "."}]
+
+
+def _streaming_fake_langchain_model(kind: str, response: str, **handler_options):
+    """A LangChain fake chat or completion model whose ``stream()`` yields chunks."""
+    pytest.importorskip("langchain_core")
+    from langchain_core.language_models.fake import FakeListLLM
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+    from langchain_core.outputs import GenerationChunk
+
+    from aicomply.integrations.langchain import AIComplyCallbackHandler
+
+    class StreamingFakeListLLM(FakeListLLM):
+        def _stream(self, prompt, stop=None, run_manager=None, **kwargs):
+            for character in self.responses[0]:
+                yield GenerationChunk(text=character)
+
+    model_class = FakeListChatModel if kind == "chat" else StreamingFakeListLLM
+    handler = AIComplyCallbackHandler(**handler_options)
+    return model_class(responses=[response], callbacks=[handler])
+
+
+def _chunk_text(chunk) -> str:
+    return chunk if isinstance(chunk, str) else chunk.content
+
+
+@pytest.mark.parametrize("kind", _LANGCHAIN_MODEL_KINDS)
+def test_langchain_handler_redact_raises_on_stream_it_cannot_mask(kind):
+    # stream() has yielded every chunk before the handler sees the completion,
+    # so masking it would change nothing the caller holds.
+    llm = _streaming_fake_langchain_model(
+        kind, _SSN_COMPLETION, on_violation="redact", use_guard=False
+    )
+    received: list[str] = []
+
+    with pytest.raises(ComplianceViolation, match="SSN"):
+        for chunk in llm.stream("Summarize this support ticket"):
+            received.append(_chunk_text(chunk))
+
+    assert "".join(received) == _SSN_COMPLETION
+
+
+@pytest.mark.parametrize("kind", _LANGCHAIN_MODEL_KINDS)
+def test_langchain_handler_redact_raises_on_astream_it_cannot_mask(kind):
+    llm = _streaming_fake_langchain_model(
+        kind, _SSN_COMPLETION, on_violation="redact", use_guard=False
+    )
+
+    async def consume() -> None:
+        async for _chunk in llm.astream("Summarize this support ticket"):
+            pass
+
+    with pytest.raises(ComplianceViolation, match="SSN"):
+        asyncio.run(consume())
+
+
+@pytest.mark.parametrize("kind", _LANGCHAIN_MODEL_KINDS)
+def test_langchain_handler_redact_streams_a_clean_completion(kind):
+    llm = _streaming_fake_langchain_model(
+        kind, _CLEAN_COMPLETION, on_violation="redact", use_guard=False
+    )
+
+    received = "".join(_chunk_text(chunk) for chunk in llm.stream("Where is my order?"))
+
+    assert received == _CLEAN_COMPLETION
+
+
+@pytest.mark.parametrize("kind", _LANGCHAIN_MODEL_KINDS)
+def test_langchain_handler_redact_raises_on_a_finding_with_no_range(monkeypatch, kind):
+    # A Guard-layer finding covers the whole completion and carries no range to
+    # mask, so returning the completion would hand the caller the finding.
+    from aicomply import ComplyResult
+    from aicomply.integrations import langchain as lc_mod
+    from aicomply.types import Violation
+
+    whole_input = Violation(
+        type="data_extraction",
+        value="data_extraction",
+        start=0,
+        end=0,
+        confidence=0.95,
+        classifier="guard",
+    )
+    monkeypatch.setattr(
+        lc_mod,
+        "comply",
+        lambda text, use_guard=True: ComplyResult(
+            verdict="VIOLATION", violations=[whole_input], classifier_results={}
+        ),
+    )
+    llm = _fake_langchain_model(kind, _CLEAN_COMPLETION, on_violation="redact")
+
+    with pytest.raises(ComplianceViolation, match="data_extraction"):
+        llm.invoke("Where is my order?")
+
+
 @pytest.mark.parametrize(
-    ("on_violation", "reraised"), [("raise", True), ("redact", False), ("allow", False)]
+    ("on_violation", "reraised"), [("raise", True), ("redact", True), ("allow", False)]
 )
-def test_langchain_handler_sets_raise_error_only_for_raise(monkeypatch, on_violation, reraised):
+def test_langchain_handler_sets_raise_error_unless_allow(monkeypatch, on_violation, reraised):
     # LangChain logs and drops a handler's exception unless the handler's
-    # raise_error is true. The stand-in base class keeps this check running on
-    # an install without langchain-core, where the invoke() tests above skip.
+    # raise_error is true; "redact" raises when it cannot mask a finding. The
+    # stand-in base class keeps this check running on an install without
+    # langchain-core, where the invoke() tests above skip.
     from aicomply.integrations import langchain as lc_mod
 
     class BaseCallbackHandler:

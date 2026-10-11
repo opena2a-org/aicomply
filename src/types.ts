@@ -120,7 +120,8 @@ export interface ComplyOptions {
    * is a miss or an error (see `registrySignals.status`). Unset, the verdict
    * is left as the classifiers set it. 'violation' raises CLEAN to VIOLATION;
    * 'deny' sets DENY. Either appends a REGISTRY_UNKNOWN violation. With
-   * `sourcePackage` set and no `registryCache`, the lookup counts as an error.
+   * `sourcePackage` set and no `registryCache`, or set to an empty string, the
+   * lookup counts as an error. Empty content is looked up as well.
    */
   onRegistryUnknown?: RegistryUnknownAction;
   /**

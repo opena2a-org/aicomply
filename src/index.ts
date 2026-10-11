@@ -66,7 +66,12 @@ export { scanPatterns, luhnCheck } from './classifier/regex/patterns';
 export type { PatternMatch, PatternType } from './classifier/regex/patterns';
 export { PACK_VERSION, PACK_SHA256 } from './classifier/regex/pack';
 
-import { classifyDualLayer, assertRegistryUnknownAction } from './classifier/dual-layer';
+import {
+  classifyDualLayer,
+  applyRegistry,
+  assertRegistryUnknownAction,
+  assertSourcePackage,
+} from './classifier/dual-layer';
 import { packIdentity } from './classifier/regex/pack';
 import { RegistryIntelligenceCache } from './registry';
 import { loadPolicyPack } from './policy';
@@ -105,7 +110,8 @@ export type { DualLayerOptions } from './classifier/dual-layer';
  * A package the Registry has no data for, or a Registry that could not be
  * reached, does not change the verdict by default: `registrySignals.status`
  * reports 'miss' or 'error' (AC-002). Set `onRegistryUnknown` to 'violation'
- * or 'deny' to have either one decide the verdict.
+ * or 'deny' to have either one decide the verdict. The Registry step runs for
+ * empty content too, and an empty `sourcePackage` counts as a lookup error.
  *
  * The Guard layer calls the nanomind daemon at `http://127.0.0.1:47200` unless
  * `options.guardOptions.baseUrl` names another address.
@@ -134,8 +140,8 @@ export async function comply(
   }
   // Reject non-string content explicitly so consumers can't silently bypass
   // classification by passing a number, object, or array as content. Empty
-  // string and missing content are allowed and short-circuit with a CLEAN
-  // result + populated audit fields.
+  // string and missing content are allowed: they skip classification, still
+  // get the Registry step, and carry populated audit fields.
   if (opts.content !== undefined && typeof opts.content !== 'string') {
     throw new TypeError(
       `comply: options.content must be a string (got ${typeof opts.content})`,
@@ -149,8 +155,12 @@ export async function comply(
     throw new TypeError(`comply: useGuard must be a boolean (got ${typeof useGuard})`);
   }
   // Checked before the empty-content return so a mistyped action fails on
-  // every call, not only on the ones that reach the Registry lookup.
+  // every call, not only on the ones that reach the Registry lookup. Both
+  // arguments are checked because either one can carry the value.
   assertRegistryUnknownAction(opts.onRegistryUnknown);
+  assertRegistryUnknownAction(dualLayerOptions?.onRegistryUnknown);
+  assertSourcePackage(opts.sourcePackage);
+  assertSourcePackage(dualLayerOptions?.sourcePackage);
   // A misplaced URL string (guardOptions: 'http://...') would otherwise be
   // read as an object with no baseUrl and the default address used instead.
   if (opts.guardOptions !== undefined && !isPlainObject(opts.guardOptions)) {
@@ -160,21 +170,39 @@ export async function comply(
     );
   }
   if (!opts.content) {
-    // Empty / missing content. Populate the audit fields so consumers can
-    // rely on `originalContent` / `normalizedContent` / `normalizations`
-    // being present in the result type (per types.ts ComplyResult contract).
-    return {
-      verdict: 'CLEAN',
-      violations: [],
-      classifierResults: {
-        regex: { classifier: 'regex', verdict: 'CLEAN', violations: [] },
+    // Empty / missing content: nothing to classify, but the Registry lookup
+    // depends on the source, not the content, so it still runs. A caller who
+    // set onRegistryUnknown to fail closed is not let through on empty input.
+    // Populate the audit fields so consumers can rely on `originalContent` /
+    // `normalizedContent` / `normalizations` being present in the result type
+    // (per types.ts ComplyResult contract); a DENY drops the two content
+    // fields, as classifyDualLayer() does for every DENY.
+    const result = applyRegistry(
+      {
+        verdict: 'CLEAN',
+        violations: [],
+        classifierResults: {
+          regex: { classifier: 'regex', verdict: 'CLEAN', violations: [] },
+        },
+        originalContent: opts.content ?? '',
+        normalizedContent: opts.content ?? '',
+        normalizations: [],
+        pack: packIdentity(),
+        layers: [],
       },
-      originalContent: opts.content ?? '',
-      normalizedContent: opts.content ?? '',
-      normalizations: [],
-      pack: packIdentity(),
-      layers: [],
-    };
+      {
+        ...dualLayerOptions,
+        ...(opts.sourcePackage !== undefined && { sourcePackage: opts.sourcePackage }),
+        ...(opts.registryCache !== undefined && { registryCache: opts.registryCache }),
+        ...(opts.riskContext !== undefined && { riskContext: opts.riskContext }),
+        ...(opts.onRegistryUnknown !== undefined && { onRegistryUnknown: opts.onRegistryUnknown }),
+      },
+    );
+    if (result.verdict === 'DENY') {
+      delete result.originalContent;
+      delete result.normalizedContent;
+    }
+    return result;
   }
 
   const mergedOptions: DualLayerOptions = {
