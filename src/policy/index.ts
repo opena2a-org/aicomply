@@ -115,7 +115,8 @@ export function loadPolicyPack(name?: string): PolicyPack {
  * whose `patterns` is not an array of strings is reported, never thrown on.
  * An id that is present and not a string is reported with its type, an empty
  * id is shown as `''`, and an empty slot in a sparse `rules` array is reported
- * as a rule that is not an object.
+ * as a rule that is not an object;
+ * a run of empty slots is one problem that names its first and last index.
  * comply() rejects fewer packs: see policyStepProblems().
  */
 export function validatePolicyConfig(config: PolicyPackConfig | unknown): string[] {
@@ -165,12 +166,24 @@ export function policyStepProblems(pack: unknown): string[] {
  * The problems with each rule of `rules`, in index order. Every index is
  * read, so an empty slot in a sparse array is reported as a rule that is not
  * an object: `forEach` skips such a slot, and the policy step then reads it
- * as `undefined`.
+ * as `undefined`. A run of two or more empty slots is one problem naming its
+ * first and last index, so the list grows with the rules the array holds and
+ * not with its length.
  */
 function rulesProblems(rules: unknown[], redactSkipped: boolean): string[] {
   const errors: string[] = [];
   for (let index = 0; index < rules.length; index++) {
-    errors.push(...ruleProblems(rules[index], index, redactSkipped));
+    if (index in rules) {
+      errors.push(...ruleProblems(rules[index], index, redactSkipped));
+      continue;
+    }
+    const first = index;
+    while (index + 1 < rules.length && !(index + 1 in rules)) index++;
+    errors.push(
+      first === index
+        ? `Rule ${index}: must be an object (got undefined)`
+        : `Rules ${first} to ${index}: must be objects (got undefined)`,
+    );
   }
   return errors;
 }

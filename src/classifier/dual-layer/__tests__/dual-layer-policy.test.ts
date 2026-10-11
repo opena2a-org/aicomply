@@ -390,6 +390,34 @@ describe('policy pack validation', () => {
     );
   });
 
+  it('reports a run of empty slots as one problem, so a long sparse rules array gives a short list', async () => {
+    // Five million slots hold two rules. One message a slot made a list of
+    // millions and a rejection message hundreds of megabytes long.
+    const rules: unknown[] = [];
+    rules.length = 5000000;
+    rules[2] = DENY_PACK.rules[0];
+    rules[3] = DENY_PACK.rules[0];
+    rules[5] = DENY_PACK.rules[0];
+    const policyPack = { ...DENY_PACK, rules } as unknown as PolicyPack;
+    const problems = [
+      'Rules 0 to 1: must be objects (got undefined)',
+      'Rule 4: must be an object (got undefined)',
+      'Rules 6 to 4999999: must be objects (got undefined)',
+    ];
+
+    expect(validatePolicyConfig(policyPack)).toEqual(problems);
+    const call = comply({ content: SSN_CONTENT, useGuard: false }, { policyPack });
+    await expect(call).rejects.toThrow(
+      new TypeError(`comply: dualLayerOptions.policyPack is not a valid policy pack: ${problems.join('; ')}`),
+    );
+
+    const holes: unknown[] = [];
+    holes.length = 5000000;
+    expect(validatePolicyConfig({ name: 'p', version: '1', rules: holes })).toEqual([
+      'Rules 0 to 4999999: must be objects (got undefined)',
+    ]);
+  });
+
   it('rejects a name on the first argument that is not a built-in pack, a pack object there included', async () => {
     const cases: Array<[unknown, string]> = [
       ['hipaa', '"hipaa"'],
