@@ -24,7 +24,7 @@ echo "My SSN is 123-45-6789, please update the record." | npx @opena2a/aicomply 
 
 ```
   VIOLATION  (stdin)   1 finding
-    SSN          123-•••89          confidence 0.95  layer regex
+    SSN          •••                confidence 0.95  layer regex
 
   Semantic Guard layer: inactive (preview; no nanomind-daemon on http://127.0.0.1:47200).
   It targets prompt-injection / exfiltration the regex layer cannot see, but the
@@ -34,8 +34,8 @@ echo "My SSN is 123-45-6789, please update the record." | npx @opena2a/aicomply 
 Verdict: VIOLATION  ·  1 finding across 1 input. Block, redact, or log before this content reaches an LLM.
 ```
 
-Detected values are masked in output, so the CLI never prints a full secret to your
-terminal or logs. Exit code is `0` for CLEAN and `1` when anything is flagged, so it
+The CLI prints a detected value's type and none of its characters, so nothing it writes
+to your terminal or logs reveals the value. Exit code is `0` for CLEAN and `1` when anything is flagged, so it
 drops straight into CI:
 
 ```bash
