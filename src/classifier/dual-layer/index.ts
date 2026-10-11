@@ -26,7 +26,7 @@ import { RegistryIntelligenceCache } from '../../registry';
 import type { RegistryLookupResult } from '../../registry';
 import { assembleRiskContext } from '../../risk';
 import { normalize } from '../../normalize';
-import { validatePolicyConfig } from '../../policy';
+import { policyStepProblems } from '../../policy';
 import type { ClassifierResult, ComplyLayer, ComplyResult, PolicyPack, RegistryUnknownAction, RiskContext, Violation, ViolationView } from '../../types';
 import type {
   NanoMindGuardResult,
@@ -61,8 +61,8 @@ export interface DualLayerOptions {
   /**
    * Loaded policy pack to enforce after regex+Guard merge and Registry L2.
    * DENY rules hard-block (verdict → DENY). WARN rules append a violation.
-   * REDACT rules are skipped in V1. A pack `validatePolicyConfig()` reports
-   * a problem with is rejected with a TypeError.
+   * REDACT rules are skipped in V1. A pack the policy step cannot apply is
+   * rejected with a TypeError; see assertPolicyPack().
    */
   policyPack?: PolicyPack;
   /**
@@ -162,16 +162,22 @@ export function assertGuardOptions(
 }
 
 /**
- * Reject a policyPack that the policy step cannot apply: not an object, no
- * `rules` array, or a rule with no id, an action other than DENY, REDACT or
- * WARN (a lower-case 'deny' included), or `patterns` that is not an array of
- * strings. Read as it is, such a pack fails mid-classification with an error
- * that names no parameter, or has its rule skipped. `name` is how the error
- * refers to the value, e.g. 'comply: dualLayerOptions.policyPack'.
+ * Reject a policyPack that the policy step cannot apply: not an object, a
+ * `rules` that is not an array, or a rule that is not an object, has an
+ * action other than DENY, REDACT or WARN (a lower-case 'deny' included) or,
+ * unless it is a REDACT rule, which the step skips, has an id that is not a
+ * non-empty string or `patterns` that is not an array of strings. Read as it
+ * is, such a pack can be ignored, fail mid-classification with an error that
+ * names no parameter, or have a rule that is skipped, never matches or is
+ * reported as `POLICY_DENY:undefined` or `POLICY_WARN:undefined`. A pack with
+ * no name or version, or with an empty `rules` array, is applied: the step
+ * does not read the name or the version, and an empty `rules` array adds
+ * nothing. `name` is how the error refers to the value, e.g.
+ * 'comply: dualLayerOptions.policyPack'.
  */
 export function assertPolicyPack(value: unknown, name: string): asserts value is PolicyPack | undefined {
   if (value === undefined) return;
-  const errors = validatePolicyConfig(value);
+  const errors = policyStepProblems(value);
   if (errors.length > 0) {
     throw new TypeError(`${name} is not a valid policy pack: ${errors.join('; ')}`);
   }

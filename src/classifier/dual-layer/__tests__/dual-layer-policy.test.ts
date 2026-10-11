@@ -375,6 +375,66 @@ describe('policy pack validation', () => {
     expect(named.violations.map(v => v.type)).toEqual(['SSN', 'POLICY_DENY:pii-ssn']);
     expect(passed.violations.map(v => v.type)).toEqual(['SSN', 'POLICY_DENY:block-ssn']);
   });
+
+  it('applies a pack with no name or version, or with no rules, which the policy step does not need', async () => {
+    const noRules: PolicyPack = { name: 'p', version: '1', rules: [] };
+    const unnamed = { rules: DENY_PACK.rules } as unknown as PolicyPack;
+
+    const none = await comply({ content: SSN_CONTENT, useGuard: false }, { policyPack: noRules });
+    const denied = await comply({ content: SSN_CONTENT, useGuard: false }, { policyPack: unnamed });
+    const direct = await classifyDualLayer(SSN_CONTENT, { useGuard: false, policyPack: noRules });
+    // The name on the first argument takes the place of the pack on the second.
+    const named = await comply(
+      { content: SSN_CONTENT, useGuard: false, policyPack: 'default' },
+      { policyPack: noRules },
+    );
+    const empty = await comply({ content: '', useGuard: false }, { policyPack: noRules });
+
+    expect(none.verdict).toBe('VIOLATION');
+    expect(none.violations.map(v => v.type)).toEqual(['SSN']);
+    expect(denied.verdict).toBe('DENY');
+    expect(denied.violations.map(v => v.type)).toEqual(['SSN', 'POLICY_DENY:block-ssn']);
+    expect(direct.verdict).toBe('VIOLATION');
+    expect(direct.violations.map(v => v.type)).toEqual(['SSN']);
+    expect(named.verdict).toBe('DENY');
+    expect(named.violations.map(v => v.type)).toEqual(['SSN', 'POLICY_DENY:pii-ssn']);
+    expect(empty.verdict).toBe('CLEAN');
+    expect(empty.violations).toEqual([]);
+  });
+
+  it('applies a pack whose REDACT rule has no id or patterns, as the policy step skips REDACT rules', async () => {
+    const redact = (rule: Record<string, unknown>): PolicyPack =>
+      ({ ...REDACT_PACK, rules: [{ ...REDACT_PACK.rules[0], ...rule }] }) as unknown as PolicyPack;
+
+    for (const policyPack of [redact({ patterns: 'SSN' }), redact({ id: undefined, patterns: undefined })]) {
+      const result = await comply({ content: SSN_CONTENT, useGuard: false }, { policyPack });
+
+      expect(result.verdict).toBe('VIOLATION');
+      expect(result.violations.map(v => v.type)).toEqual(['SSN']);
+    }
+  });
+
+  it('names each problem the policy step has with a pack, and none with its name, version or rule count', async () => {
+    const policyPack = {
+      rules: [
+        'block-ssn',
+        { action: 'WARN', patterns: 'NPI' },
+        { id: 'r', action: 'deny', patterns: ['SSN'] },
+        { action: 'REDACT' },
+      ],
+    } as unknown as PolicyPack;
+
+    const call = comply({ content: SSN_CONTENT, useGuard: false }, { policyPack });
+    await expect(call).rejects.toThrow(TypeError);
+    await expect(call).rejects.toThrow(
+      new TypeError(
+        'comply: dualLayerOptions.policyPack is not a valid policy pack: ' +
+          'Rule 0: must be an object (got string); Rule 1: missing id; ' +
+          'Rule 1: patterns must be an array of strings; ' +
+          "Rule r: invalid action 'deny', expected one of DENY, REDACT, WARN",
+      ),
+    );
+  });
 });
 
 describe('loadPolicyPack() and validatePolicyConfig()', () => {
