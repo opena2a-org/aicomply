@@ -439,6 +439,13 @@ describe('npm publish lifecycle', () => {
     return open === null ? '' : open[0][0];
   }
 
+  /** How many `\` end `line`, counted back from its end, so a long run is read once. */
+  function trailingBackslashes(line: string): number {
+    let run = 0;
+    while (run < line.length && line[line.length - 1 - run] === '\\') run++;
+    return run;
+  }
+
   /**
    * `line`, which ends in a run of `\` inside a value quoted with `quote`,
    * with `next`, the value's next line without its indentation, joined onto
@@ -451,7 +458,7 @@ describe('npm publish lifecycle', () => {
    * out there and the `\` kept, for `withoutInstallFlags` to see.
    */
   function joinedQuoted(line: string, quote: string, next: string): string {
-    const run = (/\\+$/.exec(line) ?? [''])[0].length;
+    const run = trailingBackslashes(line);
     if (quote === '"' && run % 2 === 1) return `${line.slice(0, -1)}${next}`;
     const kept = quote === '"' ? run / 2 : run;
     return kept % 2 === 1 ? `${line}${next}` : `${line} ${next}`;
@@ -940,6 +947,14 @@ describe('npm publish lifecycle', () => {
     const started = Date.now();
     expect(scriptsSwitchedOff(`      - run: ${installs}--ignore-scripts`, null)).toEqual([]);
     expect(scriptsSwitchedOff(`      - run: ${installs}&& npm test --ignore-scripts`, null)).not.toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('reads a long run of backslashes in a quoted value in time that grows with its length', () => {
+    const run = `${'\\'.repeat(200000)} \\`;
+    const started = Date.now();
+    expect(scriptsSwitchedOff(`      - run: "${run}\nnpm publish ./x.tgz"`, null)).not.toEqual([]);
+    expect(scriptsSwitchedOff(`      - run: '${run}\nnpm publish ./x.tgz'`, null)).not.toEqual([]);
     expect(Date.now() - started).toBeLessThan(1000);
   });
 
