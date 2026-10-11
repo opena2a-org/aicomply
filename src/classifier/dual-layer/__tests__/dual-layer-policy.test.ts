@@ -13,6 +13,7 @@
 
 import { classifyDualLayer } from '..';
 import { comply, loadPolicyPack, validatePolicyConfig } from '../../..';
+import { policyStepProblems } from '../../../policy';
 import type { RegistryIntelligenceCache } from '../../../registry';
 import type { ComplyOptions, PolicyPack } from '../../../types';
 
@@ -391,7 +392,7 @@ describe('policy pack validation', () => {
   });
 
   it('reports a run of empty slots as one problem, so a long sparse rules array gives a short list', async () => {
-    // Five million slots hold two rules. One message a slot made a list of
+    // Five million slots hold three rules. One message a slot made a list of
     // millions and a rejection message hundreds of megabytes long.
     const rules: unknown[] = [];
     rules.length = 5000000;
@@ -405,7 +406,10 @@ describe('policy pack validation', () => {
       'Rules 6 to 4999999: must be objects (got undefined)',
     ];
 
-    expect(validatePolicyConfig(policyPack)).toEqual(problems);
+    // The length first, so a list of millions fails here and is not printed.
+    const found = validatePolicyConfig(policyPack);
+    expect(found).toHaveLength(3);
+    expect(found).toEqual(problems);
     const call = comply({ content: SSN_CONTENT, useGuard: false }, { policyPack });
     await expect(call).rejects.toThrow(
       new TypeError(`comply: dualLayerOptions.policyPack is not a valid policy pack: ${problems.join('; ')}`),
@@ -413,8 +417,107 @@ describe('policy pack validation', () => {
 
     const holes: unknown[] = [];
     holes.length = 5000000;
-    expect(validatePolicyConfig({ name: 'p', version: '1', rules: holes })).toEqual([
-      'Rules 0 to 4999999: must be objects (got undefined)',
+    const holesFound = validatePolicyConfig({ name: 'p', version: '1', rules: holes });
+    expect(holesFound).toHaveLength(1);
+    expect(holesFound).toEqual(['Rules 0 to 4999999: must be objects (got undefined)']);
+  });
+
+  it('finds the end of a run of empty slots without testing each slot, so the time does not grow with the length', async () => {
+    // Testing each of 500 million empty slots took seconds; the longest
+    // array, 2 ** 32 - 1 slots, took close to a minute.
+    for (const length of [500000000, 2 ** 32 - 1]) {
+      const rules: unknown[] = [];
+      rules.length = length;
+      rules[1] = DENY_PACK.rules[0];
+      const policyPack = { ...DENY_PACK, rules } as unknown as PolicyPack;
+      const problems = ['Rule 0: must be an object (got undefined)', `Rules 2 to ${length - 1}: must be objects (got undefined)`];
+
+      const start = performance.now();
+      expect(validatePolicyConfig(policyPack)).toEqual(problems);
+      await expect(comply({ content: SSN_CONTENT, useGuard: false }, { policyPack })).rejects.toThrow(
+        new TypeError(`comply: dualLayerOptions.policyPack is not a valid policy pack: ${problems.join('; ')}`),
+      );
+      expect(performance.now() - start).toBeLessThan(1000);
+    }
+  });
+
+  it('reads a slot the prototype chain fills as the policy step reads it, and a run of empty slots ends there', () => {
+    const rules: unknown[] = [];
+    rules.length = 6;
+    rules[0] = DENY_PACK.rules[0];
+    Object.setPrototypeOf(rules, Object.assign(Object.create(Array.prototype), { 3: 'block-ssn' }));
+    const policyPack = { ...DENY_PACK, rules } as unknown as PolicyPack;
+
+    expect(validatePolicyConfig(policyPack)).toEqual([
+      'Rules 1 to 2: must be objects (got undefined)',
+      'Rule 3: must be an object (got string)',
+      'Rules 4 to 5: must be objects (got undefined)',
+    ]);
+  });
+
+  it('reports each element set to undefined on its own, and only empty slots as a run', async () => {
+    const rule = DENY_PACK.rules[0];
+    const rules: unknown[] = [undefined, undefined, rule, undefined];
+    rules.length = 7;
+    rules[5] = undefined;
+    const policyPack = { ...DENY_PACK, rules } as unknown as PolicyPack;
+    const problems = [
+      'Rule 0: must be an object (got undefined)',
+      'Rule 1: must be an object (got undefined)',
+      'Rule 3: must be an object (got undefined)',
+      'Rule 4: must be an object (got undefined)',
+      'Rule 5: must be an object (got undefined)',
+      'Rule 6: must be an object (got undefined)',
+    ];
+
+    expect(validatePolicyConfig({ name: 'p', version: '1', rules: [undefined, undefined, rule, undefined] })).toEqual(
+      problems.slice(0, 3),
+    );
+    expect(validatePolicyConfig(policyPack)).toEqual(problems);
+    await expect(comply({ content: SSN_CONTENT, useGuard: false }, { policyPack })).rejects.toThrow(
+      new TypeError(`comply: dualLayerOptions.policyPack is not a valid policy pack: ${problems.join('; ')}`),
+    );
+  });
+
+  it('applies a rules array behind a Proxy whose elements `in` does not report, as the policy step reads each one', async () => {
+    const rule = { id: 'r', name: 'R', action: 'DENY', patterns: ['SSN'] };
+    // `in` reports no element; `get` supplies the length and the elements.
+    const hidden = new Proxy([rule], { has: () => false });
+    const supplied = new Proxy([], {
+      get: (target, key) => (key === 'length' ? 2 : key === '0' || key === '1' ? rule : Reflect.get(target, key)),
+    });
+
+    for (const rules of [hidden, supplied]) {
+      const policyPack = { name: 'p', version: '1', rules } as unknown as PolicyPack;
+      expect(validatePolicyConfig(policyPack)).toEqual([]);
+      const result = await comply({ content: 'My SSN is 123-45-6789.', useGuard: false }, { policyPack });
+      expect(result.verdict).toBe('DENY');
+      expect(result.violations.map(v => v.type)).toContain('POLICY_DENY:r');
+    }
+  });
+
+  it('rejects an empty slot in patterns at once, which every() and the policy step pass over one by one', async () => {
+    // A rule whose patterns is [] with a length of 50 million passed in about
+    // half a second and made each comply() call take more than a second.
+    const patterns: string[] = [];
+    patterns.length = 2 ** 32 - 1;
+    const sparse: string[] = ['SSN'];
+    sparse[2] = 'PAN';
+    const problem = (index: number): string =>
+      `Rule block-ssn: patterns must be an array of strings (got an empty slot at index ${index})`;
+
+    for (const [rulePatterns, index] of [[sparse, 1], [patterns, 0]] as const) {
+      const policyPack = withRule({ patterns: rulePatterns });
+      const start = performance.now();
+      expect(validatePolicyConfig(policyPack)).toEqual([problem(index)]);
+      await expect(comply({ content: SSN_CONTENT, useGuard: false }, { policyPack })).rejects.toThrow(
+        new TypeError(`comply: dualLayerOptions.policyPack is not a valid policy pack: ${problem(index)}`),
+      );
+      expect(performance.now() - start).toBeLessThan(1000);
+    }
+    // An element set to undefined is not a string either.
+    expect(validatePolicyConfig(withRule({ patterns: ['SSN', undefined] }))).toEqual([
+      'Rule block-ssn: patterns must be an array of strings',
     ]);
   });
 
@@ -521,8 +624,8 @@ describe('policy pack validation', () => {
     const cases: Array<[PolicyPack, string]> = [
       // Ten problems are listed in full, with no count after them.
       [withLastRule({ action: 'DENY', patterns: [] }), firstTen],
-      [withLastRule({ patterns: [] }), `${firstTen}; and 1 more problem`],
-      [packOf(4), `${firstTen}; and 2 more problems`],
+      [withLastRule({ patterns: [] }), `${firstTen}; and 1 more problem, which validatePolicyConfig() lists`],
+      [packOf(4), `${firstTen}; and 2 more problems, which validatePolicyConfig() lists`],
     ];
     for (const [policyPack, problems] of cases) {
       await expect(comply({ content: SSN_CONTENT, useGuard: false }, { policyPack })).rejects.toThrow(
@@ -531,16 +634,75 @@ describe('policy pack validation', () => {
     }
 
     const large = packOf(45000);
+    const rest = '; and 134990 more problems, which validatePolicyConfig() lists';
     expect(validatePolicyConfig(large)).toHaveLength(135000);
     for (const content of [SSN_CONTENT, '']) {
       const call = comply({ content, useGuard: false }, { policyPack: large });
-      await expect(call).rejects.toThrow(new TypeError(`${prefix}${firstTen}; and 134990 more problems`));
+      await expect(call).rejects.toThrow(new TypeError(`${prefix}${firstTen}${rest}`));
     }
     await expect(classifyDualLayer(SSN_CONTENT, { useGuard: false, policyPack: large })).rejects.toThrow(
+      new TypeError(`classifyDualLayer: options.policyPack is not a valid policy pack: ${firstTen}${rest}`),
+    );
+  });
+
+  it('builds the messages of the first ten problems only, and counts the rest', () => {
+    // A million rules that are each {} have three million problems. Building
+    // a message for each held hundreds of megabytes to show ten of them.
+    const rules = new Array(1000000).fill({});
+    const found = policyStepProblems({ name: 'p', version: '1', rules }, 10);
+
+    expect(found.total).toBe(3000000);
+    expect(found.messages).toHaveLength(10);
+    expect(found.messages[9]).toBe('Rule 3: missing id');
+    expect(policyStepProblems({ rules: [{}] })).toEqual({
+      messages: ['Rule 0: missing id', 'Rule 0: missing action', 'Rule 0: patterns must be an array of strings'],
+      total: 3,
+    });
+  });
+
+  it('cuts a long id, action or pack name short and escapes its control characters, so the message stays short', async () => {
+    const long = 'i'.repeat(5000000);
+    const shown = `${'i'.repeat(64)}... (length 5000000)`;
+    const invalid = (rules: unknown[]): Promise<unknown> =>
+      comply({ content: 'x', useGuard: false }, { policyPack: { rules } as unknown as PolicyPack });
+    const prefix = 'comply: dualLayerOptions.policyPack is not a valid policy pack: ';
+
+    await expect(invalid([{ id: long, action: 'nope', patterns: [] }])).rejects.toThrow(
+      new TypeError(`${prefix}Rule ${shown}: invalid action 'nope', expected one of DENY, REDACT, WARN`),
+    );
+    await expect(invalid([{ id: 'a\nb', action: `no '${long}`, patterns: [] }])).rejects.toThrow(
       new TypeError(
-        `classifyDualLayer: options.policyPack is not a valid policy pack: ${firstTen}; and 134990 more problems`,
+        `${prefix}Rule a\\nb: invalid action 'no\\u2028\\'${'i'.repeat(60)}...' (length 5000004), ` +
+          'expected one of DENY, REDACT, WARN',
       ),
     );
+    // Ten problems with a long id each, and five thousand more, make a
+    // message of about a thousand characters, not of tens of megabytes.
+    const many = invalid([{ id: long, action: 'nope', patterns: 'SSN' }, ...new Array(5000).fill({})]);
+    await expect(many).rejects.toThrow(TypeError);
+    const message = await many.then(() => '', (error: Error) => error.message);
+    expect(message.length).toBeLessThan(2000);
+    expect(validatePolicyConfig({ name: 'p', version: '1', rules: [{ id: long, patterns: [] }] })).toEqual([
+      `Rule ${shown}: missing action`,
+    ]);
+
+    const name = `\u0007${long}`;
+    await expect(comply({ content: 'x', useGuard: false, policyPack: name } as unknown as ComplyOptions)).rejects.toThrow(
+      new TypeError(
+        `comply: options.policyPack must name a built-in pack ('default'), got "\\u0007${'i'.repeat(63)}..." ` +
+          '(length 5000001). Pass a pack object on the second argument: comply({ content }, { policyPack })',
+      ),
+    );
+    expect(() => loadPolicyPack('a"b\\c\n')).toThrow(
+      new TypeError('loadPolicyPack: unknown policy pack "a\\"b\\\\c\\n"; the built-in packs are \'default\''),
+    );
+  });
+
+  it('names validatePolicyConfig() after the count of the problems it leaves out', async () => {
+    const policyPack = { rules: new Array(5).fill({}) } as unknown as PolicyPack;
+    const message = await comply({ content: 'x', useGuard: false }, { policyPack }).catch((error: Error) => error.message);
+
+    expect(message).toMatch(/; and 5 more problems, which validatePolicyConfig\(\) lists$/);
   });
 });
 
