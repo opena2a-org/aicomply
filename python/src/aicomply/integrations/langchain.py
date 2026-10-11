@@ -16,11 +16,16 @@ the default ``on_violation="raise"`` raises
 :class:`aicomply.integrations.decorator.ComplianceViolation` out of the model
 call (``invoke``, ``ainvoke``, ``batch``), so the completion never reaches the
 caller. ``on_violation="redact"`` masks the findings in the returned text
-instead; a chat message whose content is a list of blocks rather than a string
-is returned unchanged.
+instead, including the text blocks of a chat message whose content is a list.
+Where a finding cannot be masked in what the caller receives, ``"redact"``
+raises :class:`ComplianceViolation` as ``"raise"`` does: a finding with no range
+in the text (a Guard-layer finding covers the whole completion), or a
+``stream()`` / ``astream()`` call.
 
 The check runs when the generation ends. A model that streams has already
-yielded its chunks to a ``stream()`` caller by then.
+yielded its chunks to a ``stream()`` caller by then, so the exception arrives
+after the last chunk; use ``invoke()`` where an unchecked completion must not
+reach the caller.
 """
 
 from __future__ import annotations
@@ -28,7 +33,8 @@ from __future__ import annotations
 from typing import Any
 
 from .. import comply
-from .decorator import ComplianceViolation, OnViolation, _redact_text
+from ..types import Violation
+from .decorator import ComplianceViolation, OnViolation, _has_range_in, _redaction_spans
 
 
 def _resolve_base_handler() -> type:
@@ -43,21 +49,99 @@ def _resolve_base_handler() -> type:
     return BaseCallbackHandler
 
 
-def _redact_generation(generation: Any, redacted: str) -> None:
-    """Write the redacted text into a generation in place, where supported.
+def _is_streamed(generation: Any) -> bool:
+    """Whether ``stream()`` or ``astream()`` has already yielded the generation's text.
+
+    Those two pass ``on_llm_end`` a ``GenerationChunk`` or ``ChatGenerationChunk``
+    merged from the chunks the caller has received. ``invoke()`` and ``batch()``
+    pass the ``Generation`` or ``ChatGeneration`` whose text they return.
+    """
+    from langchain_core.outputs import ChatGenerationChunk, GenerationChunk
+
+    return isinstance(generation, (GenerationChunk, ChatGenerationChunk))
+
+
+def _mask(piece: str, offset: int, spans: list[list[int]]) -> str:
+    """Mask the part of ``piece`` that ``spans`` cover, ``piece`` starting at ``offset``.
+
+    Each span becomes one marker, placed in the piece where the span starts, so
+    masking each piece of a text and joining them gives the masked text.
+    """
+    end_of_piece = offset + len(piece)
+    out: list[str] = []
+    position = offset
+    for start, end in spans:
+        if end <= offset or start >= end_of_piece:
+            continue
+        out.append(piece[position - offset : max(start, offset) - offset])
+        if start >= offset:
+            out.append("[REDACTED]")
+        position = min(end, end_of_piece)
+    out.append(piece[position - offset :])
+    return "".join(out)
+
+
+def _mask_blocks(content: list, text: str, spans: list[list[int]]) -> list | None:
+    """Mask the text blocks of list message content, or None if they do not spell ``text``.
+
+    LangChain joins string items and the ``text`` of text blocks to make the
+    generation text that was checked, so the same walk maps each finding back
+    to the blocks it falls in.
+    """
+    masked = list(content)
+    offset = 0
+    for index, block in enumerate(content):
+        if isinstance(block, str):
+            piece = block
+        elif (
+            isinstance(block, dict)
+            and block.get("type") in ("text", None)
+            and isinstance(block.get("text"), str)
+        ):
+            piece = block["text"]
+        else:
+            continue
+        if text[offset : offset + len(piece)] != piece:
+            return None
+        masked_piece = _mask(piece, offset, spans)
+        masked[index] = masked_piece if isinstance(block, str) else {**block, "text": masked_piece}
+        offset += len(piece)
+    return masked if offset == len(text) else None
+
+
+def _redact_generation(generation: Any, text: str, violations: list[Violation]) -> bool:
+    """Mask the findings wherever the generation holds ``text``; False if it cannot.
 
     A completion model returns ``generation.text``. A chat model returns
-    ``generation.message``, so string message content is rewritten as well.
+    ``generation.message``, whose content is a string or a list of blocks. False
+    means the caller would receive a finding unmasked: a finding has no range in
+    the text, ``stream()`` has already yielded the text, or the message holds it
+    in a shape this function does not rewrite.
     """
-    targets = [(generation, "text")]
+    if _is_streamed(generation):
+        return False
+    if not all(_has_range_in(v, text) for v in violations):
+        return False
+    spans = _redaction_spans(text, violations)
+    updates: list[tuple[Any, str, Any]] = [(generation, "text", _mask(text, 0, spans))]
     message = getattr(generation, "message", None)
-    if isinstance(getattr(message, "content", None), str):
-        targets.append((message, "content"))
-    for target, attribute in targets:
+    if message is not None:
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content == text:
+            updates.append((message, "content", _mask(content, 0, spans)))
+        elif isinstance(content, list):
+            masked = _mask_blocks(content, text, spans)
+            if masked is None:
+                return False
+            updates.append((message, "content", masked))
+        else:
+            return False
+    for target, attribute, value in updates:
         try:
-            setattr(target, attribute, redacted)
-        except (AttributeError, TypeError):
-            pass
+            setattr(target, attribute, value)
+        except (AttributeError, TypeError, ValueError):
+            return False
+    return True
 
 
 def make_aicomply_callback_handler(
@@ -77,7 +161,8 @@ def make_aicomply_callback_handler(
             self._use_guard = use_guard
             # Unless a handler sets raise_error, LangChain logs and drops its
             # exception and the model call returns the completion anyway.
-            self.raise_error = on_violation == "raise"
+            # "redact" raises when it cannot mask a finding, so it needs it too.
+            self.raise_error = on_violation != "allow"
 
         def on_llm_end(self, response: Any, **kwargs: Any) -> None:
             # response is a langchain_core.outputs.LLMResult.
@@ -91,8 +176,10 @@ def make_aicomply_callback_handler(
                         continue
                     if self._on_violation == "raise":
                         raise ComplianceViolation(result)
-                    if self._on_violation == "redact":
-                        _redact_generation(generation, _redact_text(text, result.violations))
+                    if self._on_violation == "redact" and not _redact_generation(
+                        generation, text, result.violations
+                    ):
+                        raise ComplianceViolation(result)
                     # "allow": audit-only, leave as-is.
 
     return _AIComplyCallbackHandler()

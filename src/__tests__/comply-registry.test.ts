@@ -9,6 +9,7 @@
  *   - Cache miss => signals present, verdict unchanged
  *   - Unreachable Registry and absent package => distinct registrySignals.status
  *   - onRegistryUnknown => miss / error becomes VIOLATION or DENY via comply()
+ *   - Empty content and an empty source package name still get the lookup
  *   - comply() without registry options => no L2 signals
  *   - ClassificationSession.comply() uses session cache when caller omits registryCache
  *   - ClassificationSession.comply() respects caller-supplied registryCache override
@@ -338,6 +339,98 @@ describe('comply(): a package the Registry cannot vouch for', () => {
     await expect(comply({ content: '', onRegistryUnknown: bad })).rejects.toThrow(
       /onRegistryUnknown must be 'violation' or 'deny' \(got "block"\)/,
     );
+  });
+
+  it('rejects the same value passed in the second argument, with or without content', async () => {
+    const bad = 'block' as unknown as 'deny';
+    await expect(comply('', { onRegistryUnknown: bad })).rejects.toThrow(
+      /onRegistryUnknown must be 'violation' or 'deny' \(got "block"\)/,
+    );
+    await expect(comply(SAFE_CONTENT, { onRegistryUnknown: bad, useGuard: false })).rejects.toThrow(
+      TypeError,
+    );
+  });
+
+  it("fails closed on an empty source package name with onRegistryUnknown: 'deny'", async () => {
+    const result = await comply({
+      content: 'hello world',
+      sourcePackage: '',
+      useGuard: false,
+      onRegistryUnknown: 'deny',
+    });
+
+    expect(result.verdict).toBe('DENY');
+    expect(result.registrySignals?.status).toBe('error');
+    expect(result.registrySignals?.packageName).toBe('');
+    expect(result.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN']);
+  });
+
+  it('rejects a source package that is not a string, in either argument', async () => {
+    const notString = null as unknown as string;
+    await expect(
+      comply({ content: 'hello world', sourcePackage: notString, useGuard: false, onRegistryUnknown: 'deny' }),
+    ).rejects.toThrow(/sourcePackage must be a string \(got null\)/);
+    await expect(comply('', { sourcePackage: 42 as unknown as string })).rejects.toThrow(
+      /sourcePackage must be a string \(got number\)/,
+    );
+  });
+
+  it("fails closed on empty content from an unreachable Registry with onRegistryUnknown: 'deny'", async () => {
+    registryUnreachable();
+    const session = await ClassificationSession.create({ baseUrl: BASE_URL });
+
+    const result = await session.comply({
+      content: '',
+      sourcePackage: 'any-package',
+      onRegistryUnknown: 'deny',
+    });
+
+    expect(result.verdict).toBe('DENY');
+    expect(result.registrySignals?.status).toBe('error');
+    expect(result.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN']);
+    // Every DENY drops the content echo, empty content included.
+    expect(result.originalContent).toBeUndefined();
+    expect(result.normalizedContent).toBeUndefined();
+    expect(result.layers).toEqual([]);
+  });
+
+  it('reports the lookup for empty content without changing the verdict when unset', async () => {
+    const result = await comply({
+      content: '',
+      sourcePackage: 'any-package',
+      registryCache: makeCache({ status: 'miss' }),
+    });
+
+    expect(result.verdict).toBe('CLEAN');
+    expect(result.registrySignals?.status).toBe('miss');
+    expect(result.originalContent).toBe('');
+    expect(result.normalizedContent).toBe('');
+  });
+
+  it('applies a supply-chain block to empty content, as to any other content', async () => {
+    const cache = makeCache({
+      status: 'hit',
+      intelligence: {
+        packageName: 'blocked-pkg',
+        fleetAnomalySignal: null,
+        supplyChainAlerts: [
+          {
+            id: 'sca-empty',
+            name: 'blocked-pkg',
+            type: 'library',
+            severity: 'critical',
+            reason: 'Empty content test',
+            publishedAt: '2026-10-11T00:00:00Z',
+          },
+        ],
+        fetchedAt: Date.now(),
+      },
+    });
+
+    const result = await comply({ content: '', sourcePackage: 'blocked-pkg', registryCache: cache });
+
+    expect(result.verdict).toBe('DENY');
+    expect(result.registrySignals?.supplyChainBlock).toBe(true);
   });
 });
 

@@ -6,13 +6,20 @@
  *   - Any active supply-chain alert on package => hard DENY
  *   - Cache miss => unknown (AC-002), verdict unchanged, signals recorded
  *   - registrySignals.status tells hit, miss and error apart
- *   - onRegistryUnknown => miss / error becomes VIOLATION or DENY
+ *   - onRegistryUnknown => miss / error becomes VIOLATION or DENY, and never
+ *     lowers a DENY the classifiers reached
+ *   - An empty source package name is a lookup error
  *   - No registry options => L2 not applied
  */
 
 import { classifyDualLayer } from '..';
 import { RegistryIntelligenceCache } from '../../../registry';
 import type { SupplyChainAlert } from '../../../registry';
+import {
+  generateTestKeyPair,
+  signGuardResult,
+  makeVerifyOptions,
+} from '../../../arp/__tests__/test-helpers';
 
 // ---------------------------------------------------------------------------
 // Helpers to mock the registry cache
@@ -369,6 +376,61 @@ describe('Registry L2: onRegistryUnknown', () => {
     expect(deny.registrySignals?.packageName).toBe('any-package');
     expect(deny.violations.some(v => v.type === 'REGISTRY_UNKNOWN')).toBe(true);
   });
+
+  it('counts an empty source package name as an error, not as no source package', async () => {
+    const cache = makeCache(hitWith([]));
+
+    const deny = await classifyDualLayer(SAFE_CONTENT, {
+      registryCache: cache,
+      sourcePackage: '',
+      onRegistryUnknown: 'deny',
+    });
+    expect(deny.verdict).toBe('DENY');
+    expect(deny.registrySignals?.status).toBe('error');
+    expect(deny.registrySignals?.packageName).toBe('');
+    expect(cache.lookup).not.toHaveBeenCalled();
+
+    const noCache = await classifyDualLayer(SAFE_CONTENT, {
+      sourcePackage: '',
+      onRegistryUnknown: 'violation',
+    });
+    expect(noCache.verdict).toBe('VIOLATION');
+    expect(noCache.registrySignals?.status).toBe('error');
+
+    // Unset, the empty name is reported and the verdict is left alone.
+    const unset = await classifyDualLayer(SAFE_CONTENT, { registryCache: cache, sourcePackage: '' });
+    expect(unset.verdict).toBe('CLEAN');
+    expect(unset.registrySignals?.status).toBe('error');
+  });
+
+  it('rejects a source package that is not a string', async () => {
+    await expect(
+      classifyDualLayer(SAFE_CONTENT, {
+        sourcePackage: 0 as unknown as string,
+        onRegistryUnknown: 'deny',
+      }),
+    ).rejects.toThrow(/sourcePackage must be a string \(got number\)/);
+  });
+
+  it("keeps a DENY the classifiers reached with 'violation'", async () => {
+    // A Guard result signed by a key the verifier does not trust is
+    // parse-to-deny (CR-001), so the classifiers reach DENY before the
+    // Registry step; 'violation' must not lower it.
+    const trusted = generateTestKeyPair();
+    const untrusted = generateTestKeyPair();
+    const result = await classifyDualLayer(SAFE_CONTENT, {
+      guardResult: signGuardResult(untrusted, 'documentation', SAFE_CONTENT),
+      guardVerifyOptions: makeVerifyOptions(trusted),
+      registryCache: makeCache({ status: 'miss' }),
+      sourcePackage: 'any-package',
+      onRegistryUnknown: 'violation',
+    });
+
+    expect(result.signatureValid).toBe(false);
+    expect(result.verdict).toBe('DENY');
+    expect(result.registrySignals?.status).toBe('miss');
+    expect(result.violations.some(v => v.type === 'REGISTRY_UNKNOWN')).toBe(true);
+  }, 30000);
 
   it('has nothing to look up without a source package', async () => {
     const result = await classifyDualLayer(SAFE_CONTENT, {
