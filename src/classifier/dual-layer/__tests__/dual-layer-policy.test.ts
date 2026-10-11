@@ -352,12 +352,12 @@ describe('policy pack validation', () => {
   });
 
   it.each([
-    ['a number', 5, 'number'],
-    ['zero', 0, 'number'],
-    ['a boolean', true, 'boolean'],
-    ['null', null, 'null'],
-    ['an empty string', '', "''"],
-  ])('names the type of an id that is %s, instead of calling the id missing', async (_label, id, got) => {
+    ['a number', 'number', 5],
+    ['zero', 'number', 0],
+    ['a boolean', 'boolean', true],
+    ['null', 'null', null],
+    ['an empty string', "''", ''],
+  ])('reports an id that is %s as (got %s), instead of calling the id missing', async (_label, got, id) => {
     const policyPack = withRule({ id });
     const problem = `Rule 0: id must be a non-empty string (got ${got})`;
 

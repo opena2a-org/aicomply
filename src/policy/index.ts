@@ -113,8 +113,9 @@ export function loadPolicyPack(name?: string): PolicyPack {
  * Accepts any value, so a caller can check input it has not typed:
  * a value that is not an object, a `rules` that is not an array, or a rule
  * whose `patterns` is not an array of strings is reported, never thrown on.
- * An id that is present and not a non-empty string is reported with its type,
- * and an empty slot in a sparse `rules` array as a rule that is not an object.
+ * An id that is present and not a string is reported with its type, an empty
+ * id is shown as `''`, and an empty slot in a sparse `rules` array is reported
+ * as a rule that is not an object.
  * comply() rejects fewer packs: see policyStepProblems().
  */
 export function validatePolicyConfig(config: PolicyPackConfig | unknown): string[] {
@@ -188,8 +189,8 @@ function ruleProblems(rule: unknown, index: number, redactSkipped: boolean): str
   if (readsRule && id === undefined) {
     errors.push(`Rule ${index}: missing id`);
   } else if (readsRule && (typeof id !== 'string' || id === '')) {
-    // An id that is present is named with its type, so `id: 5` is not
-    // reported as an id that was left out.
+    // An id that is present is named with its type, or shown as '' when it
+    // is empty, so `id: 5` is not reported as an id that was left out.
     const got = id === '' ? "''" : describe(id);
     errors.push(`Rule ${index}: id must be a non-empty string (got ${got})`);
   }
