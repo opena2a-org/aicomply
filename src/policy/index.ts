@@ -107,10 +107,13 @@ export function loadPolicyPack(name?: string): PolicyPack {
 
 /**
  * Validate a policy pack. Returns one message per problem, and an empty array
- * for a pack the policy step can apply. Accepts any value, so a caller can
- * check input it has not typed: a value that is not an object, a `rules` that
- * is not an array, or a rule whose `patterns` is not an array of strings is
- * reported, never thrown on.
+ * for a pack whose name and version are non-empty strings and whose `rules`
+ * holds at least one rule, each with an id that is a non-empty string, an
+ * action of DENY, REDACT or WARN, and `patterns` that is an array of strings.
+ * Accepts any value, so a caller can check input it has not typed:
+ * a value that is not an object, a `rules` that is not an array, or a rule
+ * whose `patterns` is not an array of strings is reported, never thrown on.
+ * comply() rejects fewer packs: see policyStepProblems().
  */
 export function validatePolicyConfig(config: PolicyPackConfig | unknown): string[] {
   if (!isObject(config)) {
@@ -128,24 +131,60 @@ export function validatePolicyConfig(config: PolicyPackConfig | unknown): string
   if (rules.length === 0) errors.push('Policy pack must have at least one rule');
 
   rules.forEach((rule: unknown, index) => {
-    if (!isObject(rule)) {
-      errors.push(`Rule ${index}: must be an object (got ${describe(rule)})`);
-      return;
-    }
-    const { id, action, patterns } = rule as Record<string, unknown>;
-    const label = typeof id === 'string' && id !== '' ? id : String(index);
-    if (typeof id !== 'string' || id === '') errors.push(`Rule ${index}: missing id`);
-    if (action === undefined || action === '') {
-      errors.push(`Rule ${label}: missing action`);
-    } else if (typeof action !== 'string' || !POLICY_ACTIONS.includes(action)) {
-      const got = typeof action === 'string' ? `'${action}'` : describe(action);
-      errors.push(`Rule ${label}: invalid action ${got}, expected one of ${POLICY_ACTIONS.join(', ')}`);
-    }
-    if (!Array.isArray(patterns) || !patterns.every((p) => typeof p === 'string')) {
-      errors.push(`Rule ${label}: patterns must be an array of strings`);
-    }
+    errors.push(...ruleProblems(rule, index, false));
   });
 
+  return errors;
+}
+
+/**
+ * The problems comply() rejects a policy pack for, one message per problem in
+ * the words validatePolicyConfig() uses, and an empty array when there are
+ * none: a value that is not an object, a `rules` that is not an array, a rule
+ * that is not an object or whose action is not DENY, REDACT or WARN, and a
+ * rule other than a REDACT rule, which the policy step skips, whose id is not
+ * a non-empty string or whose `patterns` is not an array of strings. A
+ * missing name or version and an empty `rules` array, which
+ * validatePolicyConfig() reports, are not problems here: the policy step
+ * reads neither the name nor the version, and an empty `rules` array adds
+ * nothing.
+ */
+export function policyStepProblems(pack: unknown): string[] {
+  if (!isObject(pack)) {
+    return [`Policy pack must be an object (got ${describe(pack)})`];
+  }
+  const { rules } = pack as Record<string, unknown>;
+  if (!Array.isArray(rules)) {
+    return [`Policy pack rules must be an array (got ${describe(rules)})`];
+  }
+  const errors: string[] = [];
+  rules.forEach((rule: unknown, index) => {
+    errors.push(...ruleProblems(rule, index, true));
+  });
+  return errors;
+}
+
+/**
+ * The problems with rule `index` of a pack. With `redactSkipped` set, only
+ * the action of a REDACT rule is checked, as the policy step reads nothing
+ * else of it.
+ */
+function ruleProblems(rule: unknown, index: number, redactSkipped: boolean): string[] {
+  if (!isObject(rule)) return [`Rule ${index}: must be an object (got ${describe(rule)})`];
+  const { id, action, patterns } = rule as Record<string, unknown>;
+  const label = typeof id === 'string' && id !== '' ? id : String(index);
+  const readsRule = !(redactSkipped && action === 'REDACT');
+  const errors: string[] = [];
+  if (readsRule && (typeof id !== 'string' || id === '')) errors.push(`Rule ${index}: missing id`);
+  if (action === undefined || action === '') {
+    errors.push(`Rule ${label}: missing action`);
+  } else if (typeof action !== 'string' || !POLICY_ACTIONS.includes(action)) {
+    const got = typeof action === 'string' ? `'${action}'` : describe(action);
+    errors.push(`Rule ${label}: invalid action ${got}, expected one of ${POLICY_ACTIONS.join(', ')}`);
+  }
+  if (readsRule && (!Array.isArray(patterns) || !patterns.every((p) => typeof p === 'string'))) {
+    errors.push(`Rule ${label}: patterns must be an array of strings`);
+  }
   return errors;
 }
 
