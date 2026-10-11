@@ -169,6 +169,26 @@ describe('README', () => {
       guardSpy.mockRestore();
     }
   });
+
+  it('lists only Government markings the regex layer reports as CUI', async () => {
+    // Each comma-separated example in the Government row is scanned inside a
+    // sentence and must come back as one CUI finding over the whole marking,
+    // so the row cannot name a form (FOUO, bare CONTROLLED) that scans CLEAN.
+    const rowLine = lineOf(/^\| Government\s*\|/, lineOf(/^### Regex layer/));
+    expect(rowLine).toBeGreaterThan(0);
+    const cell = LINES[rowLine - 1].split('|')[2].trim();
+    const forms = cell.split(',').map((f) => f.trim().replace(/^`(.*)`$/, '$1'));
+    expect(forms.length).toBeGreaterThan(0);
+
+    const prefix = 'Record: ';
+    for (const form of forms) {
+      const result = await comply({ content: `${prefix}${form}.` });
+      const whole = result.violations.filter(
+        (v) => v.type === 'CUI' && v.start === prefix.length && v.end === prefix.length + form.length,
+      );
+      expect({ form, matched: whole.length }).toEqual({ form, matched: 1 });
+    }
+  });
 });
 
 /**
