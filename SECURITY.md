@@ -46,7 +46,9 @@ posture - not a complete control.
 - Signature verification of Guard classifier results (Ed25519 + ML-DSA-44 hybrid,
   parse-to-deny on invalid signatures - contract CR-001)
 - Session vault key isolation (AES-256-GCM, keys never persisted to disk)
-- Registry intelligence cache integrity (cache-miss treated as unknown, not clean -
+- Registry intelligence cache integrity (a cache miss, or a fleet index that never
+  loaded, is reported as `registrySignals.status` `miss` or `error`, never as a
+  `hit`; it changes the verdict only when the caller sets `onRegistryUnknown` -
   contract AC-002)
 
 ### Adversarial-mutation handling (covered in 1.0)
@@ -181,8 +183,16 @@ regex-only.
   against timing attacks.
 - **Registry availability.** L2 logic (fleet anomaly threshold,
   supply-chain hard block) is best-effort and depends on the configured
-  Registry endpoint. Cache miss does not fail closed; it surfaces signals
-  so callers decide.
+  Registry endpoint. A cache miss or an unreachable Registry does not
+  fail closed by default: the verdict stays as the classifiers set it, so clean
+  content from a package the Registry has no data for is still `CLEAN`.
+  `registrySignals.status` says which case it was: `miss` when the fleet
+  index loaded and the package is in neither index, `error` when the
+  fleet index has never loaded (the cache was not warmed, or every fetch
+  so far failed). Pass `onRegistryUnknown: 'violation'` or `'deny'` to
+  `comply()` to fail closed on both. A failed supply-chain alert fetch
+  is not reported on its own: when the fleet index loaded, the status is
+  `hit` or `miss` from the data that did load.
 - **NanoMind-Guard semantic classifier.** The IPC client is wired and
   testable as of 1.0, but the real Guard binary depends on NanoMind
   Phase 2b training (external to this repo). Until that ships, `comply()`
@@ -265,7 +275,7 @@ if affected:
 
 | ID      | Contract |
 |---------|----------|
-| AC-002  | Cache miss treated as unknown, never as CLEAN |
+| AC-002  | Cache miss or error reported as `registrySignals.status`, never as a hit; fails closed only with `onRegistryUnknown` |
 | AC-005  | No Registry network I/O in the classification hot path. The Guard loopback request is separate; see known limitation 5 |
 | CR-001  | Parse-to-deny on invalid Guard signature |
 | CR-007  | Local-verify path for ATX-style credentials (not used in V1) |
