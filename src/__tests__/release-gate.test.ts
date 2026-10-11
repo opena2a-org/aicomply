@@ -433,10 +433,51 @@ describe('npm publish lifecycle', () => {
     return value.replace(/^(?:[!&]\S*(?:\s+|$))*/, '');
   }
 
-  /** The quote `value`, past its tags and anchors, opens and does not close, or '' when there is none. */
-  function openQuote(value: string): string {
-    const open = /^(?:"(?:[^"\\]|\\[\s\S])*\\?|'(?:[^']|'')*)$/.exec(withoutProperties(value));
-    return open === null ? '' : open[0][0];
+  /**
+   * Where a value stands once its text is read up to some point: at its
+   * start, in a tag or an anchor, in the spaces after one, in a double-quoted
+   * text and right after a `\` in it, in a single-quoted text and right after
+   * a `'` in it, or past the quote's close or a first character that opens
+   * none, after which nothing reopens a quote.
+   */
+  type QuoteState = 'start' | 'tag' | 'gap' | 'double' | 'double-escape' | 'single' | 'single-quote' | 'closed';
+
+  /**
+   * Where a value that stood at `state` stands once `text` is read on from
+   * there. A value continued onto many lines is read a piece at a time, each
+   * on from the state the pieces before it left, so each is read once.
+   */
+  function quoteRead(state: QuoteState, text: string): QuoteState {
+    for (let k = 0; k < text.length && state !== 'closed'; k++) {
+      const c = text[k];
+      if (state === 'tag') {
+        if (/\s/.test(c)) state = 'gap';
+      } else if (state === 'start' || state === 'gap') {
+        if (state === 'start' || !/\s/.test(c)) {
+          state = c === '!' || c === '&' ? 'tag' : c === '"' ? 'double' : c === "'" ? 'single' : 'closed';
+        }
+      } else if (state === 'double') {
+        if (c === '\\') state = 'double-escape';
+        else if (c === '"') state = 'closed';
+      } else if (state === 'double-escape') {
+        state = 'double';
+      } else if (state === 'single') {
+        if (c === "'") state = 'single-quote';
+      } else {
+        state = c === "'" ? 'single' : 'closed';
+      }
+    }
+    return state;
+  }
+
+  /**
+   * The quote a value at `state`, past its tags and anchors, has opened and
+   * not closed, or '' when there is none. A `\` read on from any state leaves
+   * this as it is.
+   */
+  function openQuote(state: QuoteState): string {
+    if (state === 'double' || state === 'double-escape') return '"';
+    return state === 'single' ? "'" : '';
   }
 
   /** How many `\` end `line`, counted back from its end, so a long run is read once. */
@@ -447,9 +488,10 @@ describe('npm publish lifecycle', () => {
   }
 
   /**
-   * `line`, which ends in a run of `\` inside a value quoted with `quote`,
-   * with `next`, the value's next line without its indentation, joined onto
-   * it as YAML reads the two and the shell then splits them into words. In a
+   * How a line that ends in a run of `run` `\` inside a value quoted with
+   * `quote` is joined to the value's next line without its indentation, as
+   * YAML reads the two and the shell then splits them into words: how many
+   * of the `\` stay, and what stands between them and the next line. In a
    * double-quoted value an odd run ends in YAML's escape of the line break,
    * which drops the `\`, the line break and the indentation, so the lines
    * meet. Otherwise YAML keeps the `\`s, one for each pair in a double-quoted
@@ -457,11 +499,10 @@ describe('npm publish lifecycle', () => {
    * the word when an odd number of them stands before it: the space is left
    * out there and the `\` kept, for `withoutInstallFlags` to see.
    */
-  function joinedQuoted(line: string, quote: string, next: string): string {
-    const run = trailingBackslashes(line);
-    if (quote === '"' && run % 2 === 1) return `${line.slice(0, -1)}${next}`;
+  function joinedQuoted(run: number, quote: string): [number, string] {
+    if (quote === '"' && run % 2 === 1) return [run - 1, ''];
     const kept = quote === '"' ? run / 2 : run;
-    return kept % 2 === 1 ? `${line}${next}` : `${line} ${next}`;
+    return [run, kept % 2 === 1 ? '' : ' '];
   }
 
   /** How the lines of a value are read: kept apart, folded into one, or not known yet. */
@@ -580,25 +621,47 @@ describe('npm publish lifecycle', () => {
       let foldDepth: number | null = null;
       if (valueKey !== null && style === 'folded') foldDepth = blockIndent === null ? Infinity : (blockIndent ?? indent);
       else if (head !== null && /^[^|>#]/.test(withoutProperties(head[2] ?? ''))) foldDepth = Infinity;
-      let line = raw[i];
+      // The line joined so far, short of the run of `\` that ends it, in the
+      // pieces it is joined from, and the length of that run. A join reads
+      // the run and the next line only, so a line continued onto many lines
+      // takes time in proportion to its length.
+      let run = trailingBackslashes(raw[i]);
+      const pieces = [raw[i].slice(0, raw[i].length - run)];
+      // Where the value that starts on this line stands at the end of the
+      // pieces. The run after them is read with the piece joined onto it,
+      // and leaves the quote the value has open as it is until then.
+      let state: QuoteState | null = valueAt === null ? null : quoteRead('start', pieces[0].slice(valueAt));
       let lastIndent = indent;
-      while (!comment && !keyComment && line.endsWith('\\')) {
+      while (!comment && !keyComment && run > 0) {
         const at = foldDepth !== null && lastIndent <= foldDepth && i + 2 < raw.length &&
           raw[i + 1].search(/\S/) === -1 && raw[i + 1].length <= foldDepth &&
           raw[i + 2].search(/\S/) <= foldDepth ? i + 2 : i + 1;
         // The quote that the value opens on this line and that is still open
         // on the lines joined so far, if any. The next line need pass no
         // column to belong to the value while there is one.
-        const quote = valueAt === null ? '' : openQuote(line.slice(valueAt));
+        const quote = state === null ? '' : openQuote(state);
         const floor = quote !== '' ? -1 : stepKey;
         if (at >= raw.length || /^\s*#/.test(raw[at]) || raw[at].search(/\S/) <= floor) break;
         const adjacent = at === i + 1;
         i = at;
-        const next = raw[i];
-        if (quote !== '' && adjacent) line = joinedQuoted(line, quote, next.trimStart());
-        else line = /(?<!\S)\\$/.test(line) ? `${line.slice(0, -1)} ${next.trimStart()}` : `${line} ${next.trimStart()}`;
-        lastIndent = next.search(/\S/);
+        const next = raw[i].trimStart();
+        let gap = ' ';
+        if (quote !== '' && adjacent) [run, gap] = joinedQuoted(run, quote);
+        // A `\` after a space, or at the start of the line, is joined as a space.
+        else if (run === 1 && !/\S/.test(pieces[pieces.length - 1].slice(-1))) run = 0;
+        const nextRun = trailingBackslashes(next);
+        const text = `${gap}${next.slice(0, next.length - nextRun)}`;
+        // A next line of nothing but `\` that meets the run makes it longer.
+        if (text === '') run += nextRun;
+        else {
+          const piece = `${'\\'.repeat(run)}${text}`;
+          pieces.push(piece);
+          if (state !== null) state = quoteRead(state, piece);
+          run = nextRun;
+        }
+        lastIndent = raw[i].search(/\S/);
       }
+      const line = `${pieces.join('')}${'\\'.repeat(run)}`;
       if (valueKey !== null && style === 'literal') {
         if (!comment) lines.push(line);
         continue;
@@ -641,7 +704,7 @@ describe('npm publish lifecycle', () => {
   /** What each YAML double-quoted escape stands for, other than `\x`, `\u` and `\U`. */
   const YAML_ESCAPES: Record<string, string> = {
     '0': '\0', a: '\x07', b: '\b', t: '\t', '\t': '\t', n: '\n', v: '\v', f: '\f', r: '\r', e: '\x1b',
-    ' ': ' ', '"': '"', '/': '/', '\\': '\\', N: '\x85', _: '\xa0', L: ' ', P: ' ',
+    ' ': ' ', '"': '"', '/': '/', '\\': '\\', N: '\x85', _: '\xa0', L: '\u{2028}', P: '\u{2029}',
   };
 
   /** `line` with each YAML double-quoted escape replaced by what it stands for. */
@@ -1031,6 +1094,24 @@ describe('npm publish lifecycle', () => {
     expect(scriptsSwitchedOff(`      - run: ${options}x`, null)).toEqual([]);
     expect(scriptsSwitchedOff(`      - run: ${options}publish`, null)).not.toEqual([]);
     expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('reads a quoted value continued onto many lines in time that grows with their number', () => {
+    const flags = Array<string>(20000).fill('--access\\');
+    const started = Date.now();
+    for (const quote of ['"', "'"]) {
+      const publish = [`      - run: ${quote}npm publish --provenance\\`, ...flags];
+      expect(scriptsSwitchedOff([...publish, `public ./x.tgz${quote}`].join('\n'), null)).not.toEqual([]);
+      // The same publish without the tarball goes through, so the refusal
+      // above comes from the tarball on the last of the continued lines.
+      expect(scriptsSwitchedOff([...publish, `public${quote}`].join('\n'), null)).toEqual([]);
+    }
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('writes the line and paragraph separators YAML escapes stand for as escapes, not as the characters', () => {
+    expect(yamlUnescaped('\\L\\P')).toBe(String.fromCharCode(0x2028, 0x2029));
+    expect(readFileSync(__filename, 'utf8')).not.toMatch(/[\u{2028}\u{2029}]/u);
   });
 
   it('reads the lines YAML folds as the one line the shell gets', () => {
