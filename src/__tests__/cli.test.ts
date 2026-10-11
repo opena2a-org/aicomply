@@ -166,6 +166,41 @@ describe('aicomply CLI', () => {
     expect(cap.out.join('')).toContain('CLEAN');
   });
 
+  // CLEAN states what the layers that ran found. It is also the verdict for an
+  // input the README lists as not detected, so it must never read as a
+  // statement that the content is safe.
+  it('words a CLEAN verdict as what was checked', async () => {
+    const f = fixture('clean-verdict.txt', 'The weather is nice today.');
+    const cap = capture();
+    const code = await run(['scan', f]);
+    cap.restore();
+    expect(code).toBe(0);
+    expect(cap.out.join('').trimEnd().split('\n').pop()).toBe(
+      'Verdict: CLEAN  ·  no findings from the layers that ran.',
+    );
+  });
+
+  it('does not call an SSN split by a soft hyphen safe', async () => {
+    const f = fixture('soft-hyphen.txt', 'SSN 12­3-45-6789\n');
+    const cap = capture();
+    await run(['scan', f]);
+    cap.restore();
+    const verdictLine = cap.out.join('').trimEnd().split('\n').pop() ?? '';
+    expect(verdictLine.startsWith('Verdict: ')).toBe(true);
+    expect(verdictLine).not.toMatch(/safe/i);
+  });
+
+  it('--help and scan --help describe exit code 0 as what was checked', async () => {
+    for (const argv of [['--help'], ['scan', '--help']]) {
+      const cap = capture();
+      await run(argv);
+      cap.restore();
+      const out = cap.out.join('');
+      expect(out).toContain('  0  CLEAN          no findings from the layers that ran\n');
+      expect(out).not.toMatch(/\bsafe\b/i);
+    }
+  });
+
   it('PII content exits 1 and masks the value (never prints the full secret)', async () => {
     const f = fixture('pii.txt', 'My SSN is 123-45-6789 please update.');
     const cap = capture();
