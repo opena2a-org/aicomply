@@ -12,8 +12,8 @@
  *   - Empty content and an empty source package name still get the lookup
  *   - comply() without registry options => no L2 signals
  *   - ClassificationSession.comply() uses session cache when caller omits registryCache
- *   - ClassificationSession.comply() respects caller-supplied registryCache override,
- *     on either argument
+ *   - ClassificationSession.comply() respects caller-supplied registryCache override
+ *     on the first argument, and uses the session cache in place of one on the second
  *   - ClassificationSession.comply() reads a content getter or an inherited content
  *   - comply() rejects binary data, a boxed primitive and a promise as the first argument
  *   - warmRegistryCache() returns a warmed RegistryIntelligenceCache
@@ -662,21 +662,69 @@ describe('ClassificationSession', () => {
     }
   });
 
-  it('comply() uses a registryCache passed on the second argument in place of the session cache', async () => {
+  it('comply() uses the session cache in place of a registryCache passed on the second argument', async () => {
+    // The caches passed on the second argument are made first, so each keeps
+    // its own lookup mock: spied on after the prototype, an instance would
+    // get the prototype's mock back, and its return value would be the
+    // session cache's as well.
+    const missCache = makeCache({ status: 'miss' });
+    const hitCache = makeCache({
+      status: 'hit',
+      intelligence: {
+        packageName: 'agent-z',
+        fleetAnomalySignal: null,
+        supplyChainAlerts: [],
+        fetchedAt: Date.now(),
+      },
+    });
     jest
       .spyOn(RegistryIntelligenceCache.prototype, 'warm')
       .mockResolvedValue(undefined);
+    const sessionLookup = jest.spyOn(RegistryIntelligenceCache.prototype, 'lookup');
     const session = await ClassificationSession.create();
-    const callerCache = new RegistryIntelligenceCache();
-    const callerLookup = jest.spyOn(callerCache, 'lookup').mockReturnValue({ status: 'miss' });
 
-    const result = await session.comply(
+    // The session cache has a supply-chain alert for the package; the cache
+    // on the second argument has no data for it and is not consulted.
+    sessionLookup.mockReturnValue({
+      status: 'hit',
+      intelligence: {
+        packageName: 'agent-z',
+        fleetAnomalySignal: null,
+        supplyChainAlerts: [{
+          id: 'sca-session',
+          name: 'agent-z',
+          type: 'library',
+          severity: 'critical',
+          reason: 'Session cache alert',
+          publishedAt: '2026-04-14T00:00:00Z',
+        }],
+        fetchedAt: Date.now(),
+      },
+    });
+    const blocked = await session.comply(
       { content: SAFE_CONTENT, sourcePackage: 'agent-z' },
-      { useGuard: false, registryCache: callerCache },
+      { useGuard: false, registryCache: missCache },
     );
 
-    expect(callerLookup).toHaveBeenCalledWith('agent-z');
-    expect(result.registrySignals?.status).toBe('miss');
+    expect(blocked.verdict).toBe('DENY');
+    expect(blocked.violations.map(v => v.type)).toEqual(['SUPPLY_CHAIN_ALERT']);
+    expect(blocked.registrySignals?.status).toBe('hit');
+    expect(missCache.lookup).not.toHaveBeenCalled();
+
+    // The session cache has no data for the package, so onRegistryUnknown
+    // decides the verdict, whatever the cache on the second argument holds.
+    sessionLookup.mockReturnValue({ status: 'miss' });
+    const unknown = await session.comply(
+      { content: SAFE_CONTENT, sourcePackage: 'agent-z' },
+      { useGuard: false, onRegistryUnknown: 'deny', registryCache: hitCache },
+    );
+
+    expect(unknown.verdict).toBe('DENY');
+    expect(unknown.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN']);
+    expect(unknown.registrySignals?.status).toBe('miss');
+    expect(hitCache.lookup).not.toHaveBeenCalled();
+    expect(sessionLookup).toHaveBeenCalledTimes(2);
+    expect(sessionLookup).toHaveBeenCalledWith('agent-z');
   });
 
   it('refreshCache() calls refreshIfStale() on the session cache', async () => {
