@@ -44,9 +44,10 @@ from aicomply import comply
 
 result = comply("Customer SSN is 516-81-3086, card 5544939082323438.")
 
-print(result.verdict)                       # "VIOLATION"
+print(result.verdict)                       # VIOLATION
 for v in result.violations:
-    print(v.type, v.value, v.confidence)     # SSN 516...86 0.95  (value is masked)
+    print(v.type, v.value, v.confidence)    # SSN 516-...86 0.95
+                                            # PAN 5544...38 0.9
 ```
 
 `comply()` returns a `ComplyResult` with:
