@@ -56,7 +56,7 @@ describe('dual-layer with ARP verification', () => {
     expect(result.classifierResults.guard?.violations[0].type).toBe('file-write');
   });
 
-  it('returns DENY on invalid signature (parse-to-deny)', async () => {
+  it('returns DENY on invalid signature (parse-to-deny, CR-001)', async () => {
     const content = 'This is safe text.';
     const otherKeys = generateTestKeyPair();
     // Sign with one key pair, verify with another

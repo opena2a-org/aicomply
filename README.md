@@ -249,7 +249,7 @@ const result = await session.comply({
 });
 ```
 
-The cache warms once on `create()`. Subsequent `comply()` calls make no Registry request (contract AC-005 in [SECURITY.md](./SECURITY.md)). Each call still makes the Guard request described in [What the Guard attempt sends](#what-the-guard-attempt-sends) unless you pass `useGuard: false`.
+The cache warms once on `create()`. Subsequent `comply()` calls make no Registry request (contract AC-005 in [SECURITY.md](./SECURITY.md)). `session.comply()` takes the arguments `comply()` takes, a bare string included: `session.comply('text')`. Each call still makes the Guard request described in [What the Guard attempt sends](#what-the-guard-attempt-sends) unless you pass `useGuard: false`.
 
 `result.registrySignals.status` says what the Registry had for the package: `hit`, `miss` (not in the index) or `error` (the index did not load, for example because the Registry was unreachable). A `miss` or an `error` leaves the verdict as the classifiers set it. To fail closed, pass `onRegistryUnknown`:
 
@@ -261,7 +261,7 @@ const result = await session.comply({
 });
 ```
 
-Either value appends a `REGISTRY_UNKNOWN` violation (contract AC-002). The lookup runs for empty content as well, and an empty `sourcePackage` counts as an `error`.
+Either value appends a `REGISTRY_UNKNOWN` violation (contract AC-002). The lookup runs for empty content as well, and a policy pack is applied to what it finds; an empty `sourcePackage` counts as an `error`.
 
 ## Verdict semantics
 

@@ -68,7 +68,7 @@ export { PACK_VERSION, PACK_SHA256 } from './classifier/regex/pack';
 
 import {
   classifyDualLayer,
-  applyRegistry,
+  applyRegistryAndPolicy,
   assertGuardOptions,
   assertRegistryUnknownAction,
   assertSourcePackage,
@@ -112,7 +112,8 @@ export type { DualLayerOptions } from './classifier/dual-layer';
  * reached, does not change the verdict by default: `registrySignals.status`
  * reports 'miss' or 'error' (AC-002). Set `onRegistryUnknown` to 'violation'
  * or 'deny' to have either one decide the verdict. The Registry step runs for
- * empty content too, and an empty `sourcePackage` counts as a lookup error.
+ * empty content too, followed by the policy pack, and an empty `sourcePackage`
+ * counts as a lookup error.
  *
  * The Guard layer calls the nanomind daemon at `http://127.0.0.1:47200` unless
  * `options.guardOptions.baseUrl` names another address.
@@ -127,18 +128,7 @@ export async function comply(
   options: ComplyOptions | string,
   dualLayerOptions?: DualLayerOptions,
 ): Promise<ComplyResult> {
-  // Convenience overload: a bare string is treated as { content: <string> } so
-  // `comply('text')` works without wrapping. Anything that is neither a string
-  // nor an options object is a caller mistake; name the expected shape rather
-  // than the unhelpful "options must be an object".
-  const opts: ComplyOptions =
-    typeof options === 'string' ? { content: options } : (options as ComplyOptions);
-  if (!isPlainObject(opts)) {
-    const got = describeValue(opts);
-    throw new TypeError(
-      `comply: expected a string or an options object like comply({ content: '...' }), got ${got}`,
-    );
-  }
+  const opts = toComplyOptions(options);
   // Reject non-string content explicitly so consumers can't silently bypass
   // classification by passing a number, object, or array as content. Empty
   // string and missing content are allowed: they skip classification, still
@@ -164,15 +154,31 @@ export async function comply(
   assertSourcePackage(dualLayerOptions?.sourcePackage);
   assertGuardOptions(opts.guardOptions, 'comply: options.guardOptions');
   assertGuardOptions(dualLayerOptions?.guardOptions, 'comply: dualLayerOptions.guardOptions');
+
+  // Merged once, ahead of the empty-content return, so both paths below act
+  // on the same options.
+  const mergedOptions: DualLayerOptions = {
+    ...dualLayerOptions,
+    ...(opts.sourcePackage !== undefined && { sourcePackage: opts.sourcePackage }),
+    ...(opts.registryCache !== undefined && { registryCache: opts.registryCache }),
+    ...(opts.policyPack !== undefined && { policyPack: loadPolicyPack(opts.policyPack) }),
+    ...(opts.riskContext !== undefined && { riskContext: opts.riskContext }),
+    ...(opts.useGuard !== undefined && { useGuard: opts.useGuard }),
+    ...(opts.onRegistryUnknown !== undefined && { onRegistryUnknown: opts.onRegistryUnknown }),
+    ...(opts.guardOptions !== undefined && { guardOptions: opts.guardOptions }),
+  };
+
   if (!opts.content) {
     // Empty / missing content: nothing to classify, but the Registry lookup
-    // depends on the source, not the content, so it still runs. A caller who
-    // set onRegistryUnknown to fail closed is not let through on empty input.
+    // depends on the source, not the content, so it still runs, and the policy
+    // pack then sees whatever violation that lookup added. A caller who set
+    // onRegistryUnknown to fail closed, or a policy rule on a Registry
+    // finding, is not let through on empty input.
     // Populate the audit fields so consumers can rely on `originalContent` /
     // `normalizedContent` / `normalizations` being present in the result type
     // (per types.ts ComplyResult contract); a DENY drops the two content
     // fields, as classifyDualLayer() does for every DENY.
-    const result = applyRegistry(
+    const result = applyRegistryAndPolicy(
       {
         verdict: 'CLEAN',
         violations: [],
@@ -185,13 +191,7 @@ export async function comply(
         pack: packIdentity(),
         layers: [],
       },
-      {
-        ...dualLayerOptions,
-        ...(opts.sourcePackage !== undefined && { sourcePackage: opts.sourcePackage }),
-        ...(opts.registryCache !== undefined && { registryCache: opts.registryCache }),
-        ...(opts.riskContext !== undefined && { riskContext: opts.riskContext }),
-        ...(opts.onRegistryUnknown !== undefined && { onRegistryUnknown: opts.onRegistryUnknown }),
-      },
+      mergedOptions,
     );
     if (result.verdict === 'DENY') {
       delete result.originalContent;
@@ -200,18 +200,25 @@ export async function comply(
     return result;
   }
 
-  const mergedOptions: DualLayerOptions = {
-    ...dualLayerOptions,
-    ...(opts.sourcePackage !== undefined && { sourcePackage: opts.sourcePackage }),
-    ...(opts.registryCache !== undefined && { registryCache: opts.registryCache }),
-    ...(opts.policyPack !== undefined && { policyPack: loadPolicyPack(opts.policyPack) }),
-    ...(opts.riskContext !== undefined && { riskContext: opts.riskContext }),
-    ...(opts.useGuard !== undefined && { useGuard: opts.useGuard }),
-    ...(opts.onRegistryUnknown !== undefined && { onRegistryUnknown: opts.onRegistryUnknown }),
-    ...(opts.guardOptions !== undefined && { guardOptions: opts.guardOptions }),
-  };
-
   return classifyDualLayer(opts.content, mergedOptions);
+}
+
+/**
+ * The options object of a comply() call. A bare string is treated as
+ * { content: <string> } so `comply('text')` works without wrapping. Anything
+ * that is neither a string nor an options object is a caller mistake; name
+ * the expected shape rather than the unhelpful "options must be an object".
+ */
+function toComplyOptions(options: ComplyOptions | string): ComplyOptions {
+  const opts: ComplyOptions =
+    typeof options === 'string' ? { content: options } : (options as ComplyOptions);
+  if (!isPlainObject(opts)) {
+    const got = describeValue(opts);
+    throw new TypeError(
+      `comply: expected a string or an options object like comply({ content: '...' }), got ${got}`,
+    );
+  }
+  return opts;
 }
 
 function isPlainObject(value: unknown): value is object {
@@ -289,18 +296,24 @@ export class ClassificationSession {
    * is provided. Uses the session's warmed cache - no Registry network I/O in
    * the hot path. The Guard attempt still runs unless `useGuard: false` is set.
    * Guard daemon settings passed on this call take precedence over the session's.
+   * As with the comply() function, `options` is an options object or a bare
+   * string to classify, and anything else is rejected with a TypeError.
    */
   async comply(
-    options: ComplyOptions,
+    options: ComplyOptions | string,
     dualLayerOptions?: DualLayerOptions,
   ): Promise<ComplyResult> {
-    // Checked before the value is copied onto `options` below, so the error
+    // Resolved before the spread below: spread as it is, a string becomes an
+    // object of its characters with no `content`, and the call would return
+    // CLEAN without classifying anything.
+    const opts = toComplyOptions(options);
+    // Checked before the value is copied onto `opts` below, so the error
     // names the parameter the caller passed it on.
     assertGuardOptions(dualLayerOptions?.guardOptions, 'comply: dualLayerOptions.guardOptions');
-    const guardOptions = options.guardOptions ?? dualLayerOptions?.guardOptions ?? this.guardOptions;
+    const guardOptions = opts.guardOptions ?? dualLayerOptions?.guardOptions ?? this.guardOptions;
     const optionsWithCache: ComplyOptions = {
-      ...options,
-      registryCache: options.registryCache ?? this.cache,
+      ...opts,
+      registryCache: opts.registryCache ?? this.cache,
       ...(guardOptions !== undefined && { guardOptions }),
     };
     return comply(optionsWithCache, dualLayerOptions);

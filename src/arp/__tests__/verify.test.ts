@@ -27,7 +27,7 @@ beforeAll(() => {
 describe('verifyClassification', () => {
   // --- Happy path ---
 
-  it('accepts a valid hybrid-signed classification', async () => {
+  it('accepts a valid hybrid-signed classification (D7: ML-DSA-44 half signed with @noble/post-quantum)', async () => {
     const result = signGuardResult(keys, 'documentation', 'hello world');
     const options = makeVerifyOptions(keys);
     const out = await verifyClassification(result, options);
@@ -70,7 +70,7 @@ describe('verifyClassification', () => {
 
   // --- Parse-to-deny: mismatched keys ---
 
-  it('rejects signature from a different key pair', async () => {
+  it('rejects signature from a different key pair (CR-001: valid is false)', async () => {
     const otherKeys = generateTestKeyPair();
     const result = signGuardResult(otherKeys, 'documentation', 'test');
     // Verify with original keys - should fail

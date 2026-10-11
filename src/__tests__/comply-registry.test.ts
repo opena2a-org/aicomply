@@ -575,6 +575,64 @@ describe('ClassificationSession', () => {
     expect(result.registrySignals?.supplyChainBlock).toBe(true);
   });
 
+  it('comply() classifies a bare string, as the comply() function does', async () => {
+    jest
+      .spyOn(RegistryIntelligenceCache.prototype, 'warm')
+      .mockResolvedValue(undefined);
+    const session = await ClassificationSession.create();
+
+    const bare = await session.comply('My SSN is 123-45-6789.', { useGuard: false });
+    const wrapped = await session.comply({ content: 'My SSN is 123-45-6789.', useGuard: false });
+
+    expect(bare.verdict).toBe('VIOLATION');
+    expect(bare.violations.map(v => v.type)).toEqual(['SSN']);
+    expect(bare.originalContent).toBe('My SSN is 123-45-6789.');
+    expect(bare).toEqual(wrapped);
+  });
+
+  it('comply() looks a bare string up in the session cache', async () => {
+    jest
+      .spyOn(RegistryIntelligenceCache.prototype, 'warm')
+      .mockResolvedValue(undefined);
+    const mockLookup = jest
+      .spyOn(RegistryIntelligenceCache.prototype, 'lookup')
+      .mockReturnValue({ status: 'miss' });
+    const session = await ClassificationSession.create();
+
+    const result = await session.comply(SAFE_CONTENT, {
+      useGuard: false,
+      sourcePackage: 'session-agent',
+      onRegistryUnknown: 'deny',
+    });
+
+    expect(mockLookup).toHaveBeenCalledWith('session-agent');
+    expect(result.verdict).toBe('DENY');
+    expect(result.registrySignals?.status).toBe('miss');
+  });
+
+  it('comply() rejects options that are neither a string nor an options object', async () => {
+    jest
+      .spyOn(RegistryIntelligenceCache.prototype, 'warm')
+      .mockResolvedValue(undefined);
+    const session = await ClassificationSession.create();
+
+    // Spread into an options object, each of these would lose its content and
+    // come back CLEAN without anything having been classified.
+    const cases: Array<[unknown, string]> = [
+      [123, 'number'],
+      [['My SSN is 123-45-6789.'], 'array'],
+      [null, 'null'],
+      [undefined, 'undefined'],
+    ];
+    for (const [bad, got] of cases) {
+      const call = session.comply(bad as unknown as ComplyOptions, { useGuard: false });
+      await expect(call).rejects.toThrow(TypeError);
+      await expect(call).rejects.toThrow(
+        `comply: expected a string or an options object like comply({ content: '...' }), got ${got}`,
+      );
+    }
+  });
+
   it('refreshCache() calls refreshIfStale() on the session cache', async () => {
     jest
       .spyOn(RegistryIntelligenceCache.prototype, 'warm')

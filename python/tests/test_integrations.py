@@ -291,6 +291,32 @@ def test_langchain_handler_redacts_a_finding_split_across_text_blocks():
     assert returned == ["The customer SSN is [REDACTED]", {"type": "text", "text": "."}]
 
 
+@pytest.mark.parametrize("error", [AttributeError, TypeError, ValueError])
+def test_langchain_handler_redact_raises_when_the_message_rejects_assignment(error):
+    # Masking a chat completion is an assignment to the message's content. A
+    # message that refuses it would reach the caller with the finding unmasked.
+    pytest.importorskip("langchain_core")
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage
+
+    from aicomply.integrations.langchain import AIComplyCallbackHandler
+
+    class ReadOnlyContentMessage(AIMessage):
+        def __setattr__(self, name, value):
+            if name == "content":
+                raise error("content is read-only")
+            super().__setattr__(name, value)
+
+    message = ReadOnlyContentMessage(content=_SSN_COMPLETION)
+    handler = AIComplyCallbackHandler(on_violation="redact", use_guard=False)
+    llm = GenericFakeChatModel(messages=iter([message]), callbacks=[handler])
+
+    with pytest.raises(ComplianceViolation, match="SSN"):
+        llm.invoke("Summarize this support ticket")
+
+    assert message.content == _SSN_COMPLETION
+
+
 def _streaming_fake_langchain_model(kind: str, response: str, **handler_options):
     """A LangChain fake chat or completion model whose ``stream()`` yields chunks."""
     pytest.importorskip("langchain_core")
