@@ -288,7 +288,9 @@ function addRuleProblems(rule: unknown, index: number, redactSkipped: boolean, p
     return;
   }
   const { id, action, patterns } = rule as Record<string, unknown>;
-  const label = (): string => (typeof id === 'string' && id !== '' ? showString(id) : String(index));
+  // The id is quoted, so an id such as `x; Rule 9: missing id` cannot read as
+  // the end of one problem and the start of another.
+  const label = (): string => (typeof id === 'string' && id !== '' ? showString(id, "'") : String(index));
   const readsRule = !(redactSkipped && action === 'REDACT');
   if (readsRule && id === undefined) {
     problems.add(() => `Rule ${index}: missing id`);
