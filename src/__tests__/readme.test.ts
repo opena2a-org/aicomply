@@ -4,12 +4,14 @@
  * badges, the try-it section ahead of every other section with its scan output
  * fence opening by line 28, and a sample output that is what the CLI actually
  * prints for the documented input. LICENSE, which the license badge vouches
- * for, is pinned to the canonical Apache-2.0 text.
+ * for, is pinned to the canonical Apache-2.0 text. Every `nanomind-daemon`
+ * command the READMEs show names a subcommand the installed daemon lists.
  */
 
+import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { comply } from '../index';
 import { renderHuman } from '../cli';
 
@@ -109,5 +111,57 @@ describe('README', () => {
 
     const printed = chunks.join('').replace(/^\n+/, '').replace(/\n+$/, '');
     expect(output).toBe(printed);
+  });
+});
+
+/**
+ * The subcommands the installed `nanomind-daemon` lists in its usage text.
+ * With no subcommand the CLI prints that usage and exits 0 without starting
+ * anything, so a documented bare invocation leaves nothing listening.
+ */
+function daemonSubcommands(): string[] {
+  const pkgPath = require.resolve('@nanomind/daemon/package.json');
+  const bin = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { bin: Record<string, string> }).bin[
+    'nanomind-daemon'
+  ];
+  const run = spawnSync(process.execPath, [join(dirname(pkgPath), bin), 'help'], {
+    encoding: 'utf8',
+  });
+  expect(run.status).toBe(0);
+  return [...run.stdout.matchAll(/^\s+nanomind-daemon (\w+)/gm)].map((m) => m[1]);
+}
+
+/**
+ * Every `nanomind-daemon` command a README shows, with the token after it.
+ * Line breaks are folded first, so a command wrapped across two lines of prose
+ * still reads as one command. Prose mentions of the daemon by name are not
+ * commands and are not matched.
+ */
+function daemonInvocations(file: string): { text: string; arg: string | undefined }[] {
+  const text = readFileSync(join(ROOT, file), 'utf8').replace(/\s+/g, ' ');
+  return [...text.matchAll(/(?:^|`|&& |npx )nanomind-daemon(?: ([^\s`&|;]+))?/g)].map((m) => ({
+    text: m[0].replace(/^`/, ''),
+    arg: m[1],
+  }));
+}
+
+describe('README nanomind-daemon commands', () => {
+  const FILES = ['README.md', join('python', 'README.md')];
+
+  it.each(FILES)('%s names a daemon subcommand in every nanomind-daemon command', (file) => {
+    const subcommands = daemonSubcommands();
+    expect(subcommands).toContain('start');
+    const invocations = daemonInvocations(file);
+    expect(invocations.length).toBeGreaterThan(0);
+    const withoutSubcommand = invocations
+      .filter(({ arg }) => arg === undefined || !subcommands.includes(arg))
+      .map(({ text }) => text);
+    expect(withoutSubcommand).toEqual([]);
+  });
+
+  it('starts the daemon in the command it says listens on the Guard address', () => {
+    const line = lineOf(/nanomind-daemon.*# listens on http:\/\/127\.0\.0\.1:47200/);
+    expect(line).toBeGreaterThan(0);
+    expect(LINES[line - 1]).toMatch(/\bnanomind-daemon start\b/);
   });
 });

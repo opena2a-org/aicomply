@@ -132,7 +132,7 @@ The Guard is opt-in via `@nanomind/daemon`. Install and run it alongside aicompl
 
 ```bash
 npm install @nanomind/daemon
-npx nanomind-daemon &   # listens on http://127.0.0.1:47200
+npx nanomind-daemon start &   # listens on http://127.0.0.1:47200
 ```
 
 aicomply auto-detects the daemon on the default URL. Pass `baseUrl` to `classifyWithNanoMindDaemon()` to reach a daemon elsewhere. The `MOCK_NANOMIND_URL` and `MOCK_GUARD_SOCKET` overrides are for tests and local development: they are honoured only when `NODE_ENV` is `test` or `development` and ignored otherwise, including when `NODE_ENV` is unset. No code change required in the consumer: as long as the daemon is reachable, `comply()` returns `classifierResults.guard` populated alongside the regex result.
