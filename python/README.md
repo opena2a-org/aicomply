@@ -51,11 +51,15 @@ for v in result.violations:
 
 `comply()` returns a `ComplyResult` with:
 
-- `verdict` — `"CLEAN"`, `"VIOLATION"`, or `"DENY"`
+- `verdict` — `"CLEAN"` or `"VIOLATION"`. `"DENY"` is reserved: the `Verdict`
+  type names it to match the TypeScript package, where policy packs, the Registry
+  supply-chain block, and signature verification return it, but none of those is
+  ported yet (see Scope below), so this package never returns it
 - `violations` — each with `type`, masked `value`, `confidence`, `classifier`,
   `view` (which content view caught it), and best-effort `original_start/end`
-- `original_content` / `normalized_content` / `normalizations` — an audit trail
-  (omitted on `DENY`, where the input is treated as untrusted bytes)
+- `original_content` / `normalized_content` / `normalizations` — an audit trail,
+  always set today; once `DENY` is returned, the two content fields will be left
+  unset on it, since the input is then treated as untrusted bytes
 - `layers`: the layers that ran, in order, `["normalize", "regex"]` plus
   `"guard"` only when the Guard daemon answered; `[]` for empty content
 - `pack`: `PackIdentity(version, sha256)`, the pattern pack the regex layer ran
