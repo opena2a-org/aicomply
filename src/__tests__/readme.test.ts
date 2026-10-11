@@ -97,7 +97,7 @@ function validatePolicyConfigExamples(): { call: string; pack: unknown; shown: u
 
 /** The value of a JavaScript literal as the README writes it. */
 function literal(source: string): unknown {
-  return new Function(`return (${source});`)();
+  return compileFunction(`return (${source});`)();
 }
 
 describe('README', () => {
