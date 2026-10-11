@@ -30,8 +30,10 @@ minor ships, and the latest major line indefinitely. Pre-1.0 lines (`0.x`)
 are no longer supported as of `1.0.0`. In production, pin the exact version
 you tested (no caret) and consume fixes by bumping it.
 
-Breaking changes are announced via the `0.x` -> `1.0.0` transition note in
-the release and re-stated in CHANGELOG entries when subsequent majors arrive.
+Breaking changes are announced in the release notes of the major that
+introduces them, starting with the `0.x` -> `1.0.0` transition note. Each
+later major, such as `2.0.0`, lists its breaking changes in its own release
+notes on the [releases page](https://github.com/opena2a-org/aicomply/releases).
 
 ## What this package is and isn't
 

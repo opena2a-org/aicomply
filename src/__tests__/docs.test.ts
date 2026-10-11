@@ -6,15 +6,19 @@
  * model has not shipped or that `comply()` is always regex-only is rejected.
  * A release named as the target of work still to come must be one the
  * package version has not yet reached.
+ * The tracked Markdown also points readers only at a change record the
+ * repository has: a CHANGELOG mention needs a tracked CHANGELOG file.
  */
 
 import { execFileSync } from 'child_process';
 import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
-import { dirname, join } from 'path';
+import { basename, dirname, join } from 'path';
 
 const ROOT = join(__dirname, '..', '..');
 const WHY_THIS_EXISTS = /\bwhy\s+this\s+exists\b/gi;
+const CHANGELOG = /\bchangelog\b/gi;
+const RELEASES = 'https://github.com/opena2a-org/aicomply/releases';
 
 /**
  * Claims that the Guard model has not shipped or that `comply()` is always
@@ -133,6 +137,16 @@ function unsupportedPins(file: string, text: string, current: string): string[] 
     .map((m) => `${file}:${text.slice(0, m.index).split('\n').length} (${m[1]})`);
 }
 
+/**
+ * `file:line` for each CHANGELOG mention in `docs` (file name to text) when
+ * `tracked` holds no CHANGELOG file, so a reader is never sent to a file
+ * the repository and the published package do not carry.
+ */
+function changelogWithoutFile(tracked: string[], docs: Record<string, string>): string[] {
+  if (tracked.some((file) => /^changelog(\.md)?$/i.test(basename(file)))) return [];
+  return Object.entries(docs).flatMap(([file, text]) => occurrences(CHANGELOG, file, text));
+}
+
 describe('docs', () => {
   it('carries no "why this exists" heading or phrase in tracked Markdown', () => {
     const files = trackedMarkdown();
@@ -141,6 +155,22 @@ describe('docs', () => {
       whyThisExists(file, readFileSync(join(ROOT, file), 'utf8')),
     );
     expect(offenders).toEqual([]);
+  });
+
+  it('mentions a CHANGELOG only when the repository tracks one, and SECURITY.md names the release notes', () => {
+    const files = trackedMarkdown();
+    const docs = Object.fromEntries(
+      files.map((file) => [file, readFileSync(join(ROOT, file), 'utf8')]),
+    );
+    expect(changelogWithoutFile(files, docs)).toEqual([]);
+    expect(docs['SECURITY.md']).toContain(RELEASES);
+  });
+
+  it('flags a CHANGELOG mention only when no CHANGELOG file is tracked', () => {
+    const docs = { 'SECURITY.md': 'Notes.\n\nSee the CHANGELOG entries.\n' };
+    expect(changelogWithoutFile(['SECURITY.md'], docs)).toEqual(['SECURITY.md:3']);
+    expect(changelogWithoutFile(['SECURITY.md', 'CHANGELOG.md'], docs)).toEqual([]);
+    expect(changelogWithoutFile(['SECURITY.md'], { 'SECURITY.md': 'See the release notes.\n' })).toEqual([]);
   });
 
   it('flags the phrase as a heading, in any case and across a line wrap', () => {
