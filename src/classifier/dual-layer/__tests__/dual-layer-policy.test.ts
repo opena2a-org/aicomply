@@ -14,6 +14,7 @@
 import { classifyDualLayer } from '..';
 import { comply, loadPolicyPack, validatePolicyConfig } from '../../..';
 import { policyStepProblems } from '../../../policy';
+import { showString } from '../../../show-string';
 import type { RegistryIntelligenceCache } from '../../../registry';
 import type { ComplyOptions, PolicyPack } from '../../../types';
 
@@ -331,8 +332,8 @@ describe('policy pack validation', () => {
     ['an empty object', {}, 'Policy pack rules must be an array (got undefined)'],
     ['null', null, 'Policy pack must be an object (got null)'],
     ['a pack name', 'default', 'Policy pack must be an object (got string)'],
-    ['a lower-case action', withRule({ action: 'deny' }), "Rule block-ssn: invalid action 'deny'"],
-    ['patterns that are not an array', withRule({ patterns: 'SSN' }), 'Rule block-ssn: patterns must be an array of strings'],
+    ['a lower-case action', withRule({ action: 'deny' }), "Rule 'block-ssn': invalid action 'deny'"],
+    ['patterns that are not an array', withRule({ patterns: 'SSN' }), "Rule 'block-ssn': patterns must be an array of strings"],
     ['a rule with no id', withRule({ id: undefined }), 'Rule 0: missing id'],
     ['a rule with an empty id', withRule({ id: '' }), "Rule 0: id must be a non-empty string (got '')"],
   ])('rejects %s on the second argument of comply()', async (_label, policyPack, problem) => {
@@ -348,7 +349,7 @@ describe('policy pack validation', () => {
   it('names the option when classifyDualLayer() is given a pack it cannot apply', async () => {
     const call = classifyDualLayer(SSN_CONTENT, { policyPack: withRule({ action: 'deny' }) });
     await expect(call).rejects.toThrow(
-      "classifyDualLayer: options.policyPack is not a valid policy pack: Rule block-ssn: invalid action 'deny'",
+      "classifyDualLayer: options.policyPack is not a valid policy pack: Rule 'block-ssn': invalid action 'deny'",
     );
   });
 
@@ -496,6 +497,31 @@ describe('policy pack validation', () => {
     }
   });
 
+  it('reads a rules array behind a Proxy slot by slot, so a run of empty slots ends at an element only `get` supplies', () => {
+    const rule = { id: 'r', action: 'DENY', patterns: ['SSN'] };
+    // The Proxy holds no index key; `get` supplies the length and element 1.
+    const rules = new Proxy([], {
+      get: (target, key) => (key === 'length' ? 4 : key === '1' ? rule : Reflect.get(target, key)),
+    });
+
+    expect(validatePolicyConfig({ name: 'p', version: '1', rules })).toEqual([
+      'Rule 0: must be an object (got undefined)',
+      'Rules 2 to 3: must be objects (got undefined)',
+    ]);
+  });
+
+  it('ends a run of empty slots only at an index key, not at a prototype key that reads as a number', () => {
+    const rules: unknown[] = [];
+    rules.length = 4;
+    rules[0] = DENY_PACK.rules[0];
+    // Element 2 is read at the key '2', never at '02', '2e0' or '-0'.
+    Object.setPrototypeOf(rules, Object.assign(Object.create(Array.prototype), { '02': 'x', '2e0': 'x', '-0': 'x' }));
+
+    expect(validatePolicyConfig({ name: 'p', version: '1', rules })).toEqual([
+      'Rules 1 to 3: must be objects (got undefined)',
+    ]);
+  });
+
   it('rejects an empty slot in patterns at once, which every() and the policy step pass over one by one', async () => {
     // A rule whose patterns is [] with a length of 50 million passed in about
     // half a second and made each comply() call take more than a second.
@@ -504,7 +530,7 @@ describe('policy pack validation', () => {
     const sparse: string[] = ['SSN'];
     sparse[2] = 'PAN';
     const problem = (index: number): string =>
-      `Rule block-ssn: patterns must be an array of strings (got an empty slot at index ${index})`;
+      `Rule 'block-ssn': patterns must be an array of strings (got an empty slot at index ${index})`;
 
     for (const [rulePatterns, index] of [[sparse, 1], [patterns, 0]] as const) {
       const policyPack = withRule({ patterns: rulePatterns });
@@ -517,7 +543,7 @@ describe('policy pack validation', () => {
     }
     // An element set to undefined is not a string either.
     expect(validatePolicyConfig(withRule({ patterns: ['SSN', undefined] }))).toEqual([
-      'Rule block-ssn: patterns must be an array of strings',
+      "Rule 'block-ssn': patterns must be an array of strings",
     ]);
   });
 
@@ -602,7 +628,7 @@ describe('policy pack validation', () => {
         'comply: dualLayerOptions.policyPack is not a valid policy pack: ' +
           'Rule 0: must be an object (got string); Rule 1: missing id; ' +
           'Rule 1: patterns must be an array of strings; ' +
-          "Rule r: invalid action 'deny', expected one of DENY, REDACT, WARN",
+          "Rule 'r': invalid action 'deny', expected one of DENY, REDACT, WARN",
       ),
     );
   });
@@ -662,7 +688,7 @@ describe('policy pack validation', () => {
 
   it('cuts a long id, action or pack name short and escapes its control characters, so the message stays short', async () => {
     const long = 'i'.repeat(5000000);
-    const shown = `${'i'.repeat(64)}... (length 5000000)`;
+    const shown = `'${'i'.repeat(64)}...' (length 5000000)`;
     const invalid = (rules: unknown[]): Promise<unknown> =>
       comply({ content: 'x', useGuard: false }, { policyPack: { rules } as unknown as PolicyPack });
     const prefix = 'comply: dualLayerOptions.policyPack is not a valid policy pack: ';
@@ -672,7 +698,7 @@ describe('policy pack validation', () => {
     );
     await expect(invalid([{ id: 'a\nb', action: `no '${long}`, patterns: [] }])).rejects.toThrow(
       new TypeError(
-        `${prefix}Rule a\\nb: invalid action 'no\\u2028\\'${'i'.repeat(60)}...' (length 5000004), ` +
+        `${prefix}Rule 'a\\nb': invalid action 'no\\u2028\\'${'i'.repeat(60)}...' (length 5000004), ` +
           'expected one of DENY, REDACT, WARN',
       ),
     );
@@ -695,6 +721,24 @@ describe('policy pack validation', () => {
     );
     expect(() => loadPolicyPack('a"b\\c\n')).toThrow(
       new TypeError('loadPolicyPack: unknown policy pack "a\\"b\\\\c\\n"; the built-in packs are \'default\''),
+    );
+  });
+
+  it('cuts a long value before a surrogate pair rather than inside it', () => {
+    const shown = showString(`${'x'.repeat(63)}\u{1F600}tail`);
+
+    expect(shown).toBe(`${'x'.repeat(63)}... (length 69)`);
+    expect(shown).not.toMatch(/[\ud800-\udbff]/);
+  });
+
+  it('quotes a rule id, so an id cannot read as the end of one problem and the start of another', async () => {
+    const rules = [{ id: "x; Rule 9: it's", action: 'nope', patterns: [] }];
+    const policyPack = { name: 'p', version: '1', rules } as unknown as PolicyPack;
+    const problem = "Rule 'x; Rule 9: it\\'s': invalid action 'nope', expected one of DENY, REDACT, WARN";
+
+    expect(validatePolicyConfig(policyPack)).toEqual([problem]);
+    await expect(comply({ content: 'x', useGuard: false }, { policyPack })).rejects.toThrow(
+      new TypeError(`comply: dualLayerOptions.policyPack is not a valid policy pack: ${problem}`),
     );
   });
 
@@ -731,8 +775,8 @@ describe('loadPolicyPack() and validatePolicyConfig()', () => {
     ]);
     expect(validatePolicyConfig({ name: 'p', version: '1', rules: ['r', { id: 'x', patterns: [1] }] })).toEqual([
       'Rule 0: must be an object (got string)',
-      'Rule x: missing action',
-      'Rule x: patterns must be an array of strings',
+      "Rule 'x': missing action",
+      "Rule 'x': patterns must be an array of strings",
     ]);
   });
 
