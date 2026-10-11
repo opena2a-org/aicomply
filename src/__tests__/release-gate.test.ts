@@ -470,8 +470,20 @@ describe('npm publish lifecycle', () => {
    *
    * A `\` that ends a line joins the next line onto it only when that line
    * belongs to the same value, indented deeper than the key of its step, as
-   * YAML ends the value at any other line. A `#` line takes no part in a join:
-   * the shell ends a comment at the line break, so its `\` continues nothing.
+   * YAML ends the value at the first non-blank line that is not. A blank line
+   * between the two ends the join, except a single one in a plain or quoted
+   * scalar, or in a `>` block when neither line is indented deeper than the
+   * block's own lines and the blank line is no longer than that indentation
+   * (YAML reads a longer one as a more-indented line): YAML folds the line
+   * break before the blank line away there and keeps one, which the shell
+   * joins across. A `|` block keeps both line breaks, as does a `>` block
+   * next to a more-indented line, and two or more blank lines keep two or
+   * more. In a double-quoted value the `\` is YAML's own escape instead, and
+   * parsers differ on the blank lines after it: js-yaml drops them, joining
+   * the lines, and PyYAML keeps each one as a line break, which ends the
+   * command. The join there reads one blank line the first way and two or
+   * more the second. A `#` line takes no part in a join: the shell ends a
+   * comment at the line break, so its `\` continues nothing.
    * The shell joins a `\`-continued line onto the word the `\` ends only when
    * the next line keeps no indentation; in a `|` block, and on a more-indented
    * line of a `>` block, YAML keeps the indentation and the shell gets two
@@ -513,13 +525,22 @@ describe('npm publish lifecycle', () => {
       const valueKey = under !== null && (indent === -1 || indent > under) ? under : null;
       const head = valueKey === null ? KEY.exec(raw[i]) : null;
       const stepKey = valueKey ?? (head !== null ? head[1].length : indent);
+      // How deep a `\` line and the line after one blank line may be indented,
+      // and how long that blank line may be, for the join to cross it: any
+      // depth in a plain or quoted scalar, the block's own indentation in a
+      // `>` block, and null where a blank line ends the join.
+      let foldDepth: number | null = null;
+      if (valueKey !== null && style === 'folded') foldDepth = blockIndent === null ? Infinity : (blockIndent ?? indent);
+      else if (head !== null && /^[^|>#]/.test(withoutProperties(head[2] ?? ''))) foldDepth = Infinity;
       let line = raw[i];
       let lastIndent = indent;
-      while (
-        !comment && line.endsWith('\\') && i + 1 < raw.length &&
-        !/^\s*#/.test(raw[i + 1]) && raw[i + 1].search(/\S/) > stepKey
-      ) {
-        const next = raw[++i];
+      while (!comment && line.endsWith('\\')) {
+        const at = foldDepth !== null && lastIndent <= foldDepth && i + 2 < raw.length &&
+          raw[i + 1].search(/\S/) === -1 && raw[i + 1].length <= foldDepth &&
+          raw[i + 2].search(/\S/) <= foldDepth ? i + 2 : i + 1;
+        if (at >= raw.length || /^\s*#/.test(raw[at]) || raw[at].search(/\S/) <= stepKey) break;
+        i = at;
+        const next = raw[i];
         line = /(?<!\S)\\$/.test(line) ? `${line.slice(0, -1)} ${next.trimStart()}` : `${line} ${next.trimStart()}`;
         lastIndent = next.search(/\S/);
       }
@@ -748,6 +769,11 @@ describe('npm publish lifecycle', () => {
     ['a hardened install after a redirection', ['      - run: npm run build > build.log && npm ci --ignore-scripts', PUBLISH], null],
     ['a hardened install in a value that starts after its key', ['      - run:', '          npm ci --ignore-scripts', PUBLISH], null],
     ['the registry named between npm and the publish', ['      - run: npm --registry https://registry.npmjs.org/ publish --provenance --access public'], null],
+    ['a blank line that ends a continued line of a | block', ['      - run: |', '          npm publish --provenance --access \\', '', '          public ./x.tgz'], null],
+    ['two blank lines that end a continued line of a plain scalar', ['      - run: npm publish --provenance --access \\', '', '', '          public ./x.tgz'], null],
+    ['a blank line and a more-indented line after a continued line of a folded scalar', ['      - run: >', '          npm publish --provenance --access \\', '', '            public ./x.tgz'], null],
+    ['a blank line after a continued more-indented line of a folded scalar', ['      - run: >', '          echo start', '            npm publish --provenance --access \\', '', '          public ./x.tgz'], null],
+    ['a line of spaces longer than the indentation of a folded scalar after a continued line', ['      - run: >', '          npm publish --provenance --access \\', ' '.repeat(14), '          public ./x.tgz'], null],
   ])('lets a publish through with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).toEqual([]);
   });
@@ -834,6 +860,10 @@ describe('npm publish lifecycle', () => {
     ['the flag spelled with a YAML escape', ['      - run: "npm publish --ignore\\x2dscripts"'], null],
     ['the flag split by shell quotes', ["      - run: npm publish --ignore'-'scripts"], null],
     ['the flag on the line after a continued line that ends more indented in a folded scalar', ['      - run: >', '          npm ci \\', '            echo x', '          npm publish --ignore-scripts'], null],
+    ['a tarball one blank line after a continued line of a plain scalar', ['      - run: npm publish --provenance --access \\', '', '          public ./x.tgz'], null],
+    ['a tarball one blank line after a continued line of a folded scalar', ['      - run: >', '          npm publish --provenance --access \\', '', '          public ./x.tgz'], null],
+    ['a tarball one blank line after a continued line of a value that starts after its key', ['      - run:', '          npm publish --provenance --access \\', '', '          public ./x.tgz'], null],
+    ['a tarball on a more-indented line one blank line after a continued line of a value that starts after its key', ['      - run:', '          npm publish --provenance --access \\', '', '            public ./x.tgz'], null],
   ])('refuses a publish with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
   });
