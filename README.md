@@ -85,16 +85,22 @@ console.log(result.verdict);     // 'VIOLATION'
 console.log(result.violations);  // [{ type: 'SSN', confidence: 0.95, value: '123-...89', ... }]
 ```
 
-CommonJS works too (the package ships both):
+The package is a CommonJS build; ES modules import it as shown above. From a CommonJS
+file, `require` it and call `comply()` inside an async function, since CommonJS has no
+top-level `await`:
 
 ```javascript
 const { comply } = require('@opena2a/aicomply');
 
-const result = await comply({ content: 'My SSN is 123-45-6789.' });
-console.log(result.verdict); // 'VIOLATION'
+async function main() {
+  const result = await comply({ content: 'My SSN is 123-45-6789.' });
+  console.log(result.verdict); // 'VIOLATION'
 
-// A bare string is shorthand for { content: '...' }.
-await comply('My SSN is 123-45-6789.');
+  // A bare string is shorthand for { content: '...' }.
+  await comply('My SSN is 123-45-6789.');
+}
+
+main();
 ```
 
 Drop it into your agent's tool-result handler, your message-egress wrapper, or anywhere content crosses a trust boundary.
