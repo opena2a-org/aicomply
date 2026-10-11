@@ -433,6 +433,11 @@ describe('npm publish lifecycle', () => {
     return value.replace(/^(?:[!&]\S*(?:\s+|$))*/, '');
   }
 
+  /** Whether `value`, past its tags and anchors, opens a quote that it does not close. */
+  function quoteOpen(value: string): boolean {
+    return /^(?:"(?:[^"\\]|\\[\s\S])*\\?|'(?:[^']|'')*)$/.test(withoutProperties(value));
+  }
+
   /** How the lines of a value are read: kept apart, folded into one, or not known yet. */
   type ValueStyle = 'literal' | 'folded' | 'pending';
 
@@ -469,21 +474,27 @@ describe('npm publish lifecycle', () => {
    * key's line.
    *
    * A `\` that ends a line joins the next line onto it only when that line
-   * belongs to the same value, indented deeper than the key of its step, as
-   * YAML ends the value at the first non-blank line that is not. A blank line
-   * between the two ends the join, except a single one in a plain or quoted
-   * scalar, or in a `>` block when neither line is indented deeper than the
-   * block's own lines and the blank line is no longer than that indentation
-   * (YAML reads a longer one as a more-indented line): YAML folds the line
-   * break before the blank line away there and keeps one, which the shell
-   * joins across. A `|` block keeps both line breaks, as does a `>` block
-   * next to a more-indented line, and two or more blank lines keep two or
-   * more. In a double-quoted value the `\` is YAML's own escape instead, and
-   * parsers differ on the blank lines after it: js-yaml drops them, joining
-   * the lines, and PyYAML keeps each one as a line break, which ends the
-   * command. The join there reads one blank line the first way and two or
-   * more the second. A `#` line takes no part in a join: the shell ends a
-   * comment at the line break, so its `\` continues nothing.
+   * belongs to the same value: at any indentation while a quote that the
+   * value opens on the line it starts on, its key's line or the first line
+   * of a scalar under its key, is still open on the lines joined so far, as
+   * js-yaml and PyYAML read a quoted value on to its closing quote, and
+   * otherwise when it is indented deeper than the key of its step, as YAML
+   * ends a plain or block value at the first non-blank line that is not. A
+   * blank line between the two ends the join, except a single one in a plain
+   * or quoted scalar, or in a `>` block when neither line is indented deeper
+   * than the block's own lines and the blank line is no longer than that
+   * indentation (YAML reads a longer one as a more-indented line): YAML folds
+   * the line break before the blank line away there and keeps one, which the
+   * shell joins across. A `|` block keeps both line breaks, as does a `>`
+   * block next to a more-indented line, and two or more blank lines keep two
+   * or more. In a double-quoted value the `\` is YAML's own escape instead,
+   * and parsers differ on the blank lines after it: js-yaml drops them,
+   * joining the lines, and PyYAML keeps each one as a line break, which ends
+   * the command. The join there reads one blank line the first way and two
+   * or more the second. A `#` line takes no part in a join: the shell ends a
+   * comment at the line break, so its `\` continues nothing. Nor does a key's
+   * line whose value, past its tags and anchors, starts with `#`: YAML reads
+   * that as a comment, which is no part of the value.
    * The shell joins a `\`-continued line onto the word the `\` ends only when
    * the next line keeps no indentation; in a `|` block, and on a more-indented
    * line of a `>` block, YAML keeps the indentation and the shell gets two
@@ -509,6 +520,10 @@ describe('npm publish lifecycle', () => {
     for (let i = 0; i < raw.length; i++) {
       const comment = /^\s*#/.test(raw[i]);
       const indent = raw[i].search(/\S/);
+      // Where a value starts on this line, on a key's line or on the first
+      // line of a scalar under its key, to see whether a quote it opens is
+      // still open on the lines joined to it.
+      let valueAt: number | null = null;
       if (under !== null && style === 'pending' && (indent === -1 || indent > under)) {
         // Blank lines, comments, tags and anchors come before the value.
         if (indent === -1 || comment) continue;
@@ -520,11 +535,16 @@ describe('npm publish lifecycle', () => {
           afterDeeper = false;
           // A header line carries no text; a scalar's first line is folded below.
           if (style === 'literal' || blockIndent !== null) continue;
+          valueAt = indent;
         }
       }
       const valueKey = under !== null && (indent === -1 || indent > under) ? under : null;
       const head = valueKey === null ? KEY.exec(raw[i]) : null;
       const stepKey = valueKey ?? (head !== null ? head[1].length : indent);
+      // A comment on a key's line, past its tags and anchors, is no part of
+      // the value, so a `\` that ends it joins nothing.
+      const keyComment = head !== null && withoutProperties(head[2] ?? '').startsWith('#');
+      if (head !== null) valueAt = raw[i].length - (head[2] ?? '').length;
       // How deep a `\` line and the line after one blank line may be indented,
       // and how long that blank line may be, for the join to cross it: any
       // depth in a plain or quoted scalar, the block's own indentation in a
@@ -534,11 +554,15 @@ describe('npm publish lifecycle', () => {
       else if (head !== null && /^[^|>#]/.test(withoutProperties(head[2] ?? ''))) foldDepth = Infinity;
       let line = raw[i];
       let lastIndent = indent;
-      while (!comment && line.endsWith('\\')) {
+      while (!comment && !keyComment && line.endsWith('\\')) {
         const at = foldDepth !== null && lastIndent <= foldDepth && i + 2 < raw.length &&
           raw[i + 1].search(/\S/) === -1 && raw[i + 1].length <= foldDepth &&
           raw[i + 2].search(/\S/) <= foldDepth ? i + 2 : i + 1;
-        if (at >= raw.length || /^\s*#/.test(raw[at]) || raw[at].search(/\S/) <= stepKey) break;
+        // The column the next line must pass to belong to the value: none
+        // while a quote that the value opens on this line is still open on
+        // the lines joined so far.
+        const floor = valueAt !== null && quoteOpen(line.slice(valueAt)) ? -1 : stepKey;
+        if (at >= raw.length || /^\s*#/.test(raw[at]) || raw[at].search(/\S/) <= floor) break;
         i = at;
         const next = raw[i];
         line = /(?<!\S)\\$/.test(line) ? `${line.slice(0, -1)} ${next.trimStart()}` : `${line} ${next.trimStart()}`;
@@ -864,6 +888,15 @@ describe('npm publish lifecycle', () => {
     ['a tarball one blank line after a continued line of a folded scalar', ['      - run: >', '          npm publish --provenance --access \\', '', '          public ./x.tgz'], null],
     ['a tarball one blank line after a continued line of a value that starts after its key', ['      - run:', '          npm publish --provenance --access \\', '', '          public ./x.tgz'], null],
     ['a tarball on a more-indented line one blank line after a continued line of a value that starts after its key', ['      - run:', '          npm publish --provenance --access \\', '', '            public ./x.tgz'], null],
+    ['a tarball on the line after a key whose value is a comment that ends in a backslash', ['      - run: # note \\', '          npm publish ./x.tgz'], null],
+    ['the flag on the line after a key whose value is a comment that ends in a backslash', ['      - run: # note \\', '          npm publish --ignore-scripts'], null],
+    ['a tarball on the line after a tagged key whose value is a comment that ends in a backslash', ['      - run: !!str # note \\', '          npm publish ./x.tgz'], null],
+    ['a tarball on a continued line of a double-quoted value indented no deeper than its key', ['      - run: "npm publish --provenance --access \\', '        public ./x.tgz"'], null],
+    ['a tarball on a continued line of a single-quoted value indented no deeper than its key', ["      - run: 'npm publish --provenance\\", "        public ./x.tgz'"], null],
+    ['a tarball on a continued line of a tagged double-quoted value indented no deeper than its key', ['      - run: !!str "npm publish --provenance --access \\', '        public ./x.tgz"'], null],
+    ['a tarball on a continued line of a double-quoted value that starts after its key, indented no deeper than the key', ['      - run:', '          "npm publish --provenance --access \\', '        public ./x.tgz"'], null],
+    ['a tarball on a continued line of a double-quoted value with an escaped quote, indented no deeper than its key', ['      - run: "echo \\"ok\\" && npm publish --provenance --access \\', '        public ./x.tgz"'], null],
+    ['a tarball on a continued line of a single-quoted value with an escaped quote, indented no deeper than its key', ["      - run: 'echo ''ok'' && npm publish --provenance\\", "        public ./x.tgz'"], null],
   ])('refuses a publish with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
   });
