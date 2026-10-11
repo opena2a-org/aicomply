@@ -3,9 +3,10 @@
  * referenced in source and tests, so an advisory that names one leads a
  * reader to the code that implements it and the test that pins it. Each ID
  * in that table must appear in a source file under src/ or scripts/ and in
- * the title of a describe/it/test block in a test under src/. A comment in a
- * test file does not count: it names the ID without saying which test pins
- * it. This file reads the IDs from the table and is left out of the test
+ * the title of a describe/it/test block that runs, in a test under src/. A
+ * comment in a test file does not count: it names the ID without saying which
+ * test pins it. Nor does a skipped or todo block, which pins nothing. This
+ * file reads the IDs from the table and is left out of the test
  * search, so naming an ID here cannot satisfy the check.
  */
 
@@ -46,27 +47,49 @@ function names(text: string, id: string): boolean {
   return new RegExp(`(?<![A-Za-z0-9_-])${escaped}(?![A-Za-z0-9_-])`).test(text);
 }
 
-const BLOCKS = new Set(['describe', 'it', 'test']);
+/** Blocks that run, `fit` and `fdescribe` (focused) included. */
+const BLOCKS = new Set(['describe', 'it', 'test', 'fdescribe', 'fit']);
+/** Blocks that are skipped. */
+const SKIPPED_BLOCKS = new Set(['xdescribe', 'xit', 'xtest']);
+/** Modifiers that keep a block from running: `it.skip`, `it.todo`. */
+const SKIP_MODIFIERS = new Set(['skip', 'todo']);
 
-/** `it` for `it`, `it.only`, `it.each(table)` and the like; '' for other callees. */
-function blockName(callee: ts.Expression): string {
-  if (ts.isIdentifier(callee)) return BLOCKS.has(callee.text) ? callee.text : '';
-  if (ts.isPropertyAccessExpression(callee) || ts.isCallExpression(callee)) {
-    return blockName(callee.expression);
+type BlockKind = 'runs' | 'skipped' | '';
+
+/**
+ * 'runs' for `it`, `fit`, `it.only`, `it.each(table)`, `` it.each`table` ``
+ * and the like; 'skipped' for `xit`, `it.skip`, `it.todo`, `describe.skip`
+ * and the like; '' for other callees, such as a method named `test` on
+ * another object (`re.test('...')`).
+ */
+function blockKind(callee: ts.Expression): BlockKind {
+  if (ts.isIdentifier(callee)) {
+    if (BLOCKS.has(callee.text)) return 'runs';
+    return SKIPPED_BLOCKS.has(callee.text) ? 'skipped' : '';
   }
+  if (ts.isPropertyAccessExpression(callee)) {
+    const kind = blockKind(callee.expression);
+    return kind === 'runs' && SKIP_MODIFIERS.has(callee.name.text) ? 'skipped' : kind;
+  }
+  if (ts.isCallExpression(callee)) return blockKind(callee.expression);
+  if (ts.isTaggedTemplateExpression(callee)) return blockKind(callee.tag);
   return '';
 }
 
 /**
- * The titles of the describe/it/test blocks in a test file, read from the
- * parsed file, so a comment or a string elsewhere in the file is not one.
+ * The titles of the describe/it/test blocks that run in a test file, read
+ * from the parsed file, so a comment or a string elsewhere in the file is not
+ * one. A skipped or todo block, and every block inside a skipped describe,
+ * pins nothing, so its title is left out.
  */
 function blockTitles(text: string): string[] {
   const titles: string[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && blockName(node.expression) !== '') {
+    if (ts.isCallExpression(node)) {
+      const kind = blockKind(node.expression);
+      if (kind === 'skipped') return;
       const title = node.arguments[0];
-      if (title !== undefined && (ts.isStringLiteralLike(title) || ts.isTemplateExpression(title))) {
+      if (kind === 'runs' && title !== undefined && (ts.isStringLiteralLike(title) || ts.isTemplateExpression(title))) {
         // A template with substitutions has no fixed text; its source is searched.
         titles.push(ts.isStringLiteralLike(title) ? title.text : title.getText());
       }
@@ -115,7 +138,7 @@ describe('SECURITY.md reference IDs', () => {
       "    expect(label('AC-005')).toBe('AC-005');",
       '  });',
       "  it.each([1, 2])('rejects size %d (D17)', () => {});",
-      '  test.skip(`reports AC-002 as ${status}`, () => {});',
+      '  test(`reports AC-002 as ${status}`, () => {});',
       '});',
     ].join('\n');
     const titles = blockTitles(file);
@@ -129,6 +152,58 @@ describe('SECURITY.md reference IDs', () => {
     ]);
     expect(['CR-001', 'D17', 'AC-002'].filter(named)).toEqual(['CR-001', 'D17', 'AC-002']);
     expect(['D7', 'D9', 'AC-005'].filter(named)).toEqual([]);
+  });
+
+  it('leaves out the title of a skipped or todo block and of every block in a skipped describe', () => {
+    const file = [
+      "it.skip('parse-to-deny on a bad signature (CR-001)', () => {});",
+      "it.todo('pins the signing library (D7)');",
+      "test.skip.each([1])('verify budget %d (D17)', () => {});",
+      "xit('encrypts the vault (D9)', () => {});",
+      "xtest('reports a miss (AC-002)', () => {});",
+      "describe.skip('Registry hot path', () => {",
+      "  it('makes no request (AC-005)', () => {});",
+      '});',
+      "xdescribe('another suite', () => {",
+      "  describe('nested', () => { it('XY-1 under a skipped suite', () => {}); });",
+      '});',
+      "it('runs (AB-001)', () => {});",
+    ].join('\n');
+
+    expect(blockTitles(file)).toEqual(['runs (AB-001)']);
+  });
+
+  it('reads the title under a tagged-template it.each and under fit and fdescribe', () => {
+    const file = [
+      'it.each`',
+      '  status',
+      "  ${'miss'}",
+      "`('reports $status (AC-002)', () => {});",
+      "fit('focused (CR-001)', () => {});",
+      "fdescribe('focused suite (D7)', () => {",
+      "  it.only('only this one (D9)', () => {});",
+      '});',
+    ].join('\n');
+
+    expect(blockTitles(file)).toEqual([
+      'reports $status (AC-002)',
+      'focused (CR-001)',
+      'focused suite (D7)',
+      'only this one (D9)',
+    ]);
+  });
+
+  it('does not read a method named test, it or describe on another object as a block', () => {
+    const file = [
+      "it('matches the ID pattern', () => {",
+      "  expect(/AC-\\d+/.test('AC-001 in a regex call')).toBe(true);",
+      "  re.test('CR-001 passed to a method');",
+      "  suite.it('D7 on another object', () => {});",
+      "  page.describe('D9 on another object', () => {});",
+      '});',
+    ].join('\n');
+
+    expect(blockTitles(file)).toEqual(['matches the ID pattern']);
   });
 
   it('reads the IDs from the table', () => {

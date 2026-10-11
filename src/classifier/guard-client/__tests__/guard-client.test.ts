@@ -222,7 +222,10 @@ describe('GuardClient', () => {
       const result = await client.classify('anything');
       const elapsed = Date.now() - start;
       expect(result).toBeNull();
-      expect(elapsed).toBeGreaterThanOrEqual(50);
+      // Node starts a timer from the event loop's cached clock, which can lag
+      // Date.now() by a millisecond or so, so a 50 ms timer can measure 49.
+      // The bound allows for that and still fails a timeout that fires early.
+      expect(elapsed).toBeGreaterThanOrEqual(45);
       expect(elapsed).toBeLessThan(1000);
     } finally {
       await server.close();

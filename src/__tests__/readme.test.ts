@@ -230,6 +230,19 @@ describe('README', () => {
     ]);
   });
 
+  it('lists the finding types the default policy pack denies and warns on, and names the second-argument form', () => {
+    const line = LINES[lineOf(/`'default'` is the only one/) - 1];
+    expect(line).toBeDefined();
+    const ticked = (text: string) => [...text.matchAll(/`([A-Z_]+)`/g)].map((m) => m[1]);
+    const [, denied, warned] = line.match(/denies (.*?) findings and warns on (.*?)\./)!;
+    const patterns = (action: string) =>
+      pkg.loadPolicyPack('default').rules.filter((r) => r.action === action).flatMap((r) => r.patterns);
+
+    expect(ticked(denied)).toEqual(patterns('DENY'));
+    expect(ticked(warned)).toEqual(patterns('WARN'));
+    expect(README).toContain('Pass your own pack as `policyPack` on the second argument');
+  });
+
   it('describes CLEAN as what the layers found, in the words the CLI prints', () => {
     // CLEAN is also the verdict for the inputs listed under "What this package
     // does NOT detect", so the README must not present it as safe to forward.

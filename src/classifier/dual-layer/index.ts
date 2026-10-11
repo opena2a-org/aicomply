@@ -1,6 +1,6 @@
 /**
- * Dual-layer classifier merge logic with ARP signature verification and
- * Registry L2 threshold/block logic (Section 3.1, lines 239-263).
+ * Dual-layer classifier merge logic with ARP signature verification (CR-001)
+ * and Registry L2 threshold/block logic (AC-002, AC-005).
  *
  * Both the regex classifier and Guard classifier must return CLEAN
  * for content to pass. If either flags a violation, the result is VIOLATION.
@@ -26,6 +26,7 @@ import { RegistryIntelligenceCache } from '../../registry';
 import type { RegistryLookupResult } from '../../registry';
 import { assembleRiskContext } from '../../risk';
 import { normalize } from '../../normalize';
+import { validatePolicyConfig } from '../../policy';
 import type { ClassifierResult, ComplyLayer, ComplyResult, PolicyPack, RegistryUnknownAction, RiskContext, Violation, ViolationView } from '../../types';
 import type {
   NanoMindGuardResult,
@@ -60,7 +61,8 @@ export interface DualLayerOptions {
   /**
    * Loaded policy pack to enforce after regex+Guard merge and Registry L2.
    * DENY rules hard-block (verdict → DENY). WARN rules append a violation.
-   * REDACT rules are skipped in V1.
+   * REDACT rules are skipped in V1. A pack `validatePolicyConfig()` reports
+   * a problem with is rejected with a TypeError.
    */
   policyPack?: PolicyPack;
   /**
@@ -86,7 +88,9 @@ export interface DualLayerOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Registry L2 constants (Section 3.1, lines 239-263)
+// Registry L2 constants: a fleet anomaly score above the threshold lowers the
+// classification threshold by the delta, which raises a CLEAN verdict to
+// VIOLATION.
 // ---------------------------------------------------------------------------
 const FLEET_ANOMALY_THRESHOLD = 0.30;
 const THRESHOLD_DELTA = -0.15;
@@ -158,9 +162,25 @@ export function assertGuardOptions(
 }
 
 /**
+ * Reject a policyPack that the policy step cannot apply: not an object, no
+ * `rules` array, or a rule with no id, an action other than DENY, REDACT or
+ * WARN (a lower-case 'deny' included), or `patterns` that is not an array of
+ * strings. Read as it is, such a pack fails mid-classification with an error
+ * that names no parameter, or has its rule skipped. `name` is how the error
+ * refers to the value, e.g. 'comply: dualLayerOptions.policyPack'.
+ */
+export function assertPolicyPack(value: unknown, name: string): asserts value is PolicyPack | undefined {
+  if (value === undefined) return;
+  const errors = validatePolicyConfig(value);
+  if (errors.length > 0) {
+    throw new TypeError(`${name} is not a valid policy pack: ${errors.join('; ')}`);
+  }
+}
+
+/**
  * Apply the two steps that follow classification: Registry L2 threshold/block
- * logic (Section 3.1, lines 239-263; AC-005: synchronous cache lookup only,
- * never a fetch in the hot path), then policy pack enforcement, where DENY
+ * logic (AC-005: synchronous cache lookup only, never a fetch in the hot
+ * path), then policy pack enforcement, where DENY
  * rules hard-block and WARN rules add violations. Policy runs second so it
  * sees the verdict and violations the Registry step resolved. REDACT is out
  * of scope in V1 and skipped silently.
@@ -235,6 +255,7 @@ export async function classifyDualLayer(
   assertRegistryUnknownAction(options?.onRegistryUnknown);
   assertSourcePackage(options?.sourcePackage);
   assertGuardOptions(options?.guardOptions, 'classifyDualLayer: options.guardOptions');
+  assertPolicyPack(options?.policyPack, 'classifyDualLayer: options.policyPack');
 
   // Pre-regex adversarial normalization (threat-model scope 2026-05-28).
   // NFKC + zero-width strip produce normalizedContent; the compact form
@@ -242,62 +263,11 @@ export async function classifyDualLayer(
   const norm = normalize(content);
   const regexResult = scanAllViews(norm);
 
-  let baseResult: Omit<ComplyResult, 'registrySignals'>;
+  // A supplied Guard result is verified, as comply() does for empty content;
+  // with none supplied, the daemon is asked below.
+  let baseResult = await verifySuppliedGuard(content, regexResult, options);
 
-  // If Guard result and verification options are provided, verify the signature
-  if (options?.guardResult && options?.guardVerifyOptions) {
-    const verifyResult = await verifyClassification(
-      options.guardResult,
-      options.guardVerifyOptions,
-    );
-
-    if (!verifyResult.valid) {
-      // Parse-to-deny: invalid signature means we cannot trust the classification
-      baseResult = {
-        verdict: 'DENY',
-        violations: regexResult.violations,
-        classifierResults: { regex: regexResult },
-        signatureValid: false,
-        verifyError: { code: verifyResult.code, reason: verifyResult.reason },
-      };
-    } else {
-      // Signature valid - build Guard classifier result from the verified classification
-      const guardClassifierResult: ClassifierResult = {
-        classifier: 'guard',
-        verdict: verifyResult.classification === 'documentation' ||
-                 verifyResult.classification === 'code-analysis' ||
-                 verifyResult.classification === 'data-read'
-          ? 'CLEAN' : 'VIOLATION',
-        violations: verifyResult.classification !== 'documentation' &&
-                    verifyResult.classification !== 'code-analysis' &&
-                    verifyResult.classification !== 'data-read'
-          ? [{
-              type: verifyResult.classification,
-              value: verifyResult.classification,
-              start: 0,
-              end: content.length,
-              confidence: verifyResult.confidence,
-              classifier: 'guard',
-            }]
-          : [],
-      };
-
-      const allViolations: Violation[] = [
-        ...regexResult.violations,
-        ...guardClassifierResult.violations,
-      ];
-
-      baseResult = {
-        verdict: mergeVerdicts(regexResult, guardClassifierResult),
-        violations: allViolations,
-        classifierResults: {
-          regex: regexResult,
-          guard: guardClassifierResult,
-        },
-        signatureValid: true,
-      };
-    }
-  } else {
+  if (baseResult === undefined) {
     // Attempt Guard classification via the nanomind-daemon adapter.
     // Returns null when the daemon is unreachable, the response is
     // malformed, or the response times out — silent fallback to
@@ -355,6 +325,78 @@ export async function classifyDualLayer(
   result.layers = layers;
 
   return result;
+}
+
+/**
+ * Verify a Guard result the caller supplied with `guardVerifyOptions` and
+ * merge it with the regex result. An invalid signature is a DENY with
+ * `signatureValid: false` and the `verifyError` (parse-to-deny, CR-001); a
+ * valid one adds the Guard classification as the `guard` classifier result.
+ * Returns undefined when no Guard result and verification options were both
+ * supplied.
+ *
+ * Exported so comply() verifies a supplied Guard result on empty content as
+ * well, which it does not classify: the signature check does not depend on
+ * the content.
+ */
+export async function verifySuppliedGuard(
+  content: string,
+  regexResult: ClassifierResult,
+  options?: DualLayerOptions,
+): Promise<Omit<ComplyResult, 'registrySignals'> | undefined> {
+  if (!options?.guardResult || !options?.guardVerifyOptions) return undefined;
+
+  const verifyResult = await verifyClassification(
+    options.guardResult,
+    options.guardVerifyOptions,
+  );
+
+  if (!verifyResult.valid) {
+    // Parse-to-deny: invalid signature means we cannot trust the classification
+    return {
+      verdict: 'DENY',
+      violations: regexResult.violations,
+      classifierResults: { regex: regexResult },
+      signatureValid: false,
+      verifyError: { code: verifyResult.code, reason: verifyResult.reason },
+    };
+  }
+
+  // Signature valid - build Guard classifier result from the verified classification
+  const guardClassifierResult: ClassifierResult = {
+    classifier: 'guard',
+    verdict: verifyResult.classification === 'documentation' ||
+             verifyResult.classification === 'code-analysis' ||
+             verifyResult.classification === 'data-read'
+      ? 'CLEAN' : 'VIOLATION',
+    violations: verifyResult.classification !== 'documentation' &&
+                verifyResult.classification !== 'code-analysis' &&
+                verifyResult.classification !== 'data-read'
+      ? [{
+          type: verifyResult.classification,
+          value: verifyResult.classification,
+          start: 0,
+          end: content.length,
+          confidence: verifyResult.confidence,
+          classifier: 'guard',
+        }]
+      : [],
+  };
+
+  const allViolations: Violation[] = [
+    ...regexResult.violations,
+    ...guardClassifierResult.violations,
+  ];
+
+  return {
+    verdict: mergeVerdicts(regexResult, guardClassifierResult),
+    violations: allViolations,
+    classifierResults: {
+      regex: regexResult,
+      guard: guardClassifierResult,
+    },
+    signatureValid: true,
+  };
 }
 
 /**

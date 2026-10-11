@@ -249,7 +249,7 @@ const result = await session.comply({
 });
 ```
 
-The cache warms once on `create()`. Subsequent `comply()` calls make no Registry request (contract AC-005 in [SECURITY.md](./SECURITY.md)). `session.comply()` takes the arguments `comply()` takes, a bare string included: `session.comply('text')`. Each call still makes the Guard request described in [What the Guard attempt sends](#what-the-guard-attempt-sends) unless you pass `useGuard: false`.
+The cache warms once on `create()`. Subsequent `comply()` calls make no Registry request (contract AC-005 in [SECURITY.md](./SECURITY.md)). `session.comply()` takes the arguments `comply()` takes, a bare string included: `session.comply('text')`. A `registryCache` or `guardOptions` passed on either argument is used in place of the session's. Each call still makes the Guard request described in [What the Guard attempt sends](#what-the-guard-attempt-sends) unless you pass `useGuard: false`.
 
 `result.registrySignals.status` says what the Registry had for the package: `hit`, `miss` (not in the index) or `error` (the index did not load, for example because the Registry was unreachable). A `miss` or an `error` leaves the verdict as the classifiers set it. To fail closed, pass `onRegistryUnknown`:
 
@@ -261,7 +261,28 @@ const result = await session.comply({
 });
 ```
 
-Either value appends a `REGISTRY_UNKNOWN` violation (contract AC-002). The lookup runs for empty content as well, and a policy pack is applied to what it finds; an empty `sourcePackage` counts as an `error`.
+Either value appends a `REGISTRY_UNKNOWN` violation (contract AC-002). The lookup runs for empty content as well, and a [policy pack](#policy-packs-optional) is applied to what it finds; an empty `sourcePackage` counts as an `error`.
+
+## Policy packs (optional)
+
+A policy pack acts on the violation types in a result. A `DENY` rule whose `patterns` name one of them sets the verdict to `DENY` and appends `POLICY_DENY:<rule id>`; a `WARN` rule appends `POLICY_WARN:<rule id>` and leaves the verdict alone. `REDACT` rules are not applied yet. Pass your own pack as `policyPack` on the second argument:
+
+```typescript
+const result = await comply(
+  { content: agentInput },
+  {
+    policyPack: {
+      name: 'my-pack',
+      version: '1.0.0',
+      rules: [
+        { id: 'no-ssn', name: 'No SSN', description: 'Block SSNs', patterns: ['SSN'], action: 'DENY', severity: 'critical' },
+      ],
+    },
+  },
+);
+```
+
+`policyPack` on the first argument takes the name of a built-in pack instead. `'default'` is the only one: it denies `SSN`, `PAN`, `CREDENTIAL`, `CUI`, `IBAN` and `MRN` findings and warns on `NPI`. A name there is used in place of a pack on the second argument. Any other name, a pack object on the first argument, and a pack that `validatePolicyConfig()` reports a problem with (a lower-case `action` such as `'deny'` included) are rejected with a `TypeError`.
 
 ## Verdict semantics
 
@@ -282,7 +303,7 @@ result.layers;                  // ['normalize', 'regex'], plus 'guard' when a G
 result.pack;                    // { version, sha256 }: the pattern pack the regex layer ran
 ```
 
-`layers` never lists `guard` on the regex-only fallback or when a supplied Guard signature is rejected, and is `[]` for empty content. `pack` equals `{ version: PACK_VERSION, sha256: PACK_SHA256 }`.
+`layers` never lists `guard` on the regex-only fallback or when a supplied Guard signature is rejected. It is `[]` for empty content, which is not classified, or `['guard']` when a signed Guard result passed with it is accepted; a supplied Guard result is verified for empty content as for any other. `pack` equals `{ version: PACK_VERSION, sha256: PACK_SHA256 }`.
 
 Treat `verdict` and `violations` as the stable contract; `classifierResults`, `originalContent`, `normalizedContent`, `normalizations`, `layers` and `pack` are introspection hooks.
 

@@ -1,7 +1,7 @@
 /**
  * Tests for Registry L2 threshold/block logic in classifyDualLayer.
  *
- * Section 3.1, lines 239-263:
+ * The rules (AC-002, AC-005):
  *   - fleetAnomalySignal > 0.30 => threshold -= 0.15 => CLEAN -> VIOLATION
  *   - Any active supply-chain alert on package => hard DENY
  *   - Cache miss => unknown (AC-002), verdict unchanged, signals recorded

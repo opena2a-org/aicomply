@@ -66,16 +66,19 @@ export { scanPatterns, luhnCheck } from './classifier/regex/patterns';
 export type { PatternMatch, PatternType } from './classifier/regex/patterns';
 export { PACK_VERSION, PACK_SHA256 } from './classifier/regex/pack';
 
+import { types as utilTypes } from 'util';
 import {
   classifyDualLayer,
   applyRegistryAndPolicy,
   assertGuardOptions,
+  assertPolicyPack,
   assertRegistryUnknownAction,
   assertSourcePackage,
+  verifySuppliedGuard,
 } from './classifier/dual-layer';
 import { packIdentity } from './classifier/regex/pack';
 import { RegistryIntelligenceCache } from './registry';
-import { loadPolicyPack } from './policy';
+import { builtInPolicyPackNames, isBuiltInPolicyPackName, loadPolicyPack } from './policy';
 import type { DualLayerOptions } from './classifier/dual-layer';
 import type { NanoMindAdapterOptions } from './classifier/guard-client/nanomind-adapter';
 import type {
@@ -111,9 +114,15 @@ export type { DualLayerOptions } from './classifier/dual-layer';
  * A package the Registry has no data for, or a Registry that could not be
  * reached, does not change the verdict by default: `registrySignals.status`
  * reports 'miss' or 'error' (AC-002). Set `onRegistryUnknown` to 'violation'
- * or 'deny' to have either one decide the verdict. The Registry step runs for
- * empty content too, followed by the policy pack, and an empty `sourcePackage`
- * counts as a lookup error.
+ * or 'deny' to have either one decide the verdict. For empty content, a
+ * supplied Guard result is verified and the Registry step runs too, followed
+ * by the policy pack, and an empty `sourcePackage` counts as a lookup error.
+ *
+ * `options.policyPack` names a built-in pack ('default' is the one there is);
+ * a pack object goes on the second argument as `dualLayerOptions.policyPack`.
+ * A name on the first argument takes the place of a pack on the second. Any
+ * other value, and a pack whose rules the policy step cannot apply, is
+ * rejected with a TypeError.
  *
  * The Guard layer calls the nanomind daemon at `http://127.0.0.1:47200` unless
  * `options.guardOptions.baseUrl` names another address.
@@ -154,6 +163,11 @@ export async function comply(
   assertSourcePackage(dualLayerOptions?.sourcePackage);
   assertGuardOptions(opts.guardOptions, 'comply: options.guardOptions');
   assertGuardOptions(dualLayerOptions?.guardOptions, 'comply: dualLayerOptions.guardOptions');
+  // The first argument takes the name of a built-in pack, the second a pack
+  // object. Anything else is rejected rather than replaced by the default
+  // pack or read rule by rule until a field is missing.
+  assertPolicyPackName(opts.policyPack);
+  assertPolicyPack(dualLayerOptions?.policyPack, 'comply: dualLayerOptions.policyPack');
 
   // Merged once, ahead of the empty-content return, so both paths below act
   // on the same options.
@@ -169,27 +183,36 @@ export async function comply(
   };
 
   if (!opts.content) {
-    // Empty / missing content: nothing to classify, but the Registry lookup
-    // depends on the source, not the content, so it still runs, and the policy
-    // pack then sees whatever violation that lookup added. A caller who set
-    // onRegistryUnknown to fail closed, or a policy rule on a Registry
-    // finding, is not let through on empty input.
+    // Empty / missing content: nothing to classify, but a supplied Guard
+    // result is still verified (CR-001), and the Registry lookup depends on
+    // the source, not the content, so it still runs; the policy pack then
+    // sees whatever violation those steps added. An invalid signature, a
+    // caller who set onRegistryUnknown to fail closed, or a policy rule on a
+    // Registry finding is not let through on empty input.
     // Populate the audit fields so consumers can rely on `originalContent` /
     // `normalizedContent` / `normalizations` being present in the result type
     // (per types.ts ComplyResult contract); a DENY drops the two content
     // fields, as classifyDualLayer() does for every DENY.
+    const regex: ComplyResult['classifierResults']['regex'] = {
+      classifier: 'regex',
+      verdict: 'CLEAN',
+      violations: [],
+    };
+    const classified = (await verifySuppliedGuard('', regex, mergedOptions)) ?? {
+      verdict: 'CLEAN',
+      violations: [],
+      classifierResults: { regex },
+    };
     const result = applyRegistryAndPolicy(
       {
-        verdict: 'CLEAN',
-        violations: [],
-        classifierResults: {
-          regex: { classifier: 'regex', verdict: 'CLEAN', violations: [] },
-        },
+        ...classified,
         originalContent: opts.content ?? '',
         normalizedContent: opts.content ?? '',
         normalizations: [],
         pack: packIdentity(),
-        layers: [],
+        // No layer ran on the content; an accepted Guard result is listed,
+        // as classifyDualLayer() lists it.
+        layers: classified.classifierResults.guard !== undefined ? ['guard'] : [],
       },
       mergedOptions,
     );
@@ -204,30 +227,88 @@ export async function comply(
 }
 
 /**
- * The options object of a comply() call. A bare string is treated as
- * { content: <string> } so `comply('text')` works without wrapping. Anything
- * that is neither a string nor an options object is a caller mistake; name
- * the expected shape rather than the unhelpful "options must be an object".
+ * The options object of a comply() call, as a new object. A bare string is
+ * treated as { content: <string> } so `comply('text')` works without wrapping.
+ * Anything that is neither a string nor an options object is a caller
+ * mistake; name the expected shape rather than the unhelpful "options must be
+ * an object".
+ *
+ * Each field is read by name, once. A spread copies own enumerable properties
+ * only, so a `content` getter on a class instance or a `content` inherited
+ * from a prototype would be dropped and the call would return CLEAN; and a
+ * getter read more than once could answer the type check and the classifier
+ * with different values.
  */
 function toComplyOptions(options: ComplyOptions | string): ComplyOptions {
-  const opts: ComplyOptions =
-    typeof options === 'string' ? { content: options } : (options as ComplyOptions);
-  if (!isPlainObject(opts)) {
-    const got = describeValue(opts);
+  if (typeof options === 'string') return { content: options };
+  const got = notAnOptionsObject(options);
+  if (got !== undefined) {
     throw new TypeError(
       `comply: expected a string or an options object like comply({ content: '...' }), got ${got}`,
     );
   }
-  return opts;
+  const {
+    content,
+    policyPack,
+    riskContext,
+    sourcePackage,
+    registryCache,
+    useGuard,
+    onRegistryUnknown,
+    guardOptions,
+  } = options;
+  return {
+    content,
+    policyPack,
+    riskContext,
+    sourcePackage,
+    registryCache,
+    useGuard,
+    onRegistryUnknown,
+    guardOptions,
+  };
 }
 
-function isPlainObject(value: unknown): value is object {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function describeValue(value: unknown): string {
+/**
+ * How to name `value` in the error when it is not an options object, or
+ * undefined when it is one. An array, binary data (a Buffer, a typed array,
+ * an ArrayBuffer), a boxed primitive such as `new String('...')` and a
+ * promise are objects, but read as options none of them has a `content`, so
+ * the call would return CLEAN without classifying anything. A class instance
+ * with a `content` property is an options object.
+ */
+function notAnOptionsObject(value: unknown): string | undefined {
   if (value === null) return 'null';
-  return Array.isArray(value) ? 'array' : typeof value;
+  if (typeof value !== 'object') return typeof value;
+  if (Array.isArray(value)) return 'array';
+  if (Buffer.isBuffer(value)) return 'Buffer';
+  if (utilTypes.isArrayBufferView(value) || utilTypes.isAnyArrayBuffer(value)) {
+    return builtInTag(value);
+  }
+  if (utilTypes.isBoxedPrimitive(value)) return `${builtInTag(value)} object`;
+  if (utilTypes.isPromise(value)) return 'Promise (await it first)';
+  return undefined;
+}
+
+/** 'Uint8Array' for a Uint8Array, 'String' for a boxed string, and so on. */
+function builtInTag(value: object): string {
+  return Object.prototype.toString.call(value).slice('[object '.length, -1);
+}
+
+/**
+ * Reject an options.policyPack that is not the name of a built-in pack. It
+ * used to be ignored: any value, a pack object included, applied the default
+ * pack and replaced a pack passed on the second argument.
+ */
+function assertPolicyPackName(value: unknown): void {
+  if (value === undefined || isBuiltInPolicyPackName(value)) return;
+  const got = typeof value === 'string'
+    ? JSON.stringify(value)
+    : value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+  throw new TypeError(
+    `comply: options.policyPack must name a built-in pack (${builtInPolicyPackNames()}), got ${got}. ` +
+      `Pass a pack object on the second argument: comply({ content }, { policyPack })`,
+  );
 }
 
 /**
@@ -295,7 +376,8 @@ export class ClassificationSession {
    * Run compliance classification, applying L2 registry logic when sourcePackage
    * is provided. Uses the session's warmed cache - no Registry network I/O in
    * the hot path. The Guard attempt still runs unless `useGuard: false` is set.
-   * Guard daemon settings passed on this call take precedence over the session's.
+   * A `registryCache` or Guard daemon settings passed on this call, on either
+   * argument, take precedence over the session's.
    * As with the comply() function, `options` is an options object or a bare
    * string to classify, and anything else is rejected with a TypeError.
    */
@@ -303,17 +385,22 @@ export class ClassificationSession {
     options: ComplyOptions | string,
     dualLayerOptions?: DualLayerOptions,
   ): Promise<ComplyResult> {
-    // Resolved before the spread below: spread as it is, a string becomes an
-    // object of its characters with no `content`, and the call would return
-    // CLEAN without classifying anything.
+    // Resolved before the spread below, which copies own enumerable
+    // properties only: spread as it is, a string becomes an object of its
+    // characters and a class instance loses a `content` getter, and the call
+    // would return CLEAN without classifying anything. toComplyOptions()
+    // returns a plain object with each field read by name.
     const opts = toComplyOptions(options);
     // Checked before the value is copied onto `opts` below, so the error
     // names the parameter the caller passed it on.
     assertGuardOptions(dualLayerOptions?.guardOptions, 'comply: dualLayerOptions.guardOptions');
     const guardOptions = opts.guardOptions ?? dualLayerOptions?.guardOptions ?? this.guardOptions;
+    // A value on `opts` takes the place of the one on `dualLayerOptions` in
+    // comply(), so the session's cache is set here only when neither has one.
+    const registryCache = opts.registryCache ?? dualLayerOptions?.registryCache ?? this.cache;
     const optionsWithCache: ComplyOptions = {
       ...opts,
-      registryCache: opts.registryCache ?? this.cache,
+      registryCache,
       ...(guardOptions !== undefined && { guardOptions }),
     };
     return comply(optionsWithCache, dualLayerOptions);

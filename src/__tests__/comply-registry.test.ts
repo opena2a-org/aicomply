@@ -12,7 +12,10 @@
  *   - Empty content and an empty source package name still get the lookup
  *   - comply() without registry options => no L2 signals
  *   - ClassificationSession.comply() uses session cache when caller omits registryCache
- *   - ClassificationSession.comply() respects caller-supplied registryCache override
+ *   - ClassificationSession.comply() respects caller-supplied registryCache override,
+ *     on either argument
+ *   - ClassificationSession.comply() reads a content getter or an inherited content
+ *   - comply() rejects binary data, a boxed primitive and a promise as the first argument
  *   - warmRegistryCache() returns a warmed RegistryIntelligenceCache
  */
 
@@ -33,6 +36,7 @@ function makeCache(
 }
 
 const SAFE_CONTENT = 'This is safe content with no PII.';
+const SSN_TEXT = 'My SSN is 123-45-6789.';
 
 afterEach(() => {
   jest.restoreAllMocks();
@@ -633,6 +637,48 @@ describe('ClassificationSession', () => {
     }
   });
 
+  it('comply() reads a content getter and an inherited content, as the comply() function does', async () => {
+    jest
+      .spyOn(RegistryIntelligenceCache.prototype, 'warm')
+      .mockResolvedValue(undefined);
+    const session = await ClassificationSession.create();
+
+    class Message {
+      constructor(private readonly text: string) {}
+      get content(): string {
+        return this.text;
+      }
+    }
+    const inherited = Object.create({ content: SSN_TEXT }) as ComplyOptions;
+
+    for (const options of [new Message(SSN_TEXT) as unknown as ComplyOptions, inherited]) {
+      const direct = await comply(options, { useGuard: false });
+      const viaSession = await session.comply(options, { useGuard: false });
+
+      expect(viaSession.verdict).toBe('VIOLATION');
+      expect(viaSession.violations.map(v => v.type)).toEqual(['SSN']);
+      expect(viaSession.layers).toEqual(['normalize', 'regex']);
+      expect(viaSession).toEqual(direct);
+    }
+  });
+
+  it('comply() uses a registryCache passed on the second argument in place of the session cache', async () => {
+    jest
+      .spyOn(RegistryIntelligenceCache.prototype, 'warm')
+      .mockResolvedValue(undefined);
+    const session = await ClassificationSession.create();
+    const callerCache = new RegistryIntelligenceCache();
+    const callerLookup = jest.spyOn(callerCache, 'lookup').mockReturnValue({ status: 'miss' });
+
+    const result = await session.comply(
+      { content: SAFE_CONTENT, sourcePackage: 'agent-z' },
+      { useGuard: false, registryCache: callerCache },
+    );
+
+    expect(callerLookup).toHaveBeenCalledWith('agent-z');
+    expect(result.registrySignals?.status).toBe('miss');
+  });
+
   it('refreshCache() calls refreshIfStale() on the session cache', async () => {
     jest
       .spyOn(RegistryIntelligenceCache.prototype, 'warm')
@@ -645,5 +691,56 @@ describe('ClassificationSession', () => {
     session.refreshCache();
 
     expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What the first argument of comply() can be
+// ---------------------------------------------------------------------------
+
+describe('comply(): the first argument', () => {
+  // Each of these is an object, but read as options it has no content, so
+  // the call would come back CLEAN without anything having been classified.
+  const notOptions: Array<[string, () => unknown, string]> = [
+    ['a Buffer', () => Buffer.from(SSN_TEXT), 'Buffer'],
+    ['a typed array', () => new Uint8Array(Buffer.from(SSN_TEXT)), 'Uint8Array'],
+    ['an ArrayBuffer', () => new ArrayBuffer(8), 'ArrayBuffer'],
+    ['a DataView', () => new DataView(new ArrayBuffer(8)), 'DataView'],
+    ['a boxed String', () => new String(SSN_TEXT), 'String object'],
+    ['a promise', () => Promise.resolve({ content: SSN_TEXT }), 'Promise (await it first)'],
+  ];
+
+  it.each(notOptions)('rejects %s, as a number or an array is rejected', async (_label, make, got) => {
+    jest
+      .spyOn(RegistryIntelligenceCache.prototype, 'warm')
+      .mockResolvedValue(undefined);
+    const session = await ClassificationSession.create();
+    const message =
+      `comply: expected a string or an options object like comply({ content: '...' }), got ${got}`;
+
+    for (const call of [
+      comply(make() as ComplyOptions, { useGuard: false }),
+      session.comply(make() as ComplyOptions, { useGuard: false }),
+    ]) {
+      await expect(call).rejects.toThrow(TypeError);
+      await expect(call).rejects.toThrow(message);
+    }
+  });
+
+  it('reads a content getter once, so the value checked is the value classified', async () => {
+    let reads = 0;
+    const options = {
+      get content(): string {
+        reads += 1;
+        return reads === 1 ? SSN_TEXT : 'nothing to see here';
+      },
+      useGuard: false,
+    } as ComplyOptions;
+
+    const result = await comply(options);
+
+    expect(reads).toBe(1);
+    expect(result.verdict).toBe('VIOLATION');
+    expect(result.originalContent).toBe(SSN_TEXT);
   });
 });

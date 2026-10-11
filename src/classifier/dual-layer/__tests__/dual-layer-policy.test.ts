@@ -7,12 +7,14 @@
  *   - REDACT rule: skipped silently (V1 out-of-scope)
  *   - No policy: behaviour unchanged
  *   - Empty content via comply(): the pack still sees the Registry step's violations
+ *   - A pack the step cannot apply, or a first-argument name that is not a
+ *     built-in pack, is rejected with a TypeError that names the parameter
  */
 
 import { classifyDualLayer } from '..';
-import { comply } from '../../..';
+import { comply, loadPolicyPack, validatePolicyConfig } from '../../..';
 import type { RegistryIntelligenceCache } from '../../../registry';
-import type { PolicyPack } from '../../../types';
+import type { ComplyOptions, PolicyPack } from '../../../types';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -290,12 +292,21 @@ describe('comply(): policy pack on empty content', () => {
     expect(empty.originalContent).toBe('');
   });
 
-  it('applies the pack named on the options object as well', async () => {
-    // The default pack has no rule on a Registry finding, so nothing is added.
-    const result = await comply({ content: '', ...UNKNOWN_PACKAGE, policyPack: 'default' });
+  it('applies the pack named on the options object in place of the one on the second argument', async () => {
+    // The default pack has no rule on a Registry finding. Named on the first
+    // argument it takes the place of the DENY pack on the second, so nothing
+    // is added: for empty content as for any other content.
+    const policyPack = policyOn('DENY');
+    const empty = await comply({ content: '', ...UNKNOWN_PACKAGE, policyPack: 'default' }, { policyPack });
+    const text = await comply(
+      { content: SAFE_CONTENT, ...UNKNOWN_PACKAGE, policyPack: 'default' },
+      { policyPack },
+    );
 
-    expect(result.verdict).toBe('VIOLATION');
-    expect(result.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN']);
+    for (const result of [empty, text]) {
+      expect(result.verdict).toBe('VIOLATION');
+      expect(result.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN']);
+    }
   });
 
   it('leaves empty content CLEAN when the Registry step added nothing', async () => {
@@ -303,5 +314,96 @@ describe('comply(): policy pack on empty content', () => {
 
     expect(result.verdict).toBe('CLEAN');
     expect(result.violations).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A pack the policy step cannot apply is rejected up front, with the
+// parameter named, for empty content as for any other content.
+// ---------------------------------------------------------------------------
+
+describe('policy pack validation', () => {
+  const withRule = (rule: Record<string, unknown>): PolicyPack =>
+    ({ ...DENY_PACK, rules: [{ ...DENY_PACK.rules[0], ...rule }] }) as unknown as PolicyPack;
+
+  it.each([
+    ['an empty object', {}, 'Policy pack rules must be an array (got undefined)'],
+    ['null', null, 'Policy pack must be an object (got null)'],
+    ['a pack name', 'default', 'Policy pack must be an object (got string)'],
+    ['a lower-case action', withRule({ action: 'deny' }), "Rule block-ssn: invalid action 'deny'"],
+    ['patterns that are not an array', withRule({ patterns: 'SSN' }), 'Rule block-ssn: patterns must be an array of strings'],
+    ['a rule with no id', withRule({ id: undefined }), 'Rule 0: missing id'],
+  ])('rejects %s on the second argument of comply()', async (_label, policyPack, problem) => {
+    const options = { policyPack } as unknown as { policyPack: PolicyPack };
+    for (const content of [SAFE_CONTENT, '']) {
+      const call = comply({ content, useGuard: false }, options);
+      await expect(call).rejects.toThrow(TypeError);
+      await expect(call).rejects.toThrow('comply: dualLayerOptions.policyPack is not a valid policy pack');
+      await expect(call).rejects.toThrow(problem);
+    }
+  });
+
+  it('names the option when classifyDualLayer() is given a pack it cannot apply', async () => {
+    const call = classifyDualLayer(SSN_CONTENT, { policyPack: withRule({ action: 'deny' }) });
+    await expect(call).rejects.toThrow(
+      "classifyDualLayer: options.policyPack is not a valid policy pack: Rule block-ssn: invalid action 'deny'",
+    );
+  });
+
+  it('rejects a name on the first argument that is not a built-in pack, a pack object there included', async () => {
+    const cases: Array<[unknown, string]> = [
+      ['hipaa', '"hipaa"'],
+      [DENY_PACK, 'object'],
+      [null, 'null'],
+    ];
+    for (const [policyPack, got] of cases) {
+      for (const content of [SSN_CONTENT, '']) {
+        const call = comply({ content, useGuard: false, policyPack } as unknown as ComplyOptions);
+        await expect(call).rejects.toThrow(TypeError);
+        await expect(call).rejects.toThrow(
+          `comply: options.policyPack must name a built-in pack ('default'), got ${got}. ` +
+            'Pass a pack object on the second argument: comply({ content }, { policyPack })',
+        );
+      }
+    }
+  });
+
+  it('applies the default pack named on the first argument and a pack object on the second', async () => {
+    const named = await comply({ content: SSN_CONTENT, useGuard: false, policyPack: 'default' });
+    const passed = await comply({ content: SSN_CONTENT, useGuard: false }, { policyPack: DENY_PACK });
+
+    expect(named.violations.map(v => v.type)).toEqual(['SSN', 'POLICY_DENY:pii-ssn']);
+    expect(passed.violations.map(v => v.type)).toEqual(['SSN', 'POLICY_DENY:block-ssn']);
+  });
+});
+
+describe('loadPolicyPack() and validatePolicyConfig()', () => {
+  it('loads the default pack with no name or its own name, and throws on any other name', () => {
+    expect(loadPolicyPack().name).toBe('default');
+    expect(loadPolicyPack('default')).toBe(loadPolicyPack());
+    expect(() => loadPolicyPack('hipaa')).toThrow(
+      "loadPolicyPack: unknown policy pack \"hipaa\"; the built-in packs are 'default'",
+    );
+    // A name inherited from Object.prototype is not a pack.
+    expect(() => loadPolicyPack('toString')).toThrow(TypeError);
+  });
+
+  it('reports every problem in a pack without throwing on one that is not an object', () => {
+    expect(validatePolicyConfig(DENY_PACK)).toEqual([]);
+    expect(validatePolicyConfig(loadPolicyPack())).toEqual([]);
+    expect(validatePolicyConfig(undefined)).toEqual(['Policy pack must be an object (got undefined)']);
+    expect(validatePolicyConfig({ rules: 3 })).toEqual([
+      'Policy pack name is required',
+      'Policy pack version is required',
+      'Policy pack rules must be an array (got number)',
+    ]);
+    expect(validatePolicyConfig({ name: 'p', version: '1', rules: [] })).toEqual([
+      'Policy pack must have at least one rule',
+    ]);
+    expect(validatePolicyConfig({ name: 'p', version: '1', rules: ['r', { id: 'x', patterns: [1] }] })).toEqual([
+      'Rule 0: must be an object (got string)',
+      'Rule x: missing action',
+      'Rule x: patterns must be an array of strings',
+    ]);
   });
 });
