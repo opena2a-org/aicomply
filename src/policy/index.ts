@@ -132,9 +132,9 @@ export function validatePolicyConfig(config: PolicyPackConfig | unknown): string
   }
   if (rules.length === 0) errors.push('Policy pack must have at least one rule');
 
-  errors.push(...rulesProblems(rules, false));
-
-  return errors;
+  // Joined with concat(): a pack with many invalid rules has more problems
+  // than one push() call takes as arguments.
+  return errors.concat(rulesProblems(rules, false));
 }
 
 /**

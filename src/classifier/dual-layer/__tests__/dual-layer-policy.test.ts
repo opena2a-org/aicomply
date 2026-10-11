@@ -507,6 +507,21 @@ describe('loadPolicyPack() and validatePolicyConfig()', () => {
     ]);
   });
 
+  it('reports the problems of 50,000 rules that are each {} without throwing', () => {
+    // Three problems a rule make 150,000, more than fit in the arguments of
+    // one call on Node's default stack, so the list is not spread into push().
+    const problems = validatePolicyConfig({ rules: new Array(50000).fill({}) });
+
+    // The pack's own two problems come first, then those of the rules.
+    expect(problems.length).toBe(150002);
+    expect(problems.slice(0, 3)).toEqual([
+      'Policy pack name is required',
+      'Policy pack version is required',
+      'Rule 0: missing id',
+    ]);
+    expect(problems[150001]).toBe('Rule 49999: patterns must be an array of strings');
+  });
+
   it('reports the missing id and patterns of a REDACT rule, which comply() does not read', async () => {
     const policyPack = { name: 'p', version: '1', rules: [{ action: 'REDACT' }] };
 
