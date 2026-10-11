@@ -27,6 +27,7 @@ import type { RegistryLookupResult } from '../../registry';
 import { assembleRiskContext } from '../../risk';
 import { normalize } from '../../normalize';
 import { policyStepProblems } from '../../policy';
+import { showString } from '../../show-string';
 import type { ClassifierResult, ComplyLayer, ComplyResult, PolicyPack, RegistryUnknownAction, RiskContext, Violation, ViolationView } from '../../types';
 import type {
   NanoMindGuardResult,
@@ -128,7 +129,7 @@ export function assertRegistryUnknownAction(
   value: unknown,
 ): asserts value is RegistryUnknownAction | undefined {
   if (value !== undefined && value !== 'violation' && value !== 'deny') {
-    const got = typeof value === 'string' ? JSON.stringify(value) : value === null ? 'null' : typeof value;
+    const got = typeof value === 'string' ? showString(value, '"') : value === null ? 'null' : typeof value;
     throw new TypeError(`onRegistryUnknown must be 'violation' or 'deny' (got ${got})`);
   }
 }
@@ -176,18 +177,21 @@ const MAX_LISTED_POLICY_PACK_PROBLEMS = 10;
  * no name or version, or with an empty `rules` array, is applied: the step
  * does not read the name or the version, and an empty `rules` array adds
  * nothing. `name` is how the error refers to the value, e.g.
- * 'comply: dualLayerOptions.policyPack'. The error lists the first
- * MAX_LISTED_POLICY_PACK_PROBLEMS problems and counts the rest, so a pack
- * with thousands of invalid rules does not produce a message of megabytes.
+ * 'comply: dualLayerOptions.policyPack'. The error lists the first ten
+ * problems, with a rule's id or action cut to 64 characters and its control
+ * characters escaped, and counts the rest, whose messages are not built; so
+ * the message stays short whatever the size of the pack, and it names
+ * validatePolicyConfig(), which lists every problem.
  */
 export function assertPolicyPack(value: unknown, name: string): asserts value is PolicyPack | undefined {
   if (value === undefined) return;
-  const errors = policyStepProblems(value);
-  if (errors.length > 0) {
-    const listed = errors.slice(0, MAX_LISTED_POLICY_PACK_PROBLEMS).join('; ');
-    const rest = errors.length - MAX_LISTED_POLICY_PACK_PROBLEMS;
-    const more = rest > 0 ? `; and ${rest} more ${rest === 1 ? 'problem' : 'problems'}` : '';
-    throw new TypeError(`${name} is not a valid policy pack: ${listed}${more}`);
+  const { messages, total } = policyStepProblems(value, MAX_LISTED_POLICY_PACK_PROBLEMS);
+  if (total > 0) {
+    const rest = total - messages.length;
+    const more = rest > 0
+      ? `; and ${rest} more ${rest === 1 ? 'problem' : 'problems'}, which validatePolicyConfig() lists`
+      : '';
+    throw new TypeError(`${name} is not a valid policy pack: ${messages.join('; ')}${more}`);
   }
 }
 

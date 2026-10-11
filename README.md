@@ -282,7 +282,16 @@ const result = await comply(
 );
 ```
 
-`policyPack` on the first argument takes the name of a built-in pack instead. `'default'` is the only one: it denies `SSN`, `PAN`, `CREDENTIAL`, `CUI`, `IBAN` and `MRN` findings and warns on `NPI`. A name there is used in place of a pack on the second argument. Any other name and a pack object on the first argument are rejected with a `TypeError`. So is a pack on the second argument that is not an object, whose `rules` is not an array, or that has a rule that is not an object or whose `action` is not `DENY`, `REDACT` or `WARN` (a lower-case `'deny'` included). A rule other than a `REDACT` rule also needs an `id` that is a non-empty string and `patterns` that is an array of strings. The error lists the first ten problems with the pack and counts the rest; `validatePolicyConfig()` returns all of them, along with a missing `name` or `version` and an empty `rules` array. A pack with no `name` or `version`, or with an empty `rules` array, is applied.
+`policyPack` on the first argument takes the name of a built-in pack instead. `'default'` is the only one: it denies `SSN`, `PAN`, `CREDENTIAL`, `CUI`, `IBAN` and `MRN` findings and warns on `NPI`. A name there is used in place of a pack on the second argument. Any other name and a pack object on the first argument are rejected with a `TypeError`. So is a pack on the second argument that is not an object, whose `rules` is not an array, or that has a rule that is not an object or whose `action` is not `DENY`, `REDACT` or `WARN` (a lower-case `'deny'` included). A rule other than a `REDACT` rule also needs an `id` that is a non-empty string and `patterns` that is an array of strings with no empty slots. The error lists the first ten problems with the pack and counts the rest. A pack with no `name` or `version`, or with an empty `rules` array, is applied.
+
+`validatePolicyConfig()` returns every problem with a pack, one message each. That includes the ones the error leaves out, a missing `name` or `version`, an empty `rules` array, and a `REDACT` rule's missing or invalid `id` and `patterns`, which comply() does not read:
+
+```typescript
+import { validatePolicyConfig } from '@opena2a/aicomply';
+
+validatePolicyConfig({ name: 'p', version: '1', rules: [{ action: 'REDACT' }] });
+// ['Rule 0: missing id', 'Rule 0: patterns must be an array of strings']
+```
 
 ## Verdict semantics
 

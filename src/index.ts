@@ -79,6 +79,7 @@ import {
 import { packIdentity } from './classifier/regex/pack';
 import { RegistryIntelligenceCache } from './registry';
 import { builtInPolicyPackNames, isBuiltInPolicyPackName, loadPolicyPack } from './policy';
+import { showString } from './show-string';
 import type { DualLayerOptions } from './classifier/dual-layer';
 import type { NanoMindAdapterOptions } from './classifier/guard-client/nanomind-adapter';
 import type {
@@ -303,7 +304,7 @@ function builtInTag(value: object): string {
 function assertPolicyPackName(value: unknown): void {
   if (value === undefined || isBuiltInPolicyPackName(value)) return;
   const got = typeof value === 'string'
-    ? JSON.stringify(value)
+    ? showString(value, '"')
     : value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
   throw new TypeError(
     `comply: options.policyPack must name a built-in pack (${builtInPolicyPackNames()}), got ${got}. ` +
