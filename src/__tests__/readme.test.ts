@@ -183,6 +183,19 @@ describe('README', () => {
     }
   });
 
+  it('gives a sub-millisecond figure for the regex layer only, since a call that reaches the Guard adds its latency', () => {
+    const claims = LINES.filter((l) => /\bsub-(ms|millisecond)\b/i.test(l));
+    expect(claims.length).toBeGreaterThan(0);
+    for (const claim of claims) {
+      // A bullet is about the layer its bold lead names; prose is read one
+      // sentence at a time.
+      const subject = claim.startsWith('- ')
+        ? (/\*\*([^*]+)\*\*/.exec(claim) ?? ['', ''])[1]
+        : claim.split(/(?<=[.:])\s+/).find((s) => /\bsub-(ms|millisecond)\b/i.test(s))!;
+      expect(subject).toMatch(/\bregex\b/i);
+    }
+  });
+
   it('lists only Government markings the regex layer reports as CUI', async () => {
     // Each comma-separated example in the Government row is scanned inside a
     // sentence and must come back as one CUI finding over the whole marking,
