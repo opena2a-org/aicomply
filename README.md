@@ -49,12 +49,14 @@ The CLI is a try-path. The library API below is the production surface.
 
 `aicomply` is an inline check between "tool returned content" and "send to model," which most agent stacks lack even though every agent that calls a hosted LLM (Anthropic, OpenAI, Bedrock, Vertex, …) copies the conversation - system prompt, tool outputs, retrieved documents, user input - into a third party's logs. If your agent reads a support ticket containing an SSN, that SSN goes to the provider. If your agent reads `.env` to summarize it, your AWS key goes too.
 
-It runs inline, sub-millisecond, with no external calls of its own. You hand it the content; it returns a verdict (`CLEAN` / `VIOLATION` / `DENY`) and structured findings. You decide what to do next - block, redact, log, or pass.
+It runs inline, sub-millisecond. You hand it the content; it returns a verdict (`CLEAN` / `VIOLATION` / `DENY`) and structured findings. You decide what to do next - block, redact, log, or pass.
 
 Two detection layers run in parallel:
 
 - A deterministic **regex layer** with adversarial-mutation handling (NFKC homoglyph folding, zero-width strip, targeted whitespace compaction, bounded Base64/URL decode). Always on, ~sub-ms.
 - An optional **semantic Guard layer (preview)** powered by [NanoMind](https://huggingface.co/opena2a/nanomind-security-classifier). It targets prompt-injection, tool-misuse, data-extraction, and exfiltration patterns the regex layer can't see. The current model has a high benign false-positive rate and is **not yet production-ready** - see [Guard status](#guard-status-preview-not-production-ready). Active only when `@nanomind/daemon` is running locally; aicomply runs regex-only otherwise.
+
+The Guard attempt is the one network request `comply()` makes. For each non-empty input it POSTs the input verbatim to the loopback address `http://127.0.0.1:47200/v1/infer`, so the request stays on the host, and whichever local process holds that port receives the input. Pass `useGuard: false` to make no request - see [What the Guard attempt sends](#what-the-guard-attempt-sends).
 
 ## Install
 
@@ -137,6 +139,26 @@ aicomply auto-detects the daemon on the default URL. Pass `baseUrl` to `classify
 
 If the daemon is not installed, not running, or unreachable, aicomply silently falls back to regex-only - the v1.0 behavior. The Guard is a defense-in-depth layer, not a gate.
 
+### What the Guard attempt sends
+
+`comply()` attempts the Guard whether or not a daemon is running. For each non-empty input (empty and whitespace-only input is not sent) it makes one request, `POST http://127.0.0.1:47200/v1/infer`, with the input verbatim in the JSON body:
+
+```json
+{"intent":"INTENT_CHECK","input":"My SSN is 123-45-6789."}
+```
+
+The address is loopback, so the request does not leave the host, and with nothing listening on port 47200 the connection is refused and the result is regex-only. A local process other than the daemon that holds the port receives every classified input all the same.
+
+To make no request, pass `useGuard: false`:
+
+```typescript
+const result = await comply({ content, useGuard: false });
+
+result.layers; // ['normalize', 'regex'] - regex-only, nothing was sent
+```
+
+`comply(content, { useGuard: false })`, `classifyDualLayer()` and `ClassificationSession.comply()` take the same option, which matches `use_guard=False` in the Python package. A value that is not a boolean is rejected with a `TypeError`.
+
 ### Guard status: preview, not production-ready
 
 The Guard wiring is complete and the daemon runs, but the current model
@@ -214,7 +236,7 @@ const result = await session.comply({
 });
 ```
 
-The cache warms once on `create()`. Subsequent `comply()` calls do no network I/O (contract AC-005 in [SECURITY.md](./SECURITY.md)).
+The cache warms once on `create()`. Subsequent `comply()` calls make no Registry request (contract AC-005 in [SECURITY.md](./SECURITY.md)). Each call still makes the Guard request described in [What the Guard attempt sends](#what-the-guard-attempt-sends) unless you pass `useGuard: false`.
 
 ## Verdict semantics
 

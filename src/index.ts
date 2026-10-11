@@ -85,7 +85,13 @@ export type { DualLayerOptions } from './classifier/dual-layer';
  * When sourcePackage and registryCache are set on options, Registry L2 logic
  * runs after classification (fleet anomaly threshold + supply-chain hard block).
  * The cache must be warmed before calling comply() - use ClassificationSession
- * or warmRegistryCache() to ensure this (AC-005: no network I/O in the hot path).
+ * or warmRegistryCache() to ensure this (AC-005: no Registry network I/O in the
+ * hot path).
+ *
+ * Unless a signed Guard result is supplied, each call with non-empty content
+ * sends one POST carrying the content verbatim to the nanomind-daemon address
+ * (`http://127.0.0.1:47200/v1/infer`) and falls back to regex-only when nothing
+ * answers. Pass `useGuard: false` to make no such request.
  *
  * @param options - Either a bare string to classify, or an options object with
  *   `content` plus optional policy/risk/registry context. `comply('text')` is
@@ -118,6 +124,13 @@ export async function comply(
       `comply: options.content must be a string (got ${typeof opts.content})`,
     );
   }
+  // `useGuard: false` is how a caller keeps content off the Guard request, so
+  // a near miss such as the string 'false' is rejected, not read as "attempt
+  // it". The value on `options` wins over the one on `dualLayerOptions`.
+  const useGuard = opts.useGuard !== undefined ? opts.useGuard : dualLayerOptions?.useGuard;
+  if (useGuard !== undefined && typeof useGuard !== 'boolean') {
+    throw new TypeError(`comply: useGuard must be a boolean (got ${typeof useGuard})`);
+  }
   if (!opts.content) {
     // Empty / missing content. Populate the audit fields so consumers can
     // rely on `originalContent` / `normalizedContent` / `normalizations`
@@ -142,6 +155,7 @@ export async function comply(
     ...(opts.registryCache !== undefined && { registryCache: opts.registryCache }),
     ...(opts.policyPack !== undefined && { policyPack: loadPolicyPack(opts.policyPack) }),
     ...(opts.riskContext !== undefined && { riskContext: opts.riskContext }),
+    ...(opts.useGuard !== undefined && { useGuard: opts.useGuard }),
   };
 
   return classifyDualLayer(opts.content, mergedOptions);
@@ -200,7 +214,8 @@ export class ClassificationSession {
 
   /**
    * Run compliance classification, applying L2 registry logic when sourcePackage
-   * is provided. Uses the session's warmed cache - no network I/O in the hot path.
+   * is provided. Uses the session's warmed cache - no Registry network I/O in
+   * the hot path. The Guard attempt still runs unless `useGuard: false` is set.
    */
   async comply(
     options: ComplyOptions,
