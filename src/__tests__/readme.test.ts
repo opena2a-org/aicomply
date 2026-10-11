@@ -324,6 +324,7 @@ describe('README', () => {
       [`  ${call}`, result],
       [`const problems = ${call}`, result],
       [call, '', result],
+      [call, call, result],
       [call, result, "// 'a second comment line'"],
     ];
     for (const sample of otherShapes) {
