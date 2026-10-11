@@ -325,6 +325,11 @@ describe('README', () => {
       [`const problems = ${call}`, result],
       [call, '', result],
       [call, call, result],
+      // A call with no comment is followed two lines on by a call and its
+      // comment here, so a walker that skips such a call returns an example
+      // instead of failing.
+      [call, call, call, result],
+      [call, '', call, result],
       [call, result, "// 'a second comment line'"],
     ];
     for (const sample of otherShapes) {
