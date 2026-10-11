@@ -15,6 +15,8 @@ import { dirname, join } from 'path';
 import * as pkg from '../index';
 import { comply } from '../index';
 import { renderHuman } from '../cli';
+import * as regexLayer from '../classifier/regex';
+import * as guardAdapter from '../classifier/guard-client/nanomind-adapter';
 
 const ROOT = join(__dirname, '..', '..');
 const README = readFileSync(join(ROOT, 'README.md'), 'utf8');
@@ -140,6 +142,32 @@ describe('README', () => {
     // A function the README points a reader to must be importable from the package.
     const named = [...claim.matchAll(/`([a-z][A-Za-z0-9]*)`/g)].map((m) => m[1]);
     for (const name of named) expect(Object.keys(pkg)).toContain(name);
+  });
+
+  it('says the detection layers run one after the other, in the order comply calls them', async () => {
+    const at = lineOf(/\bdetection layers\b/);
+    expect(at).toBeGreaterThan(0);
+    const claim = LINES[at - 1];
+    expect(claim).not.toMatch(/\b(in parallel|concurrently|simultaneously|at the same time)\b/i);
+    expect(claim).toMatch(/\bone after the other\b/);
+    expect(claim.indexOf('regex')).toBeGreaterThanOrEqual(0);
+    expect(claim.indexOf('regex')).toBeLessThan(claim.indexOf('Guard'));
+
+    // The regex scan is synchronous, so every call to it has returned before
+    // the Guard request is issued.
+    const regexSpy = jest.spyOn(regexLayer, 'classifyWithRegex');
+    const guardSpy = jest.spyOn(guardAdapter, 'classifyWithNanoMindDaemon').mockResolvedValue(null);
+    try {
+      await comply({ content: 'My SSN is 123-45-6789.' });
+      expect(regexSpy).toHaveBeenCalled();
+      expect(guardSpy).toHaveBeenCalledTimes(1);
+      expect(Math.max(...regexSpy.mock.invocationCallOrder)).toBeLessThan(
+        guardSpy.mock.invocationCallOrder[0],
+      );
+    } finally {
+      regexSpy.mockRestore();
+      guardSpy.mockRestore();
+    }
   });
 });
 
