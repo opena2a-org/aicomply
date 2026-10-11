@@ -475,6 +475,45 @@ describe('policy pack validation', () => {
       ),
     );
   });
+
+  it('lists the first ten problems and counts the rest, so the message does not grow with the pack', async () => {
+    // Each rule is missing its id and action and has no patterns: three
+    // problems per rule.
+    const packOf = (count: number): PolicyPack =>
+      ({ name: 'p', version: '1', rules: new Array(count).fill({}) }) as unknown as PolicyPack;
+    const prefix = 'comply: dualLayerOptions.policyPack is not a valid policy pack: ';
+    const firstTen =
+      'Rule 0: missing id; Rule 0: missing action; Rule 0: patterns must be an array of strings; ' +
+      'Rule 1: missing id; Rule 1: missing action; Rule 1: patterns must be an array of strings; ' +
+      'Rule 2: missing id; Rule 2: missing action; Rule 2: patterns must be an array of strings; ' +
+      'Rule 3: missing id';
+
+    const withLastRule = (rule: Record<string, unknown>): PolicyPack =>
+      ({ name: 'p', version: '1', rules: [{}, {}, {}, rule] }) as unknown as PolicyPack;
+    const cases: Array<[PolicyPack, string]> = [
+      // Ten problems are listed in full, with no count after them.
+      [withLastRule({ action: 'DENY', patterns: [] }), firstTen],
+      [withLastRule({ patterns: [] }), `${firstTen}; and 1 more problem`],
+      [packOf(4), `${firstTen}; and 2 more problems`],
+    ];
+    for (const [policyPack, problems] of cases) {
+      await expect(comply({ content: SSN_CONTENT, useGuard: false }, { policyPack })).rejects.toThrow(
+        new TypeError(prefix + problems),
+      );
+    }
+
+    const large = packOf(45000);
+    expect(validatePolicyConfig(large)).toHaveLength(135000);
+    for (const content of [SSN_CONTENT, '']) {
+      const call = comply({ content, useGuard: false }, { policyPack: large });
+      await expect(call).rejects.toThrow(new TypeError(`${prefix}${firstTen}; and 134990 more problems`));
+    }
+    await expect(classifyDualLayer(SSN_CONTENT, { useGuard: false, policyPack: large })).rejects.toThrow(
+      new TypeError(
+        `classifyDualLayer: options.policyPack is not a valid policy pack: ${firstTen}; and 134990 more problems`,
+      ),
+    );
+  });
 });
 
 describe('loadPolicyPack() and validatePolicyConfig()', () => {

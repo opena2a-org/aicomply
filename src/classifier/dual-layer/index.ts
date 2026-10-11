@@ -161,6 +161,9 @@ export function assertGuardOptions(
   }
 }
 
+/** How many problems assertPolicyPack() lists before it counts the rest. */
+const MAX_LISTED_POLICY_PACK_PROBLEMS = 10;
+
 /**
  * Reject a policyPack that the policy step cannot apply: not an object, a
  * `rules` that is not an array, or a rule that is not an object, has an
@@ -173,13 +176,18 @@ export function assertGuardOptions(
  * no name or version, or with an empty `rules` array, is applied: the step
  * does not read the name or the version, and an empty `rules` array adds
  * nothing. `name` is how the error refers to the value, e.g.
- * 'comply: dualLayerOptions.policyPack'.
+ * 'comply: dualLayerOptions.policyPack'. The error lists the first
+ * MAX_LISTED_POLICY_PACK_PROBLEMS problems and counts the rest, so a pack
+ * with thousands of invalid rules does not produce a message of megabytes.
  */
 export function assertPolicyPack(value: unknown, name: string): asserts value is PolicyPack | undefined {
   if (value === undefined) return;
   const errors = policyStepProblems(value);
   if (errors.length > 0) {
-    throw new TypeError(`${name} is not a valid policy pack: ${errors.join('; ')}`);
+    const listed = errors.slice(0, MAX_LISTED_POLICY_PACK_PROBLEMS).join('; ');
+    const rest = errors.length - MAX_LISTED_POLICY_PACK_PROBLEMS;
+    const more = rest > 0 ? `; and ${rest} more ${rest === 1 ? 'problem' : 'problems'}` : '';
+    throw new TypeError(`${name} is not a valid policy pack: ${listed}${more}`);
   }
 }
 
