@@ -16,7 +16,7 @@
  *   - U+FEFF BYTE ORDER MARK / ZERO WIDTH NO-BREAK SPACE
  *
  * NOT stripped:
- *   - U+00AD SOFT HYPHEN - visible in some renderers, deferred to v1.1.
+ *   - U+00AD SOFT HYPHEN - visible in some renderers.
  *   - Combining marks (U+0300–U+036F) - would break legitimate accented prose.
  */
 

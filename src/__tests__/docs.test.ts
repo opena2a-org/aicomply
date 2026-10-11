@@ -4,6 +4,8 @@
  * phrase is rejected wherever it appears, including when a line wrap splits it.
  * The Markdown also gives one account of the semantic Guard: a claim that its
  * model has not shipped or that `comply()` is always regex-only is rejected.
+ * A release named as the target of work still to come must be one the
+ * package version has not yet reached.
  */
 
 import { execFileSync } from 'child_process';
@@ -78,6 +80,35 @@ function staleGuardClaims(file: string, text: string): string[] {
   return STALE_GUARD_CLAIMS.flatMap((re) => occurrences(re, file, text));
 }
 
+/** A release named as the target of work still to come, such as "deferred to v1.1" or "Target: 1.1". */
+const RELEASE_TARGET =
+  /\b(?:deferred|planned|scheduled|slated|targeted)\s+(?:to|for|in)\s+v?(\d+\.\d+(?:\.\d+)?)\b|\btarget\s*:\s*v?(\d+\.\d+(?:\.\d+)?)\b/gi;
+
+function versionParts(version: string): number[] {
+  const [major = 0, minor = 0, patch = 0] = version.split('.').map(Number);
+  return [major, minor, patch];
+}
+
+/** True when release `a` is at or before release `b`. */
+function atOrBefore(a: string, b: string): boolean {
+  const x = versionParts(a);
+  const y = versionParts(b);
+  for (let i = 0; i < 3; i += 1) {
+    if (x[i] !== y[i]) return x[i] < y[i];
+  }
+  return true;
+}
+
+/**
+ * `file:line (version)` for each release target in `text` that `current`
+ * has already reached, so the promised work can no longer land there.
+ */
+function passedTargets(file: string, text: string, current: string): string[] {
+  return [...text.matchAll(RELEASE_TARGET)]
+    .filter((m) => atOrBefore(m[1] ?? m[2], current))
+    .map((m) => `${file}:${text.slice(0, m.index).split('\n').length} (${m[1] ?? m[2]})`);
+}
+
 describe('docs', () => {
   it('carries no "why this exists" heading or phrase in tracked Markdown', () => {
     const files = trackedMarkdown();
@@ -103,6 +134,16 @@ describe('docs', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('names no release target that the package version has already passed', () => {
+    const { version } = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
+      version: string;
+    };
+    const offenders = trackedMarkdown().flatMap((file) =>
+      passedTargets(file, readFileSync(join(ROOT, file), 'utf8'), version),
+    );
+    expect(offenders).toEqual([]);
+  });
+
   it('flags a stale Guard claim across a line wrap and leaves the preview account alone', () => {
     expect(
       staleGuardClaims('a.md', 'but no NanoMind-Guard binary is published yet.\nUntil then `comply()`\nis regex-only.'),
@@ -117,6 +158,18 @@ describe('docs', () => {
         'The Guard is a preview. `comply()` runs regex-only whenever no daemon is reachable, until a recalibrated model ships.',
       ),
     ).toEqual([]);
+  });
+
+  it('flags a passed target in either phrasing and across a line wrap, not a later one', () => {
+    expect(passedTargets('a.md', 'Not stripped - deferred to v1.1.\n', '2.2.3')).toEqual([
+      'a.md:1 (1.1)',
+    ]);
+    expect(passedTargets('b.md', 'A backend.\nTarget:\n2.2 with an option.', '2.2.3')).toEqual([
+      'b.md:2 (2.2)',
+    ]);
+    expect(passedTargets('c.md', 'Planned for 2.2.3.', '2.2.3')).toEqual(['c.md:1 (2.2.3)']);
+    expect(passedTargets('d.md', 'Target: 2.3, deferred to v3.0.', '2.2.3')).toEqual([]);
+    expect(passedTargets('e.md', 'Only Base64 is decoded in 1.0. It targets 1.1 users.', '2.2.3')).toEqual([]);
   });
 
   it('names a tree that is not a git checkout in place of the raw git error', () => {

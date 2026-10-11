@@ -2,7 +2,7 @@
 
 These characters carry no semantic content for our detection patterns - stripping
 them is lossless for our purposes and defeats e.g. inserting U+200B between SSN
-digits. NOT stripped: U+00AD soft hyphen (v1.1), combining marks (would break
+digits. NOT stripped: U+00AD soft hyphen, combining marks (would break
 legitimate accented prose).
 """
 

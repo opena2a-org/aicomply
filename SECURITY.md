@@ -153,8 +153,8 @@ regex-only.
   fold these because they are separate semantic letters. Document-level
   defense requires the Guard layer.
 - **Soft hyphen (U+00AD) and combining marks (U+0300–U+036F).** Not
-  stripped from the normalized stream - deferred to v1.1. An attacker
-  can hide PII by injecting soft hyphens between digits.
+  stripped from the normalized stream. An attacker can hide PII by
+  injecting soft hyphens between digits.
 - **HTML entities, hex-encoded payloads, base32, ROT13.** Only Base64
   and URL (percent) encoding are decoded in 1.0. Other encodings pass
   through unchanged.
@@ -216,12 +216,12 @@ regex-only.
   implemented via [`@noble/post-quantum`](https://www.npmjs.com/package/@noble/post-quantum).
   This is **not** a FIPS-validated implementation. Do not use this package in
   contexts that require a FIPS 140-3 boundary.
-- **FIPS roadmap (post-1.0).** A FIPS-validated backend is planned as a
-  pluggable verifier option for consumers under FIPS 140-3 obligations.
-  Target: 1.1 with an opt-in option (`{ crypto: 'fips' }`) backed by a
-  validated library (AWS LC, BoringSSL FIPS, or equivalent). Until then,
-  the only validated path is to verify ARP signatures out-of-band before
-  passing classifications to AIComply.
+- **FIPS roadmap.** No released version offers a FIPS-validated
+  verifier, and there is no option to select one. A pluggable verifier
+  backed by a validated library (AWS LC, BoringSSL FIPS, or equivalent)
+  is planned for consumers under FIPS 140-3 obligations; no release is
+  set for it yet. Until it ships, the only validated path is to verify
+  ARP signatures out-of-band before passing classifications to AIComply.
 - **Algorithm choice.** ML-DSA-44 (NIST FIPS 204, Dilithium) is the
   AIComply-side verify target. The signer (HMA / ARP issuer) uses ML-DSA-44 as
   well to match. AIM / ATX use ML-DSA-65 for issuer signatures - they are
