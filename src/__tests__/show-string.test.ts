@@ -1,9 +1,9 @@
 /**
  * Tests for showString(), the helper error messages use to show a string a
- * caller passed. It escapes control characters and line separators as JSON
- * does, cuts a value longer than 64 characters to its first 64 (never inside a
- * surrogate pair) followed by `...` and its length, and with a quote encloses
- * the value in it and escapes that quote and backslashes inside.
+ * caller passed. It writes control characters and line separators in JSON's
+ * escape notation, cuts a value longer than 64 characters to its first 64
+ * (never inside a surrogate pair) followed by `...` and its length, and with a
+ * quote encloses the value in it and escapes that quote and backslashes inside.
  */
 
 import { showString } from '../show-string';
@@ -12,6 +12,8 @@ describe('showString()', () => {
   it('shows a value of up to 64 characters whole', () => {
     expect(showString('')).toBe('');
     expect(showString('i'.repeat(64))).toBe('i'.repeat(64));
+    // A lone high surrogate at the 64th character is not the start of a cut.
+    expect(showString(`${'x'.repeat(63)}\ud83d`)).toBe(`${'x'.repeat(63)}\ud83d`);
   });
 
   it('cuts a longer value to its first 64 characters, followed by ... and its length', () => {
@@ -30,10 +32,17 @@ describe('showString()', () => {
     expect(showString(`${'x'.repeat(62)}\u{1F600}tail`)).toBe(`${'x'.repeat(62)}\u{1F600}... (length 68)`);
   });
 
-  it('escapes control characters and line separators as JSON does', () => {
+  it("writes control characters and line separators in JSON's escape notation", () => {
     expect(showString('a\bb\tc\nd\fe\rf')).toBe('a\\bb\\tc\\nd\\fe\\rf');
     expect(showString('\u0000\u0007\u001f\u007f\u009f')).toBe('\\u0000\\u0007\\u001f\\u007f\\u009f');
-    expect(showString('a b c')).toBe('a\\u2028b\\u2029c');
+    expect(showString('a\u{2028}b\u{2029}c')).toBe('a\\u2028b\\u2029c');
+  });
+
+  it('escapes U+007F to U+009F, U+2028 and U+2029, which JSON.stringify() leaves as they are', () => {
+    const unescapedByJson = '\u007f\u0080\u009f\u{2028}\u{2029}';
+
+    expect(JSON.stringify(unescapedByJson)).toBe(`"${unescapedByJson}"`);
+    expect(showString(unescapedByJson)).toBe('\\u007f\\u0080\\u009f\\u2028\\u2029');
   });
 
   it('cuts a value before escaping it, and counts the length of the value as passed', () => {

@@ -76,26 +76,55 @@ function commonJsSample(): string {
 }
 
 /**
- * Each `validatePolicyConfig(...)` call in the README's validatePolicyConfig()
- * sample, with the pack it passes and the array its `//` comment shows.
+ * The lines of the README's validatePolicyConfig() sample, from the one after
+ * its import to the end of the fence.
  */
-function validatePolicyConfigExamples(): { call: string; pack: unknown; shown: unknown }[] {
+function validatePolicyConfigSample(): string[] {
   const importLine = lineOf(/^import \{ validatePolicyConfig \} from '@opena2a\/aicomply';$/);
   expect(importLine).toBeGreaterThan(1);
   const endLine = lineOf(/^```$/, importLine + 1);
   expect(endLine).toBeGreaterThan(importLine);
+  return LINES.slice(importLine, endLine - 1);
+}
+
+/**
+ * Each example in `sample`, the lines of a validatePolicyConfig() sample, with
+ * the pack its `validatePolicyConfig(...)` call passes and the array its `//`
+ * comment shows. An example is a call on one line and its comment on the next.
+ * Any other line that is not blank fails the test, so a call written over
+ * several lines, or with its comment beside it, is not left out of the
+ * comparison.
+ */
+function validatePolicyConfigExamples(sample: string[]): { call: string; pack: unknown; shown: unknown }[] {
   const examples: { call: string; pack: unknown; shown: unknown }[] = [];
-  for (let i = importLine; i < endLine - 1; i++) {
-    const call = /^validatePolicyConfig\((.*)\);$/.exec(LINES[i]);
-    if (!call) continue;
-    const comment = /^\/\/ (.*)$/.exec(LINES[i + 1]);
-    expect({ call: LINES[i], comment: comment !== null }).toEqual({ call: LINES[i], comment: true });
-    examples.push({ call: LINES[i], pack: literal(call[1]), shown: literal(comment![1]) });
+  let i = 0;
+  while (i < sample.length) {
+    const line = sample[i];
+    if (line.trim() === '') {
+      i += 1;
+      continue;
+    }
+    const call = /^validatePolicyConfig\((.*)\);$/.exec(line);
+    expect({ line, oneLineCall: call !== null }).toEqual({ line, oneLineCall: true });
+    const comment = /^\/\/ (.*)$/.exec(sample[i + 1] ?? '');
+    expect({ call: line, comment: comment !== null }).toEqual({ call: line, comment: true });
+    examples.push({ call: line, pack: literal(call![1]), shown: literal(comment![1]) });
+    i += 2;
   }
   return examples;
 }
 
-/** The value of a JavaScript literal as the README writes it. */
+/**
+ * The value of a JavaScript literal as the README writes it. compileFunction()
+ * is called without a `parsingContext`, so the value is built in Node's main
+ * context, not in the one jest runs this file in. Its prototypes are the main
+ * context's: `literal('[1]') instanceof Array` is false here, and
+ * `toStrictEqual` fails on a value that `toEqual` accepts.
+ * validatePolicyConfig() makes no `instanceof` or prototype-identity check on a
+ * pack, so it returns for these values what it returns for a caller's. If such
+ * a check is added to it, a README example can fail here on a pack that a
+ * caller's own code passes, and the cause is this function, not the validator.
+ */
 function literal(source: string): unknown {
   return compileFunction(`return (${source});`)();
 }
@@ -271,7 +300,7 @@ describe('README', () => {
   it('shows validatePolicyConfig() messages as it returns them, for a rule named by index and one named by id', () => {
     // A rule with a non-empty string id is named by that id in quotes
     // (`Rule 'block-ssn': ...`), any other rule by its index (`Rule 0: ...`).
-    const examples = validatePolicyConfigExamples();
+    const examples = validatePolicyConfigExamples(validatePolicyConfigSample());
     expect(examples.length).toBeGreaterThan(0);
     for (const { call, pack, shown } of examples) {
       expect({ call, returns: pkg.validatePolicyConfig(pack) }).toEqual({ call, returns: shown });
@@ -279,6 +308,33 @@ describe('README', () => {
     const messages = examples.flatMap(({ shown }) => shown as string[]);
     expect(messages.some((m) => /^Rule \d+: /.test(m))).toBe(true);
     expect(messages.some((m) => /^Rule '[^']+': /.test(m))).toBe(true);
+  });
+
+  it('fails on a validatePolicyConfig() example that is not a one-line call with its result on the next line', () => {
+    const call = "validatePolicyConfig({ name: 'p', version: '1', rules: [] });";
+    const result = "// ['not what it returns']";
+    // The one-line form is read, so the test above compares it.
+    expect(validatePolicyConfigExamples(['', call, result, ''])).toEqual([
+      { call, pack: { name: 'p', version: '1', rules: [] }, shown: ['not what it returns'] },
+    ]);
+
+    const otherShapes = [
+      ['validatePolicyConfig({', "  name: 'p', version: '1', rules: [] });", result],
+      [`${call} ${result}`],
+      [`  ${call}`, result],
+      [`const problems = ${call}`, result],
+      [call, '', result],
+      [call, result, "// 'a second comment line'"],
+    ];
+    for (const sample of otherShapes) {
+      let outcome: unknown = 'fails';
+      try {
+        outcome = validatePolicyConfigExamples(sample);
+      } catch {
+        // The walker failed on this shape, as it must.
+      }
+      expect({ sample, outcome }).toEqual({ sample, outcome: 'fails' });
+    }
   });
 
   it('describes CLEAN as what the layers found, in the words the CLI prints', () => {

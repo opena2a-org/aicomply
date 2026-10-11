@@ -14,11 +14,13 @@ const ESCAPES: Readonly<Record<string, string>> = {
 
 /**
  * A string a caller passed, as an error message shows it. Control characters
- * and line separators are escaped as JSON escapes them (`\n`, `\u0000`), so
- * the value cannot break the message across lines, and a value longer than 64
- * characters is cut to its first 64, followed by `...` and its length, so the
- * message does not grow with the value. With a `quote`, the value is enclosed
- * in it, and that quote and backslashes inside are escaped.
+ * and line separators are written in JSON's escape notation (`\n`, `\u0000`),
+ * so the value cannot break the message across lines. That includes U+007F to
+ * U+009F, U+2028 and U+2029, which JSON.stringify() leaves as they are. A
+ * value longer than 64 characters is cut to its first 64, followed by `...`
+ * and its length, so the message does not grow with the value. With a `quote`,
+ * the value is enclosed in it, and that quote and backslashes inside are
+ * escaped.
  */
 export function showString(value: string, quote: '' | '"' | "'" = ''): string {
   let shown = value;
