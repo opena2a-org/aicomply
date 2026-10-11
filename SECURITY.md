@@ -100,8 +100,10 @@ regression gate rather than an SLA. The corpus and harness are public
 
 ### Semantic Guard layer (added in 2.0)
 
-When `@nanomind/daemon` is reachable on the configured URL, aicomply
-runs every input through the daemon's `/v1/infer` endpoint in addition
+When `@nanomind/daemon` is reachable on the configured URL
+(`http://127.0.0.1:47200` by default; set another with
+`guardOptions: { baseUrl }` on `comply()` or `ClassificationSession.create()`),
+aicomply runs every input through the daemon's `/v1/infer` endpoint in addition
 to the regex layer. The daemon hosts a Mamba TME classifier
 (`nanomind-security-classifier` v0.5.0) and returns a canonical
 `attackClass` plus confidence. aicomply maps any `attackClass !== '' &&
@@ -174,7 +176,7 @@ regex-only.
   MRNs. Customers in those domains should supply a custom regex or
   scan with a dedicated pattern.
 - **Guard fallback observability.** When the nanomind-daemon adapter
-  cannot reach `http://127.0.0.1:47200/v1/infer` (connection refused,
+  cannot reach `/v1/infer` on the configured URL (connection refused,
   timeout, non-2xx, malformed response), it silently falls back to
   regex-only. The library does not log these conditions (no library
   should write to stderr without consent); the Guard is treated as a
