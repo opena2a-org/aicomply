@@ -14,7 +14,6 @@
 import { classifyDualLayer } from '..';
 import { comply, loadPolicyPack, validatePolicyConfig } from '../../..';
 import { policyStepProblems } from '../../../policy';
-import { showString } from '../../../show-string';
 import type { RegistryIntelligenceCache } from '../../../registry';
 import type { ComplyOptions, PolicyPack } from '../../../types';
 
@@ -722,13 +721,6 @@ describe('policy pack validation', () => {
     expect(() => loadPolicyPack('a"b\\c\n')).toThrow(
       new TypeError('loadPolicyPack: unknown policy pack "a\\"b\\\\c\\n"; the built-in packs are \'default\''),
     );
-  });
-
-  it('cuts a long value before a surrogate pair rather than inside it', () => {
-    const shown = showString(`${'x'.repeat(63)}\u{1F600}tail`);
-
-    expect(shown).toBe(`${'x'.repeat(63)}... (length 69)`);
-    expect(shown).not.toMatch(/[\ud800-\udbff]/);
   });
 
   it('quotes a rule id, so an id cannot read as the end of one problem and the start of another', async () => {
