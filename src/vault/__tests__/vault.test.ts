@@ -1,3 +1,4 @@
+import { createDecipheriv } from 'node:crypto';
 import { SessionVault } from '..';
 
 describe('SessionVault', () => {
@@ -99,6 +100,28 @@ describe('SessionVault', () => {
     // Both should decrypt correctly
     expect(vault.retrieve('a')).toBe('identical');
     expect(vault.retrieve('b')).toBe('identical');
+  });
+
+  // D9: entries are held in memory as AES-256-GCM ciphertext under a 256-bit key.
+  it('holds entries as authenticated AES-256-GCM ciphertext (D9)', () => {
+    vault.store('gcm', 'SSN: 123-45-6789');
+    const internals = vault as unknown as {
+      key: Uint8Array;
+      entries: Map<string, { encrypted: Uint8Array; iv: Uint8Array; authTag: Uint8Array }>;
+    };
+    const entry = internals.entries.get('gcm')!;
+    expect(internals.key).toHaveLength(32);
+    expect(entry.iv).toHaveLength(12);
+    expect(entry.authTag).toHaveLength(16);
+    expect(Buffer.from(entry.encrypted).toString('utf8')).not.toContain('123-45-6789');
+
+    const decipher = createDecipheriv('aes-256-gcm', internals.key, entry.iv);
+    decipher.setAuthTag(entry.authTag);
+    const plain = Buffer.concat([decipher.update(entry.encrypted), decipher.final()]);
+    expect(plain.toString('utf8')).toBe('SSN: 123-45-6789');
+
+    entry.encrypted[0] ^= 0xff;
+    expect(() => vault.retrieve('gcm')).toThrow();
   });
 
   it('destroy zeroes the key', () => {

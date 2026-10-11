@@ -15,6 +15,9 @@
  *
  * Parse-to-deny (CR-001): every failure path returns {valid: false}.
  * Never throws.
+ *
+ * The ML-DSA-44 half is verified with @noble/post-quantum (D7), which is not
+ * a FIPS-validated implementation.
  */
 
 import { createPublicKey, verify as cryptoVerify } from 'crypto';

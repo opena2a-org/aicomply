@@ -292,7 +292,6 @@ if affected:
 | AC-002  | Cache miss or error reported as `registrySignals.status`, never as a hit; fails closed only with `onRegistryUnknown` |
 | AC-005  | No Registry network I/O in the classification hot path. The Guard loopback request is separate; see known limitation 5 |
 | CR-001  | Parse-to-deny on invalid Guard signature |
-| CR-007  | Local-verify path for ATX-style credentials (not used in V1) |
 | D7      | `@noble/post-quantum` for hybrid signing, not FIPS-validated |
 | D9      | Session vault: in-memory AES-256-GCM |
 | D17     | ML-DSA-44 verify p99 budget < 1.5 ms |

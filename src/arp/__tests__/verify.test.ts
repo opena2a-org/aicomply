@@ -4,6 +4,9 @@
  * Tests the full verification pipeline: schema, algorithm gate, key sizes,
  * hybrid signature (Ed25519+ML-DSA-44), freshness, and tier rejection matrix.
  * Uses real crypto operations - no mocks.
+ *
+ *   - D7: the ML-DSA-44 half is signed and verified with @noble/post-quantum
+ *   - CR-001: every rejection returns {valid: false} (parse-to-deny)
  */
 
 import { verifyClassification, CLASSIFICATION_MIN_TIER, ABSOLUTE_DENY_CLASSES } from '../verify';
