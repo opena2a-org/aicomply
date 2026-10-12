@@ -695,7 +695,7 @@ describe('policy pack validation', () => {
     await expect(invalid([{ id: long, action: 'nope', patterns: [] }])).rejects.toThrow(
       new TypeError(`${prefix}Rule ${shown}: invalid action 'nope', expected one of DENY, REDACT, WARN`),
     );
-    await expect(invalid([{ id: 'a\nb', action: `no '${long}`, patterns: [] }])).rejects.toThrow(
+    await expect(invalid([{ id: 'a\nb', action: `no\u{2028}'${long}`, patterns: [] }])).rejects.toThrow(
       new TypeError(
         `${prefix}Rule 'a\\nb': invalid action 'no\\u2028\\'${'i'.repeat(60)}...' (length 5000004), ` +
           'expected one of DENY, REDACT, WARN',
