@@ -351,6 +351,9 @@ describe('README', () => {
       // The result line has `//` with no space after it, so a walker that
       // reads the space as optional returns an example instead of failing.
       [call, "//['not what it returns']"],
+      // The result line has a tab after `//`, so a walker that takes any
+      // whitespace there in place of the space returns an example.
+      [call, "//\t['not what it returns']"],
     ];
     for (const sample of otherShapes) {
       let outcome: unknown;
