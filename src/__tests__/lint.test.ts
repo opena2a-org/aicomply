@@ -11,7 +11,7 @@
 
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { dirname, join, relative } from 'path';
+import { dirname, join, relative, sep, win32, type PlatformPath } from 'path';
 
 const ROOT = join(__dirname, '..', '..');
 
@@ -35,6 +35,18 @@ function hasEslintConfig(): boolean {
     'eslintConfig' in pkg ||
     readdirSync(ROOT).some((name) => /^\.eslintrc(?:\..+)?$|^eslint\.config\.[cm]?[jt]s$/.test(name))
   );
+}
+
+/**
+ * `file` relative to `root`, written with forward slashes on every platform,
+ * so an offender reads the same on Windows as on Linux and macOS.
+ */
+function relativePath(
+  root: string,
+  file: string,
+  paths: Pick<PlatformPath, 'relative' | 'sep'> = { relative, sep },
+): string {
+  return paths.relative(root, file).split(paths.sep).join('/');
 }
 
 function sourceFiles(dir: string, pattern = SOURCE_FILE, recurse = true): string[] {
@@ -64,7 +76,7 @@ function separatorOffenders(files: string[], root = ROOT): string[] {
         const found = SEPARATOR.exec(line);
         if (!found) return [];
         const escape = `\\u${found[0].charCodeAt(0).toString(16)}`;
-        return [`${relative(root, file)}:${i + 1}: write the character as the escape ${escape}`];
+        return [`${relativePath(root, file)}:${i + 1}: write the character as the escape ${escape}`];
       }),
   );
 }
@@ -79,7 +91,7 @@ describe('lint', () => {
       .flatMap((file) =>
         readFileSync(file, 'utf8')
           .split('\n')
-          .flatMap((line, i) => (ESLINT_DIRECTIVE.test(line) ? [`${relative(ROOT, file)}:${i + 1}`] : [])),
+          .flatMap((line, i) => (ESLINT_DIRECTIVE.test(line) ? [`${relativePath(ROOT, file)}:${i + 1}`] : [])),
       );
     expect(offenders).toEqual([]);
   });
@@ -121,5 +133,10 @@ describe('lint', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it('names an offending file with forward slashes on a platform that separates paths with backslashes', () => {
+    const root = 'C:\\t';
+    expect(relativePath(root, win32.join(root, 'python/src/pkg/mod.py'), win32)).toBe('python/src/pkg/mod.py');
   });
 });
