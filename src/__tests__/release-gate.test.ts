@@ -956,6 +956,7 @@ describe('npm publish lifecycle', () => {
     ['nothing after it in a tagged double-quoted value', ['      - run: !!str "npm publish"'], null],
     ['nothing after it in a double-quoted value that starts after its key', ['      - run:', '          "npm publish"'], null],
     ['a message that puts a lone dash between npm and publish', ['      - run: echo "already on npm - skipping publish"', PUBLISH], null],
+    ['a hardened install after a double-quoted value that closes on its continued line before a comment that ends in a backslash', ['      - run: "npm publish --provenance \\', '          --access public" # note \\', '      - run: npm ci --ignore-scripts'], null],
   ])('lets a publish through with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).toEqual([]);
   });
@@ -1064,6 +1065,7 @@ describe('npm publish lifecycle', () => {
     ['an empty word handed to the publish', ['      - run: npm publish ""'], null],
     ['an empty word handed to a publish in a double-quoted value', ['      - run: "npm publish \\"\\""'], null],
     ['an empty word handed to a publish in a single-quoted value', ["      - run: 'npm publish '''''"], null],
+    ['a word lines of two backslashes and of one carry onto the publish in a double-quoted value', ['      - run: "npm publish\\', '\\\\', '\\', '        x"'], null],
   ])('refuses a publish with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
   });
@@ -1163,6 +1165,11 @@ describe('npm publish lifecycle', () => {
       'npm ci',
       'npm publish',
     ]);
+  });
+
+  it('joins a backslash that follows the space a continued line is joined with as a space', () => {
+    const workflow = ['      - run: npm publish\\', '          \\', '          public'];
+    expect(workflowLines(workflow.join('\n'))).toEqual(['      - run: npm publish\\  public']);
   });
 
   it('is not switched off where the release workflow publishes', () => {
