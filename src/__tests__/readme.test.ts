@@ -115,6 +115,20 @@ function validatePolicyConfigExamples(sample: string[]): { call: string; pack: u
 }
 
 /**
+ * Whether `error` is validatePolicyConfigExamples() failing one of its own
+ * checks: the one-line call check or the comment check. A failed expect()
+ * throws an error whose `matcherResult.expected` is the value it was compared
+ * against, so either check is told apart by the key it expects to be true. An
+ * error thrown by anything else, literal() included, is not one of these.
+ */
+function isWalkerCheckFailure(error: unknown): boolean {
+  const expected = (error as { matcherResult?: { expected?: unknown } } | null)?.matcherResult?.expected;
+  if (typeof expected !== 'object' || expected === null) return false;
+  const check = expected as { oneLineCall?: unknown; comment?: unknown };
+  return check.oneLineCall === true || check.comment === true;
+}
+
+/**
  * The value of a JavaScript literal as the README writes it. compileFunction()
  * is called without a `parsingContext`, so the value is built in Node's main
  * context, not in the one jest runs this file in. Its prototypes are the main
@@ -331,13 +345,20 @@ describe('README', () => {
       [call, call, call, result],
       [call, '', call, result],
       [call, result, "// 'a second comment line'"],
+      // The result line is a literal with no `//`, so a walker that does not
+      // require the prefix reads it as the comment and returns an example.
+      [call, "['not what it returns']"],
     ];
     for (const sample of otherShapes) {
-      let outcome: unknown = 'fails';
+      let outcome: unknown;
       try {
         outcome = validatePolicyConfigExamples(sample);
-      } catch {
-        // The walker failed on this shape, as it must.
+      } catch (error) {
+        // Only the walker's own line or comment check failing counts as it
+        // failing on this shape. Any other error, such as literal() throwing on
+        // text it was handed, is rethrown instead of standing in for one.
+        if (!isWalkerCheckFailure(error)) throw error;
+        outcome = 'fails';
       }
       expect({ sample, outcome }).toEqual({ sample, outcome: 'fails' });
     }
