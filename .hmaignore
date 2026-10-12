@@ -32,3 +32,12 @@ python/src/aicomply/pack/patterns.json
 # (e.g. the README audit-trail example normalizes full-width digits to ASCII)
 README.md
 SECURITY.md
+
+# AIM-001 reads the `ai-agent` keyword in package.json as a sign that this
+# project is an agent, and asks for an agent identity file (agent-card.json,
+# agent.json or aim.json). aicomply is a library and CLI that classifies the
+# input and output of other agents; it does not run as an agent, so it has no
+# identity of its own to declare. The rule names that one check on that one
+# file, so every other check still reads package.json. Remove it if aicomply
+# ever ships an agent identity file.
+package.json:AIM-001  # library and CLI, not an agent: no agent identity to declare
