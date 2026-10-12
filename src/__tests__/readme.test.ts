@@ -348,6 +348,9 @@ describe('README', () => {
       // The result line is a literal with no `//`, so a walker that does not
       // require the prefix reads it as the comment and returns an example.
       [call, "['not what it returns']"],
+      // The result line has `//` with no space after it, so a walker that
+      // reads the space as optional returns an example instead of failing.
+      [call, "//['not what it returns']"],
     ];
     for (const sample of otherShapes) {
       let outcome: unknown;
