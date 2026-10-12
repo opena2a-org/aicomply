@@ -92,7 +92,7 @@ describe('lint', () => {
     expect(separatorOffenders([...scriptFiles, ...pythonFiles])).toEqual([]);
   });
 
-  it('reads a Python source or stub at the python/ root and under python/src, python/tests and python/bench, and no other directory there', () => {
+  it('reads a Python source or stub at the python/ root and under python/src, python/tests and python/bench, and no other directory or suffix there', () => {
     const root = mkdtempSync(join(tmpdir(), 'aicomply-lint-'));
     try {
       const read = [
@@ -103,7 +103,13 @@ describe('lint', () => {
         'python/tests/test_mod.py',
         'python/bench/measure.py',
       ];
-      const skipped = ['python/.venv/lib/site.py', 'python/build/lib/mod.py', 'python/README.md'];
+      const skipped = [
+        'python/.venv/lib/site.py',
+        'python/build/lib/mod.py',
+        'python/README.md',
+        'python/src/pkg/__pycache__/mod.cpython-312.pyc',
+        'python/tests/test_mod.py.orig',
+      ];
       for (const path of [...read, ...skipped]) {
         mkdirSync(join(root, dirname(path)), { recursive: true });
         writeFileSync(join(root, path), `x = 1  # ${String.fromCharCode(0x2028)}\n`);
