@@ -9,17 +9,23 @@
  * tools, so the sources write it as the escape instead.
  */
 
-import { readFileSync, readdirSync } from 'fs';
-import { join, relative } from 'path';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { dirname, join, relative } from 'path';
 
 const ROOT = join(__dirname, '..', '..');
 
 /** Where the JavaScript and TypeScript sources live, besides the root config files. */
 const SOURCE_DIRS = ['src', 'scripts', 'bench'];
 const SOURCE_FILE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
-/** Where the Python sources live. */
+/**
+ * Where the Python sources and stubs live: the `python/` root itself, read
+ * without descending so a virtual environment or build output there is not
+ * walked, and these directories, read in full.
+ */
+const PYTHON_ROOT = 'python';
 const PYTHON_DIRS = ['python/src', 'python/tests', 'python/bench'];
-const PYTHON_FILE = /\.py$/;
+const PYTHON_FILE = /\.pyi?$/;
 const ESLINT_DIRECTIVE = /\beslint-(?:disable|enable|env)\b/;
 const SEPARATOR = /[\u{2028}\u{2029}]/u;
 
@@ -43,8 +49,24 @@ function allSourceFiles(): string[] {
   return [...sourceFiles(ROOT, SOURCE_FILE, false), ...SOURCE_DIRS.flatMap((dir) => sourceFiles(join(ROOT, dir)))];
 }
 
-function pythonSourceFiles(): string[] {
-  return PYTHON_DIRS.flatMap((dir) => sourceFiles(join(ROOT, dir), PYTHON_FILE));
+function pythonSourceFiles(root = ROOT): string[] {
+  return [
+    ...sourceFiles(join(root, PYTHON_ROOT), PYTHON_FILE, false),
+    ...PYTHON_DIRS.flatMap((dir) => sourceFiles(join(root, dir), PYTHON_FILE)),
+  ];
+}
+
+function separatorOffenders(files: string[], root = ROOT): string[] {
+  return files.flatMap((file) =>
+    readFileSync(file, 'utf8')
+      .split('\n')
+      .flatMap((line, i) => {
+        const found = SEPARATOR.exec(line);
+        if (!found) return [];
+        const escape = `\\u${found[0].charCodeAt(0).toString(16)}`;
+        return [`${relative(root, file)}:${i + 1}: write the character as the escape ${escape}`];
+      }),
+  );
 }
 
 describe('lint', () => {
@@ -67,16 +89,31 @@ describe('lint', () => {
     const pythonFiles = pythonSourceFiles();
     expect(scriptFiles.length).toBeGreaterThan(0);
     expect(pythonFiles.length).toBeGreaterThan(0);
-    const offenders = [...scriptFiles, ...pythonFiles].flatMap((file) =>
-      readFileSync(file, 'utf8')
-        .split('\n')
-        .flatMap((line, i) => {
-          const found = SEPARATOR.exec(line);
-          if (!found) return [];
-          const escape = `\\u${found[0].charCodeAt(0).toString(16)}`;
-          return [`${relative(ROOT, file)}:${i + 1}: write the character as the escape ${escape}`];
-        }),
-    );
-    expect(offenders).toEqual([]);
+    expect(separatorOffenders([...scriptFiles, ...pythonFiles])).toEqual([]);
+  });
+
+  it('reads a Python source or stub at the python/ root and under python/src, python/tests and python/bench, and no other directory there', () => {
+    const root = mkdtempSync(join(tmpdir(), 'aicomply-lint-'));
+    try {
+      const read = [
+        'python/conftest.py',
+        'python/stubs.pyi',
+        'python/src/pkg/mod.py',
+        'python/src/pkg/mod.pyi',
+        'python/tests/test_mod.py',
+        'python/bench/measure.py',
+      ];
+      const skipped = ['python/.venv/lib/site.py', 'python/build/lib/mod.py', 'python/README.md'];
+      for (const path of [...read, ...skipped]) {
+        mkdirSync(join(root, dirname(path)), { recursive: true });
+        writeFileSync(join(root, path), `x = 1  # ${String.fromCharCode(0x2028)}\n`);
+      }
+      const offenders = separatorOffenders(pythonSourceFiles(root), root);
+      expect([...offenders].sort()).toEqual(
+        read.map((path) => `${path}:1: write the character as the escape \\u2028`).sort(),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
