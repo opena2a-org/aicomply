@@ -22,7 +22,17 @@ const SOURCE_FILE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 const PYTHON_ROOT = 'python';
 const PYTHON_DIRS = ['python/src', 'python/tests', 'python/bench'];
 const PYTHON_FILE = /\.pyi?$/;
+/**
+ * The comments ESLint reads as directives: one that switches rules off or on
+ * again or names an environment, found anywhere on a line, and a block
+ * comment whose text starts with the word `eslint`, `global`, `globals` or
+ * `exported`, which sets rules or declares globals. The block comment is
+ * matched across lines, since its first word may stand on the line after the
+ * opening; a comment that opens with two asterisks is documentation, which
+ * ESLint does not read. Neither pattern matches its own source.
+ */
 const ESLINT_DIRECTIVE = /\beslint-(?:disable|enable|env)\b/;
+const ESLINT_CONFIG_COMMENT = /\/\*\s*(?:eslint|globals?|exported)(?=\s|\*\/)/g;
 const SEPARATOR = /[\u{2028}\u{2029}]/u;
 
 /**
@@ -86,13 +96,19 @@ export function pythonSourceFiles(root = ROOT): string[] {
   ];
 }
 
-/** Each line of `files` that carries an ESLint directive, as `file:line`. */
+/**
+ * Each line of `files` that carries an ESLint directive, as `file:line`; a
+ * block comment is named by the line it opens on.
+ */
 export function eslintOffenders(files: string[], root = ROOT): string[] {
-  return files.flatMap((file) =>
-    readFileSync(file, 'utf8')
-      .split('\n')
-      .flatMap((line, i) => (ESLINT_DIRECTIVE.test(line) ? [`${relativePath(root, file)}:${i + 1}`] : [])),
-  );
+  return files.flatMap((file) => {
+    const text = readFileSync(file, 'utf8');
+    const lines = new Set(text.split('\n').flatMap((line, i) => (ESLINT_DIRECTIVE.test(line) ? [i + 1] : [])));
+    for (const comment of text.matchAll(ESLINT_CONFIG_COMMENT)) {
+      lines.add(text.slice(0, comment.index).split('\n').length);
+    }
+    return [...lines].sort((a, b) => a - b).map((line) => `${relativePath(root, file)}:${line}`);
+  });
 }
 
 /** Each line of `files` that carries a raw line or paragraph separator, with the escape to write instead. */

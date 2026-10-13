@@ -9,7 +9,10 @@
  *
  * Each rule is read twice: by a copy of HackMyAgent's grammar that counts a
  * refused line as covering, and by the parser and matcher of the HackMyAgent
- * dev dependency, so a grammar change in the version in use fails the test.
+ * dev dependency. For each line in the tables below the test pins both whether
+ * the version in use refuses it and whether it covers AIM-001 on package.json,
+ * so a grammar change in that version that changes either answer for one of
+ * those lines fails the test.
  */
 
 import { existsSync, readFileSync } from 'fs';
@@ -192,6 +195,7 @@ describe('.hmaignore', () => {
     ['!A*  expires:2099-01-01'],
   ])('reads `%s` as a rule that covers AIM-001 on package.json', (line) => {
     expect(identityRules(`${line}\n`)).toHaveLength(1);
+    expect(publishedErrorLines(`${line}\n`)).toEqual([]);
     expect(publishedIdentityLines(`${line}\n`)).toEqual([1]);
   });
 
@@ -211,25 +215,28 @@ describe('.hmaignore', () => {
   // The HackMyAgent in use agrees on each line: as the only rule of an
   // .hmaignore it leaves AIM-001 on package.json reported. A check pattern
   // without `*` has to equal the whole check id, so a prefix or a suffix of
-  // AIM-001 names nothing.
+  // AIM-001 names nothing. It refuses the lines marked `refused` and applies
+  // nothing from them: a path has no globs, and `?` is not part of a check
+  // pattern. It accepts the others as rules that name something else.
   it.each([
-    ['package.json:GIT-001  # x'],
-    ['package.json:UNICODE-*  # x'],
-    ['package.json:AIM  # x'],
-    ['package.json:IM-001  # x'],
-    ['src/index.ts:AIM-001  # x'],
-    ['*.json:AIM-001  # x'],
-    ['*.json'],
-    ['pack'],
-    ['pack/'],
-    ['package-lock.json'],
-    ['!GIT-001'],
-    ['!UNICODE-STEGO-*'],
-    ['!AIM-00?'],
-    ['!AIM-00'],
-    ['!IM-001'],
-  ])('reads `%s` as a rule that leaves AIM-001 on package.json reported', (line) => {
+    ['package.json:GIT-001  # x', 'accepts'],
+    ['package.json:UNICODE-*  # x', 'accepts'],
+    ['package.json:AIM  # x', 'accepts'],
+    ['package.json:IM-001  # x', 'accepts'],
+    ['src/index.ts:AIM-001  # x', 'accepts'],
+    ['*.json:AIM-001  # x', 'refuses'],
+    ['*.json', 'refuses'],
+    ['pack', 'accepts'],
+    ['pack/', 'accepts'],
+    ['package-lock.json', 'accepts'],
+    ['!GIT-001', 'accepts'],
+    ['!UNICODE-STEGO-*', 'accepts'],
+    ['!AIM-00?', 'refuses'],
+    ['!AIM-00', 'accepts'],
+    ['!IM-001', 'accepts'],
+  ])('reads `%s` as a rule that leaves AIM-001 on package.json reported, and HackMyAgent %s it', (line, verdict) => {
     expect(identityRules(`${line}\n`)).toEqual([]);
+    expect(publishedErrorLines(`${line}\n`)).toEqual(verdict === 'refuses' ? [1] : []);
     expect(publishedIdentityLines(`${line}\n`)).toEqual([]);
   });
 

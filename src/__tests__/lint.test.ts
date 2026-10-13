@@ -27,11 +27,21 @@ import {
 
 /**
  * Each ESLint directive in the JavaScript and TypeScript sources. The lint
- * test files are read like any other: the directive pattern lives in
- * lint-helpers.ts and is written so that it does not match itself.
+ * test files are read like any other: the directive patterns live in
+ * lint-helpers.ts and are written so that they do not match themselves.
  */
 function directiveOffenders(): string[] {
   return eslintOffenders(allSourceFiles());
+}
+
+/** A block comment opening, written in two parts so this file carries none of the comments it tests. */
+const OPEN = ['/', '*'].join('');
+
+/** The ESLint directives in `comment`, written as the second line of src/mod.ts under a temporary root. */
+function offendersIn(comment: string): string[] {
+  return withSourceTree(['src/mod.ts'], `const x = 1;\n${comment}\nconst y = 2;\n`, (root) =>
+    eslintOffenders([join(root, 'src', 'mod.ts')], root),
+  );
 }
 
 describe('lint', () => {
@@ -57,6 +67,27 @@ describe('lint', () => {
     } finally {
       read.mockRestore();
     }
+  });
+
+  // ESLint reads each of these block comments as a directive that sets rules
+  // or declares globals, so the check names the line it opens on.
+  it.each([
+    ['a rule setting', `${OPEN} eslint no-console: "off" */`],
+    ['a rule setting without spaces', `${OPEN}eslint no-console:0*/`],
+    ['a rule setting whose first word is on the next line', `${OPEN}\n  eslint no-console: "off"\n*/`],
+    ['a global', `${OPEN} global window */`],
+    ['globals', `${OPEN}globals window, document */`],
+    ['an exported name', `${OPEN} exported main */`],
+  ])('names a block comment that carries %s', (_kind, comment) => {
+    expect(offendersIn(comment)).toEqual(['src/mod.ts:2']);
+  });
+
+  it.each([
+    ['documentation', `${OPEN}* eslint no-console: "off" */`],
+    ['a word that only starts like a directive', `${OPEN} globalThis is read here */`],
+    ['the word later in its text', `${OPEN} see the eslint docs */`],
+  ])('names no block comment that carries %s, which ESLint does not read as a directive', (_kind, comment) => {
+    expect(offendersIn(comment)).toEqual([]);
   });
 
   it('carries no raw line or paragraph separator in a JavaScript, TypeScript or Python source, which many editors and tools show as a line break', () => {
