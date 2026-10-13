@@ -1,4 +1,4 @@
-# @opena2a/aicomply
+# AI Compliance
 
 [![Status: stable](https://img.shields.io/badge/status-stable-brightgreen)](./STATUS.md)
 
