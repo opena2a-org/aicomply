@@ -149,10 +149,13 @@ describe('.hmaignore', () => {
   });
 
   // Confirmed the same way: with each of these as the only rule, AIM-001 on
-  // package.json is still reported.
+  // package.json is still reported. A check pattern without `*` has to equal
+  // the whole check id, so a prefix or a suffix of AIM-001 names nothing.
   it.each([
     ['package.json:GIT-001  # x'],
     ['package.json:UNICODE-*  # x'],
+    ['package.json:AIM  # x'],
+    ['package.json:IM-001  # x'],
     ['src/index.ts:AIM-001  # x'],
     ['*.json:AIM-001  # x'],
     ['*.json'],
@@ -162,6 +165,8 @@ describe('.hmaignore', () => {
     ['!GIT-001'],
     ['!UNICODE-STEGO-*'],
     ['!AIM-00?'],
+    ['!AIM-00'],
+    ['!IM-001'],
   ])('reads `%s` as a rule that leaves AIM-001 on package.json reported', (line) => {
     expect(identityRules(`${line}\n`)).toEqual([]);
   });
