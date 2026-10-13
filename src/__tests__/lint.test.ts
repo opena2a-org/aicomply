@@ -12,7 +12,8 @@
  * separates paths with backslashes, as on Windows.
  */
 
-import { win32 } from 'path';
+import fs from 'fs';
+import { join, win32 } from 'path';
 import {
   PYTHON_TREE,
   allSourceFiles,
@@ -24,12 +25,38 @@ import {
   withSourceTree,
 } from './lint-helpers';
 
+/**
+ * Each ESLint directive in the JavaScript and TypeScript sources. The lint
+ * test files are read like any other: the directive pattern lives in
+ * lint-helpers.ts and is written so that it does not match itself.
+ */
+function directiveOffenders(): string[] {
+  return eslintOffenders(allSourceFiles());
+}
+
 describe('lint', () => {
   it('carries no ESLint directive while the repository has no ESLint configuration', () => {
     if (hasEslintConfig()) return;
-    const files = allSourceFiles();
-    expect(files.length).toBeGreaterThan(0);
-    expect(eslintOffenders(files.filter((file) => file !== __filename))).toEqual([]);
+    expect(allSourceFiles().length).toBeGreaterThan(0);
+    expect(directiveOffenders()).toEqual([]);
+  });
+
+  it('reads the lint test files themselves for an ESLint directive', () => {
+    const names = ['lint.test.ts', 'lint-helpers.ts', 'lint-windows-paths.test.ts'];
+    const lintFiles = names.map((name) => join(__dirname, name));
+    const directive = ['eslint', 'disable'].join('-');
+    const { readFileSync } = fs;
+    const read = jest
+      .spyOn(fs, 'readFileSync')
+      .mockImplementation(((file: string, encoding: BufferEncoding) =>
+        lintFiles.includes(file)
+          ? `const x = 1;\n// ${directive} no-console\n`
+          : readFileSync(file, encoding)) as typeof readFileSync);
+    try {
+      expect(directiveOffenders()).toEqual(expect.arrayContaining(names.map((name) => `src/__tests__/${name}:2`)));
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it('carries no raw line or paragraph separator in a JavaScript, TypeScript or Python source, which many editors and tools show as a line break', () => {
