@@ -6,13 +6,42 @@
  * agent, so it has no identity of its own to declare. The .hmaignore file
  * records that once, as a rule naming the one check on the one file, so every
  * other check still reads package.json and AIM-001 still applies anywhere else.
+ *
+ * Each rule is read twice: by a copy of HackMyAgent's grammar that counts a
+ * refused line as covering, and by the parser and matcher of the HackMyAgent
+ * dev dependency, so a grammar change in the version in use fails the test.
  */
 
 import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
 const ROOT = join(__dirname, '..', '..');
 const HMAIGNORE = readFileSync(join(ROOT, '.hmaignore'), 'utf8');
+
+interface PublishedRule {
+  line: number;
+  rule: string;
+}
+
+interface PublishedParsed {
+  present: boolean;
+  file: string;
+  rules: PublishedRule[];
+  errors: { line: number; rule: string; error: string }[];
+}
+
+interface PublishedIgnore {
+  parseHmaIgnore(content: string, today: string): Pick<PublishedParsed, 'rules' | 'errors'>;
+  matchHmaIgnore(f: { checkId: string; file?: string }, parsed: PublishedParsed): { line?: number } | null;
+  utcToday(): string;
+}
+
+/**
+ * HackMyAgent's own .hmaignore parser and matcher, the ones every scan reads.
+ * The module is not in the package's `exports`, so it is loaded by its path
+ * beside the package entry point.
+ */
+const hma = require(join(dirname(require.resolve('hackmyagent')), 'hardening', 'scanner.js')) as PublishedIgnore;
 
 interface IgnoreRule {
   line: number;
@@ -92,6 +121,29 @@ function identityRules(content: string): string[] {
     .map((r) => r.rule);
 }
 
+/**
+ * The lines of an .hmaignore whose rule, on its own, keeps AIM-001 on
+ * package.json out of a report by the HackMyAgent in use. Each rule is matched
+ * alone, because the matcher names only the first rule of the tier that wins.
+ */
+function publishedIdentityLines(content: string): number[] {
+  return hma
+    .parseHmaIgnore(content, hma.utcToday())
+    .rules.filter(
+      (r) =>
+        hma.matchHmaIgnore(
+          { checkId: 'AIM-001', file: 'package.json' },
+          { present: true, file: '.hmaignore', rules: [r], errors: [] },
+        ) !== null,
+    )
+    .map((r) => r.line);
+}
+
+/** The lines of an .hmaignore that the HackMyAgent in use refuses. */
+function publishedErrorLines(content: string): number[] {
+  return hma.parseHmaIgnore(content, hma.utcToday()).errors.map((e) => e.line);
+}
+
 const IDENTITY_FILES = [
   'agent-card.json',
   '.well-known/agent-card.json',
@@ -112,7 +164,12 @@ describe('.hmaignore', () => {
     expect(identityRules(HMAIGNORE)).toEqual(['package.json:AIM-001']);
   });
 
-  // Each line was confirmed against HackMyAgent 0.33.2: as the only rule of an
+  it('has no other rule that the HackMyAgent in use reads as covering AIM-001 on package.json', () => {
+    const rule = parseRules(HMAIGNORE).filter((r) => r.rule === 'package.json:AIM-001');
+    expect(publishedIdentityLines(HMAIGNORE)).toEqual(rule.map((r) => r.line));
+  });
+
+  // The HackMyAgent in use agrees on each line: as the only rule of an
   // .hmaignore it removes AIM-001 on package.json from the report.
   it.each([
     ['package.json:AIM-001  # x'],
@@ -135,6 +192,7 @@ describe('.hmaignore', () => {
     ['!A*  expires:2099-01-01'],
   ])('reads `%s` as a rule that covers AIM-001 on package.json', (line) => {
     expect(identityRules(`${line}\n`)).toHaveLength(1);
+    expect(publishedIdentityLines(`${line}\n`)).toEqual([1]);
   });
 
   // HackMyAgent refuses each of these lines and applies nothing: a path rule
@@ -146,11 +204,14 @@ describe('.hmaignore', () => {
     ['package.json:AIM-*  expires:2001-01-01  # x'],
   ])('reads `%s` as a rule that covers AIM-001 on package.json, although HackMyAgent refuses it', (line) => {
     expect(identityRules(`${line}\n`)).toHaveLength(1);
+    expect(publishedErrorLines(`${line}\n`)).toEqual([1]);
+    expect(publishedIdentityLines(`${line}\n`)).toEqual([]);
   });
 
-  // Confirmed the same way: with each of these as the only rule, AIM-001 on
-  // package.json is still reported. A check pattern without `*` has to equal
-  // the whole check id, so a prefix or a suffix of AIM-001 names nothing.
+  // The HackMyAgent in use agrees on each line: as the only rule of an
+  // .hmaignore it leaves AIM-001 on package.json reported. A check pattern
+  // without `*` has to equal the whole check id, so a prefix or a suffix of
+  // AIM-001 names nothing.
   it.each([
     ['package.json:GIT-001  # x'],
     ['package.json:UNICODE-*  # x'],
@@ -169,6 +230,7 @@ describe('.hmaignore', () => {
     ['!IM-001'],
   ])('reads `%s` as a rule that leaves AIM-001 on package.json reported', (line) => {
     expect(identityRules(`${line}\n`)).toEqual([]);
+    expect(publishedIdentityLines(`${line}\n`)).toEqual([]);
   });
 
   it('is needed: package.json has an agent keyword and the project declares no agent identity file', () => {
