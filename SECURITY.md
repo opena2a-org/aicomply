@@ -245,7 +245,7 @@ regex-only.
    `http://127.0.0.1:47200`); otherwise it is regex-only. The shipped model
    (tme-v0.5.0) over-flags benign text, so do not rely on the Guard as a
    production gate until a recalibrated model ships. See
-   [Guard status](./README.md#guard-status-preview-not-production-ready).
+   [Guard status](./docs/semantic-guard.md#guard-status-preview-not-production-ready).
 2. **Pattern source is public.** A determined attacker can find regex
    bypasses by inspecting `pack/patterns.json`. The patterns
    are not secret and not designed to be - they are designed to be reviewed
