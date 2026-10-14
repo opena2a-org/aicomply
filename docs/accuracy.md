@@ -1,6 +1,6 @@
 # Measured accuracy
 
-Per-class precision and recall against the synthetic corpus at [`bench/corpus/`](../bench/corpus) (200 positives + 200 hard-negatives per class, including adversarial variants):
+Per-class precision and recall against the synthetic corpus at [`bench/corpus/`](https://github.com/opena2a-org/aicomply/tree/main/bench/corpus) (200 positives + 200 hard-negatives per class, including adversarial variants):
 
 | Class      | Precision | Recall | F1    |
 |------------|-----------|--------|-------|

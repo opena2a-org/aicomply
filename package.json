@@ -28,6 +28,7 @@
   },
   "files": [
     "dist",
+    "docs",
     "pack/patterns.json",
     "README.md",
     "LICENSE",
