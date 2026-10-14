@@ -59,7 +59,7 @@ runtime. When bundling, mark `@opena2a/aicomply` as external so it loads from
 
 **Python?** `pip install aicomply` — same detection engine (regex + optional NanoMind
 Guard), parity-tested against the same corpus. Ships `@guard_io`/`@guard_output`
-decorators and a LangChain callback. See [`python/`](python/).
+decorators and a LangChain callback. See [`python/`](https://github.com/opena2a-org/aicomply/tree/main/python).
 
 ## Quickstart
 
