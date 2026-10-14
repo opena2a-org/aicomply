@@ -107,7 +107,7 @@ For each non-empty input, unless a signed Guard result is supplied, `comply()` P
 - [Session-scoped use](docs/sessions.md): `ClassificationSession.create()` for Registry fleet-anomaly and supply-chain signals, and failing closed with `onRegistryUnknown`.
 - [Policy packs](docs/policy-packs.md): deny or warn on finding types with `policyPack`, and check a pack with `validatePolicyConfig()`.
 - [Verdicts and per-classifier results](docs/verdicts.md): what `CLEAN`, `VIOLATION` and `DENY` mean, and the `classifierResults`, `layers` and `pack` fields.
-- [Audit trail](docs/audit-trail.md): `originalContent`, `normalizedContent` and `normalizations`, which hold the raw input; log the masked `violations` instead.
+- [Audit trail](docs/audit-trail.md): `originalContent` and `normalizedContent`, which hold the raw input, and `normalizations`, the transforms applied; log the masked `violations` instead.
 - [SECURITY.md](./SECURITY.md): vulnerability disclosure and threat-model scope.
 
 ## License
