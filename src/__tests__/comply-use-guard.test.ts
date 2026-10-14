@@ -2,8 +2,9 @@
  * The Guard attempt is a network request: for each non-empty input comply()
  * POSTs the content verbatim to the nanomind-daemon infer endpoint. These
  * tests pin what that request carries, that `useGuard: false` makes no request
- * at all, and that the README and SECURITY.md describe the request instead of
- * claiming comply() does no network I/O.
+ * at all, and that the README, the docs pages it links for the request and
+ * SECURITY.md describe the request instead of claiming comply() does no
+ * network I/O.
  */
 
 import { readFileSync } from 'node:fs';
@@ -220,7 +221,7 @@ describe('comply() Guard request', () => {
 
 describe('docs on the Guard request', () => {
   const INFER_URL = `${DEFAULT_NANOMIND_DAEMON_URL}${NANOMIND_INFER_ENDPOINT}`;
-  const DOCS = ['README.md', 'SECURITY.md'].map((file) => ({
+  const DOCS = ['README.md', 'docs/how-it-works.md', 'docs/semantic-guard.md', 'SECURITY.md'].map((file) => ({
     file,
     text: readFileSync(join(ROOT, file), 'utf8'),
   }));

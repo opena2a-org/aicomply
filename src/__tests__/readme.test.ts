@@ -7,7 +7,8 @@
  * for, is pinned to the canonical Apache-2.0 text. Every `nanomind-daemon`
  * command the READMEs show names a subcommand the installed daemon lists. The
  * CommonJS sample runs as a CommonJS file, and the README names the one build
- * the package ships.
+ * the package ships. A passage the README links to a page under `docs/` is
+ * checked on that page.
  */
 
 import { spawnSync } from 'child_process';
@@ -25,15 +26,30 @@ const ROOT = join(__dirname, '..', '..');
 const README = readFileSync(join(ROOT, 'README.md'), 'utf8');
 const LINES = README.split('\n');
 
+/** The text of a page under `docs/`. */
+function doc(name: string): string {
+  return readFileSync(join(ROOT, 'docs', name), 'utf8');
+}
+
+const HOW_IT_WORKS_LINES = doc('how-it-works.md').split('\n');
+const DETECTION = doc('detection.md');
+const DETECTION_LINES = DETECTION.split('\n');
+const POLICY_PACKS = doc('policy-packs.md');
+const POLICY_PACKS_LINES = POLICY_PACKS.split('\n');
+const VERDICTS = doc('verdicts.md');
+const VERDICTS_LINES = VERDICTS.split('\n');
+const AUDIT_TRAIL_LINES = doc('audit-trail.md').split('\n');
+const SEMANTIC_GUARD_LINES = doc('semantic-guard.md').split('\n');
+
 /** SHA-256 and line count of https://www.apache.org/licenses/LICENSE-2.0.txt. */
 const APACHE_2_0_SHA256 = 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30';
 const APACHE_2_0_LINES = 202;
 const APACHE_2_0_COPYRIGHT_TEMPLATE = '   Copyright [yyyy] [name of copyright owner]';
 
-/** 1-based line number of the first line matching `re`, or -1. */
-function lineOf(re: RegExp, from = 1): number {
-  for (let i = from - 1; i < LINES.length; i++) {
-    if (re.test(LINES[i])) return i + 1;
+/** 1-based line number of the first line of `lines` (the README's by default) matching `re`, or -1. */
+function lineOf(re: RegExp, from = 1, lines = LINES): number {
+  for (let i = from - 1; i < lines.length; i++) {
+    if (re.test(lines[i])) return i + 1;
   }
   return -1;
 }
@@ -53,14 +69,18 @@ function scanExample(): { input: string; fenceLine: number; output: string } {
   return { input, fenceLine, output };
 }
 
-/** What the README says about `violations[i].value`, from that token to the end of its blockquote. */
+/**
+ * What the audit-trail page the README links says about `violations[i].value`,
+ * from that token to the end of its blockquote.
+ */
 function valueClaim(): string {
   const token = '`violations[i].value`';
-  const at = LINES.findIndex((l) => l.startsWith('>') && l.includes(token));
+  const lines = AUDIT_TRAIL_LINES;
+  const at = lines.findIndex((l) => l.startsWith('>') && l.includes(token));
   expect(at).toBeGreaterThanOrEqual(0);
-  const parts = [LINES[at].slice(LINES[at].indexOf(token))];
-  for (let i = at + 1; i < LINES.length && LINES[i].startsWith('>'); i++) {
-    parts.push(LINES[i].replace(/^>\s?/, ''));
+  const parts = [lines[at].slice(lines[at].indexOf(token))];
+  for (let i = at + 1; i < lines.length && lines[i].startsWith('>'); i++) {
+    parts.push(lines[i].replace(/^>\s?/, ''));
   }
   return parts.join(' ');
 }
@@ -76,15 +96,16 @@ function commonJsSample(): string {
 }
 
 /**
- * The lines of the README's validatePolicyConfig() sample, from the one after
- * its import to the end of the fence.
+ * The lines of the policy-pack page's validatePolicyConfig() sample, from the
+ * one after its import to the end of the fence.
  */
 function validatePolicyConfigSample(): string[] {
-  const importLine = lineOf(/^import \{ validatePolicyConfig \} from '@opena2a\/aicomply';$/);
+  const lines = POLICY_PACKS_LINES;
+  const importLine = lineOf(/^import \{ validatePolicyConfig \} from '@opena2a\/aicomply';$/, 1, lines);
   expect(importLine).toBeGreaterThan(1);
-  const endLine = lineOf(/^```$/, importLine + 1);
+  const endLine = lineOf(/^```$/, importLine + 1, lines);
   expect(endLine).toBeGreaterThan(importLine);
-  return LINES.slice(importLine, endLine - 1);
+  return lines.slice(importLine, endLine - 1);
 }
 
 /**
@@ -226,9 +247,9 @@ describe('README', () => {
   });
 
   it('says the detection layers run one after the other, in the order comply calls them', async () => {
-    const at = lineOf(/\bdetection layers\b/);
+    const at = lineOf(/\bdetection layers\b/, 1, HOW_IT_WORKS_LINES);
     expect(at).toBeGreaterThan(0);
-    const claim = LINES[at - 1];
+    const claim = HOW_IT_WORKS_LINES[at - 1];
     expect(claim).not.toMatch(/\b(in parallel|concurrently|simultaneously|at the same time)\b/i);
     expect(claim).toMatch(/\bone after the other\b/);
     expect(claim.indexOf('regex')).toBeGreaterThanOrEqual(0);
@@ -252,8 +273,9 @@ describe('README', () => {
   });
 
   it('gives a sub-millisecond figure for the regex layer only, since a call that reaches the Guard adds its latency', () => {
-    const claims = LINES.filter((l) => /\bsub-(ms|millisecond)\b/i.test(l));
-    expect(claims.length).toBeGreaterThan(0);
+    const isClaim = (l: string) => /\bsub-(ms|millisecond)\b/i.test(l);
+    expect(HOW_IT_WORKS_LINES.filter(isClaim).length).toBeGreaterThan(0);
+    const claims = [...LINES, ...HOW_IT_WORKS_LINES].filter(isClaim);
     for (const claim of claims) {
       // A bullet is about the layer its bold lead names; prose is read one
       // sentence at a time.
@@ -268,9 +290,13 @@ describe('README', () => {
     // Each comma-separated example in the Government row is scanned inside a
     // sentence and must come back as one CUI finding over the whole marking,
     // so the row cannot name a form (FOUO, bare CONTROLLED) that scans CLEAN.
-    const rowLine = lineOf(/^\| Government\s*\|/, lineOf(/^### Regex layer/));
+    const rowLine = lineOf(
+      /^\| Government\s*\|/,
+      lineOf(/^### Regex layer/, 1, DETECTION_LINES),
+      DETECTION_LINES,
+    );
     expect(rowLine).toBeGreaterThan(0);
-    const cell = LINES[rowLine - 1].split('|')[2].trim();
+    const cell = DETECTION_LINES[rowLine - 1].split('|')[2].trim();
     const forms = cell.split(',').map((f) => f.trim().replace(/^`(.*)`$/, '$1'));
     expect(forms.length).toBeGreaterThan(0);
 
@@ -286,9 +312,11 @@ describe('README', () => {
 
   it('scopes the view field to pattern matches, as comply() returns it', async () => {
     // A policy finding is tagged `classifier: 'regex'` but is not a pattern
-    // match, so it has no view; the README must not say every finding does.
+    // match, so it has no view; neither the README nor the detection page it
+    // links may say every finding does.
     expect(README).not.toMatch(/Every finding carries a `view` field/);
-    expect(README).toMatch(/Every pattern match carries a `view` field/);
+    expect(DETECTION).not.toMatch(/Every finding carries a `view` field/);
+    expect(DETECTION).toMatch(/Every pattern match carries a `view` field/);
 
     const result = await comply({ content: 'My SSN is 123-45-6789.', policyPack: 'default' });
     const views = result.violations.map((v) => ({ type: v.type, view: v.view }));
@@ -299,7 +327,7 @@ describe('README', () => {
   });
 
   it('lists the finding types the default policy pack denies and warns on, and names the second-argument form', () => {
-    const line = LINES[lineOf(/`'default'` is the only one/) - 1];
+    const line = POLICY_PACKS_LINES[lineOf(/`'default'` is the only one/, 1, POLICY_PACKS_LINES) - 1];
     expect(line).toBeDefined();
     const ticked = (text: string) => [...text.matchAll(/`([A-Z_]+)`/g)].map((m) => m[1]);
     const [, denied, warned] = line.match(/denies (.*?) findings and warns on (.*?)\./)!;
@@ -308,7 +336,7 @@ describe('README', () => {
 
     expect(ticked(denied)).toEqual(patterns('DENY'));
     expect(ticked(warned)).toEqual(patterns('WARN'));
-    expect(README).toContain('Pass your own pack as `policyPack` on the second argument');
+    expect(POLICY_PACKS).toContain('Pass your own pack as `policyPack` on the second argument');
   });
 
   it('shows validatePolicyConfig() messages as it returns them, for a rule named by index and one named by id', () => {
@@ -372,11 +400,13 @@ describe('README', () => {
 
   it('describes CLEAN as what the layers found, in the words the CLI prints', () => {
     // CLEAN is also the verdict for the inputs listed under "What this package
-    // does NOT detect", so the README must not present it as safe to forward.
-    const bulletLine = lineOf(/^- \*\*`CLEAN`\*\*:/);
+    // does NOT detect", so neither the README nor the verdicts page it links
+    // may present it as safe to forward.
+    const bulletLine = lineOf(/^- \*\*`CLEAN`\*\*:/, 1, VERDICTS_LINES);
     expect(bulletLine).toBeGreaterThan(0);
-    expect(LINES[bulletLine - 1]).toContain('no findings from the layers that ran');
+    expect(VERDICTS_LINES[bulletLine - 1]).toContain('no findings from the layers that ran');
     expect(README).not.toMatch(/safe\s+to\s+forward/i);
+    expect(VERDICTS).not.toMatch(/safe\s+to\s+forward/i);
   });
 
   it('names the one build the package ships', () => {
@@ -462,7 +492,7 @@ function daemonInvocations(file: string): { text: string; arg: string | undefine
 }
 
 describe('README nanomind-daemon commands', () => {
-  const FILES = ['README.md', join('python', 'README.md')];
+  const FILES = ['README.md', join('docs', 'semantic-guard.md'), join('python', 'README.md')];
 
   it.each(FILES)('%s names a daemon subcommand in every nanomind-daemon command', (file) => {
     const subcommands = daemonSubcommands();
@@ -476,8 +506,8 @@ describe('README nanomind-daemon commands', () => {
   });
 
   it('starts the daemon in the command it says listens on the Guard address', () => {
-    const line = lineOf(/nanomind-daemon.*# listens on http:\/\/127\.0\.0\.1:47200/);
+    const line = lineOf(/nanomind-daemon.*# listens on http:\/\/127\.0\.0\.1:47200/, 1, SEMANTIC_GUARD_LINES);
     expect(line).toBeGreaterThan(0);
-    expect(LINES[line - 1]).toMatch(/\bnanomind-daemon start\b/);
+    expect(SEMANTIC_GUARD_LINES[line - 1]).toMatch(/\bnanomind-daemon start\b/);
   });
 });
