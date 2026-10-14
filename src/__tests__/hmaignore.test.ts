@@ -13,6 +13,10 @@
  * the version in use refuses it and whether it covers AIM-001 on package.json,
  * so a grammar change in that version that changes either answer for one of
  * those lines fails the test.
+ *
+ * README.md carries no invisible-unicode or look-alike example, so no rule may
+ * keep it out of the UNICODE-STEGO checks: a character of that kind added to
+ * it later has to be reported.
  */
 
 import { existsSync, readFileSync } from 'fs';
@@ -125,21 +129,24 @@ function identityRules(content: string): string[] {
 }
 
 /**
- * The lines of an .hmaignore whose rule, on its own, keeps AIM-001 on
- * package.json out of a report by the HackMyAgent in use. Each rule is matched
- * alone, because the matcher names only the first rule of the tier that wins.
+ * The lines of an .hmaignore whose rule, on its own, keeps a finding of
+ * `checkId` on `file` out of a report by the HackMyAgent in use. Each rule is
+ * matched alone, because the matcher names only the first rule of the tier
+ * that wins.
  */
-function publishedIdentityLines(content: string): number[] {
+function publishedCoveringLines(content: string, file: string, checkId: string): number[] {
   return hma
     .parseHmaIgnore(content, hma.utcToday())
     .rules.filter(
       (r) =>
-        hma.matchHmaIgnore(
-          { checkId: 'AIM-001', file: 'package.json' },
-          { present: true, file: '.hmaignore', rules: [r], errors: [] },
-        ) !== null,
+        hma.matchHmaIgnore({ checkId, file }, { present: true, file: '.hmaignore', rules: [r], errors: [] }) !== null,
     )
     .map((r) => r.line);
+}
+
+/** The lines of an .hmaignore whose rule, on its own, keeps AIM-001 on package.json out of a report. */
+function publishedIdentityLines(content: string): number[] {
+  return publishedCoveringLines(content, 'package.json', 'AIM-001');
 }
 
 /** The lines of an .hmaignore that the HackMyAgent in use refuses. */
@@ -239,6 +246,18 @@ describe('.hmaignore', () => {
     expect(publishedErrorLines(`${line}\n`)).toEqual(verdict === 'refuses' ? [1] : []);
     expect(publishedIdentityLines(`${line}\n`)).toEqual([]);
   });
+
+  it.each([['UNICODE-STEGO-001'], ['UNICODE-STEGO-005']])(
+    'has no rule that keeps %s on README.md out of a report',
+    (checkId) => {
+      expect(
+        parseRules(HMAIGNORE)
+          .filter((r) => covers(r, 'README.md', checkId))
+          .map((r) => r.rule),
+      ).toEqual([]);
+      expect(publishedCoveringLines(HMAIGNORE, 'README.md', checkId)).toEqual([]);
+    },
+  );
 
   it('is needed: package.json has an agent keyword and the project declares no agent identity file', () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { keywords?: string[] };

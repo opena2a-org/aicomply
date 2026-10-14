@@ -30,8 +30,9 @@ python/src/aicomply/pack/patterns.json
 
 # Docs demonstrate the invisible-unicode / homoglyph attack with literal examples
 # (e.g. docs/detection.md writes an SSN-shaped number with zero-width spaces
-# between its digits and quotes a Cyrillic look-alike letter)
-README.md
+# between its digits and quotes a Cyrillic look-alike letter; SECURITY.md quotes
+# full-width digits and a Cyrillic look-alike letter). README.md carries no such
+# example, so no rule here names it.
 SECURITY.md
 docs/detection.md
 
