@@ -29,9 +29,11 @@ pack/patterns.json
 python/src/aicomply/pack/patterns.json
 
 # Docs demonstrate the invisible-unicode / homoglyph attack with literal examples
-# (e.g. the README audit-trail example normalizes full-width digits to ASCII)
+# (e.g. docs/detection.md writes an SSN-shaped number with zero-width spaces
+# between its digits and quotes a Cyrillic look-alike letter)
 README.md
 SECURITY.md
+docs/detection.md
 
 # AIM-001 reads the `ai-agent` keyword in package.json as a sign that this
 # project is an agent, and asks for an agent identity file (agent-card.json,
