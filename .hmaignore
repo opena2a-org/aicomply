@@ -40,4 +40,11 @@ python/src/aicomply/pack/patterns.json
 # identity of its own to declare. The rule names that one check on that one
 # file, so every other check still reads package.json. Remove it if aicomply
 # ever ships an agent identity file.
+#
+# HackMyAgent reads this `<path>:<check>` form from 0.33.0 on. HackMyAgent
+# 0.30.0, 0.31.0 and 0.32.0 read every rule line that does not start with `!`
+# as a path, so they take this whole line for a path that names no file, and
+# HackMyAgent 0.30.0 still reports AIM-001 on package.json. Scan with
+# `npm run hma:scan`: it runs the HackMyAgent dev dependency, never a
+# `hackmyagent` found on PATH, and refuses one older than 0.33.0.
 package.json:AIM-001  # library and CLI, not an agent: no agent identity to declare
