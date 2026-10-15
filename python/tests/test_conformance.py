@@ -218,11 +218,12 @@ def test_stores_every_case_as_id_input_and_expect_with_sorted_distinct_types():
 
 
 def test_reports_the_distinct_violation_types_sorted():
-    outcome = conformance_outcome(
-        "SSN 123-45-6788 and key AKIAIOSFODNN7EXAMPLE and SSN 219-09-9999"  # FAKE AWS example key
-    )
-    assert outcome["types"] == ["CREDENTIAL", "SSN"]
-    assert len(outcome["violations"]) == 3
+    outcome = conformance_outcome("SSN 123-45-6788 card 4111 1111 1111 1111 and SSN 219-09-9999")
+    found = [v["type"] for v in outcome["violations"]]
+    assert len(found) == 3
+    # The types first appear out of order, so dropping the sort changes the result.
+    assert list(dict.fromkeys(found)) != outcome["types"]
+    assert outcome["types"] == ["PAN", "SSN"]
 
 
 def test_fails_a_case_whose_stored_outcome_differs(tmp_path):
