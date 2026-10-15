@@ -50,6 +50,25 @@ interface PublishedIgnore {
  */
 const hma = require(join(dirname(require.resolve('hackmyagent')), 'hardening', 'scanner.js')) as PublishedIgnore;
 
+interface PublishedTaxonomy {
+  getTaxonomyMap(): Record<string, string>;
+}
+
+/**
+ * The UNICODE-STEGO checks of the HackMyAgent in use, read from its check
+ * taxonomy rather than listed here, so a check added to the family in that
+ * taxonomy is covered without an edit here. On HackMyAgent 0.33.2 each of
+ * UNICODE-STEGO-001 to -005 reports a finding on a README.md that carries its
+ * kind of character or pattern, and a tag character such as U+E0041 is
+ * reported by -004 alone.
+ */
+const UNICODE_STEGO_CHECKS = Object.keys(
+  (require(join(dirname(require.resolve('hackmyagent')), 'hardening', 'taxonomy.js')) as PublishedTaxonomy)
+    .getTaxonomyMap(),
+)
+  .filter((id) => id.startsWith('UNICODE-STEGO-'))
+  .sort();
+
 interface IgnoreRule {
   line: number;
   rule: string;
@@ -247,7 +266,19 @@ describe('.hmaignore', () => {
     expect(publishedIdentityLines(`${line}\n`)).toEqual([]);
   });
 
-  it.each([['UNICODE-STEGO-001'], ['UNICODE-STEGO-005']])(
+  it('reads the UNICODE-STEGO checks from the HackMyAgent in use, UNICODE-STEGO-001 to -005 among them', () => {
+    expect(UNICODE_STEGO_CHECKS).toEqual(
+      expect.arrayContaining([
+        'UNICODE-STEGO-001',
+        'UNICODE-STEGO-002',
+        'UNICODE-STEGO-003',
+        'UNICODE-STEGO-004',
+        'UNICODE-STEGO-005',
+      ]),
+    );
+  });
+
+  it.each(UNICODE_STEGO_CHECKS.map((checkId) => [checkId]))(
     'has no rule that keeps %s on README.md out of a report',
     (checkId) => {
       expect(
@@ -256,6 +287,19 @@ describe('.hmaignore', () => {
           .map((r) => r.rule),
       ).toEqual([]);
       expect(publishedCoveringLines(HMAIGNORE, 'README.md', checkId)).toEqual([]);
+    },
+  );
+
+  // Both readers take a rule that names README.md and one UNICODE-STEGO check
+  // as keeping that check on README.md out of a report, so the case above
+  // fails on such a rule for each check of the family.
+  it.each(UNICODE_STEGO_CHECKS.map((checkId) => [checkId]))(
+    'reads `README.md:%s  # x` as a rule that keeps that check on README.md out of a report',
+    (checkId) => {
+      const line = `README.md:${checkId}  # x\n`;
+      expect(parseRules(line).filter((r) => covers(r, 'README.md', checkId))).toHaveLength(1);
+      expect(publishedErrorLines(line)).toEqual([]);
+      expect(publishedCoveringLines(line, 'README.md', checkId)).toEqual([1]);
     },
   );
 
