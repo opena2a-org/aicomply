@@ -156,7 +156,7 @@ regex-only.
   These require the Guard semantic layer; the regex tier is a syntactic
   detector by design.
 - **Cyrillic / Greek look-alikes that are not NFKC-equivalent** (e.g.
-  Cyrillic small letter а at U+0430 vs Latin a at U+0061). NFKC does not
+  Cyrillic small letter a at U+0430 vs Latin a at U+0061). NFKC does not
   fold these because they are separate semantic letters. Document-level
   defense requires the Guard layer.
 - **Soft hyphen (U+00AD) and combining marks (U+0300–U+036F).** Not

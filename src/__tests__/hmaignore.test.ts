@@ -14,9 +14,10 @@
  * so a grammar change in that version that changes either answer for one of
  * those lines fails the test.
  *
- * README.md carries no invisible-unicode or look-alike example, so no rule may
- * keep it out of the UNICODE-STEGO checks: a character of that kind added to
- * it later has to be reported.
+ * README.md, SECURITY.md and docs/detection.md carry no literal zero-width or
+ * Cyrillic look-alike character (an example names one by its code point), so
+ * no rule may keep them out of the UNICODE-STEGO checks: a character of that
+ * kind added to one of them later has to be reported.
  */
 
 import { existsSync, readFileSync } from 'fs';
@@ -289,6 +290,19 @@ describe('.hmaignore', () => {
       expect(publishedCoveringLines(HMAIGNORE, 'README.md', checkId)).toEqual([]);
     },
   );
+
+  it.each(
+    ['README.md', 'SECURITY.md', 'docs/detection.md'].flatMap((file) =>
+      ['UNICODE-STEGO-001', 'UNICODE-STEGO-005'].map((checkId) => [checkId, file]),
+    ),
+  )('has no rule that keeps %s on %s out of a report', (checkId, file) => {
+    expect(
+      parseRules(HMAIGNORE)
+        .filter((r) => covers(r, file, checkId))
+        .map((r) => r.rule),
+    ).toEqual([]);
+    expect(publishedCoveringLines(HMAIGNORE, file, checkId)).toEqual([]);
+  });
 
   // Both readers take a rule that names README.md and one UNICODE-STEGO check
   // as keeping that check on README.md out of a report, so the case above
