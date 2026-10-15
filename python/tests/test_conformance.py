@@ -41,9 +41,9 @@ def _seeded(cases: list[dict]) -> list[dict]:
 def _seed_drift(root: Path) -> list[str]:
     """Every corpus-seeded case under ``root`` that no longer matches what
     ``scripts/conformance.mjs --seed`` would write for it: a file not named
-    ``<class>-cases.jsonl`` after its corpus file, or text that differs from the
-    corpus record its ``origin`` names. Line numbers count non-empty lines, as
-    the seed script does."""
+    ``<class>-cases.jsonl`` after its corpus file, or an input that differs from
+    the text of the corpus record its ``origin`` names. Line numbers count
+    non-empty lines, as the seed script does."""
     corpus: dict[str, list[str]] = {}
     drift: list[str] = []
     for path in sorted((root / "pack" / "conformance").glob("*.jsonl")):
@@ -66,7 +66,7 @@ def _seed_drift(root: Path) -> list[str]:
                 corpus[klass] = [rec for rec in text.split("\n") if rec != ""]
             records = corpus[klass]
             in_range = 1 <= line_number <= len(records)
-            if not in_range or json.loads(records[line_number - 1]).get("text") != case["text"]:
+            if not in_range or json.loads(records[line_number - 1]).get("text") != case["input"]:
                 drift.append(f"{case['id']}: text differs from {origin}")
     return drift
 
@@ -121,7 +121,7 @@ def test_marks_every_corpus_seeded_case_as_fake_fixture_text():
 
 def test_holds_each_corpus_class_in_its_cases_file_with_the_corpus_text():
     # The suffix keeps every class clear of secret-file name rules (a bare
-    # `credential.jsonl` or `secrets.jsonl` is refused on sight). The text
+    # `credential.jsonl` or `secrets.jsonl` is refused on sight). The input
     # check fails a corpus regeneration that was not followed by a re-seed,
     # which would otherwise keep passing on the old text.
     assert _seed_drift(_REPO_ROOT) == []
@@ -140,14 +140,14 @@ def test_reports_a_store_named_case_file_whose_cases_are_not_corpus_seeded(tmp_p
     # case moved into `secrets.jsonl` passes it; the name check still fails.
     cases_dir = tmp_path / "pack" / "conformance"
     cases_dir.mkdir(parents=True)
-    expected = {"verdict": "CLEAN", "violations": []}
+    clean = {"types": [], "verdict": "CLEAN", "violations": []}
     names = ("secrets.jsonl", ".Passwords.jsonl", "credential-cases.jsonl", "regressions.jsonl")
     for i, name in enumerate(names):
         case = {
             "id": f"regression-{i}",
+            "input": "x",
+            "expect": clean,
             "origin": "pull request #19",
-            "text": "x",
-            "expected": expected,
         }
         (cases_dir / name).write_text(json.dumps(case) + "\n", encoding="utf-8")
     assert _seed_drift(tmp_path) == []
@@ -160,10 +160,10 @@ def test_reports_a_seeded_case_filed_under_its_corpus_name_or_holding_stale_text
     (tmp_path / "bench" / "corpus" / "secrets.jsonl").write_text(
         '{"text":"regenerated"}\n{"text":"kept"}\n', encoding="utf-8"
     )
-    expected = {"verdict": "CLEAN", "violations": []}
+    clean = {"types": [], "verdict": "CLEAN", "violations": []}
     origin = "bench/corpus/secrets.jsonl"
-    stale = {"id": "secrets-0001", "origin": f"{origin}:1", "text": "old", "expected": expected}
-    kept = {"id": "secrets-0002", "origin": f"{origin}:2", "text": "kept", "expected": expected}
+    stale = {"id": "secrets-0001", "input": "old", "expect": clean, "origin": f"{origin}:1"}
+    kept = {"id": "secrets-0002", "input": "kept", "expect": clean, "origin": f"{origin}:2"}
     (tmp_path / "pack" / "conformance" / "secrets.jsonl").write_text(
         json.dumps(stale) + "\n" + json.dumps(kept) + "\n", encoding="utf-8"
     )
@@ -181,9 +181,9 @@ def test_skips_a_case_whose_origin_is_not_a_string(tmp_path, origin):
     (tmp_path / "pack" / "conformance").mkdir(parents=True)
     case = {
         "id": "x",
+        "input": "t",
+        "expect": {"types": [], "verdict": "CLEAN", "violations": []},
         "origin": origin,
-        "text": "t",
-        "expected": {"verdict": "CLEAN", "violations": []},
     }
     (tmp_path / "pack" / "conformance" / "x-cases.jsonl").write_text(
         json.dumps(case) + "\n", encoding="utf-8"
@@ -202,37 +202,135 @@ def test_skips_a_case_whose_origin_is_not_a_string(tmp_path, origin):
 )
 def test_env_reference_and_empty_assignment_report_nothing(text):
     # The divergence this suite was built to catch, stated directly.
-    assert conformance_outcome(text) == {"verdict": "CLEAN", "violations": []}
+    assert conformance_outcome(text) == {"types": [], "verdict": "CLEAN", "violations": []}
+
+
+def _write_cases(directory: Path, cases: list) -> Path:
+    (directory / "cases.jsonl").write_text("".join(json.dumps(c) + "\n" for c in cases))
+    return directory
+
+
+def test_stores_every_case_as_id_input_and_expect_with_sorted_distinct_types():
+    for case in load_conformance_cases(CASES_DIR):
+        assert list(case)[:3] == ["id", "input", "expect"]
+        assert list(case["expect"]) == ["types", "verdict", "violations"]
+        assert case["expect"]["types"] == sorted(set(case["expect"]["types"]))
+
+
+def test_reports_the_distinct_violation_types_sorted():
+    outcome = conformance_outcome(
+        "SSN 123-45-6788 and key AKIAIOSFODNN7EXAMPLE and SSN 219-09-9999"
+    )
+    assert outcome["types"] == ["CREDENTIAL", "SSN"]
+    assert len(outcome["violations"]) == 3
 
 
 def test_fails_a_case_whose_stored_outcome_differs(tmp_path):
     # The suite is not vacuous: one wrong field in one case turns it red.
     text = "const apiKey = process.env.OPENAI_API_KEY;"
-    good = {"id": "good", "text": text, "expected": conformance_outcome(text)}
-    bad = {
-        "id": "bad",
-        "text": "SSN 123-45-6789",
-        "expected": {"verdict": "VIOLATION", "violations": []},
-    }
-    (tmp_path / "cases.jsonl").write_text(json.dumps(good) + "\n" + json.dumps(bad) + "\n")
-    result = run_conformance(tmp_path)
-    assert result["cases"] == 2
+    outcome = conformance_outcome("SSN 123-45-6788")
+    shifted = [{**v, "start": v["start"] + 1} for v in outcome["violations"]]
+    result = run_conformance(
+        _write_cases(
+            tmp_path,
+            [
+                {"id": "good", "input": text, "expect": conformance_outcome(text)},
+                {
+                    "id": "bad-types",
+                    "input": "SSN 123-45-6788",
+                    "expect": {"types": [], "verdict": "VIOLATION", "violations": []},
+                },
+                {
+                    "id": "bad-offset",
+                    "input": "SSN 123-45-6788",
+                    "expect": {**outcome, "violations": shifted},
+                },
+            ],
+        )
+    )
+    assert result["cases"] == 3
     assert result["passed"] == 1
-    assert [f["id"] for f in result["failures"]] == ["bad"]
+    assert [f["id"] for f in result["failures"]] == ["bad-types", "bad-offset"]
+    assert result["failures"][0]["expect"]["types"] == []
+
+
+def test_runs_a_case_that_states_only_types_and_verdict(tmp_path):
+    result = run_conformance(
+        _write_cases(
+            tmp_path,
+            [
+                {
+                    "id": "ssn",
+                    "input": "SSN 123-45-6788",
+                    "expect": {"types": ["SSN"], "verdict": "VIOLATION"},
+                },
+                {
+                    "id": "clean",
+                    "input": "nothing here",
+                    "expect": {"types": [], "verdict": "CLEAN"},
+                },
+                {
+                    "id": "wrong",
+                    "input": "SSN 123-45-6788",
+                    "expect": {"types": ["PAN"], "verdict": "VIOLATION"},
+                },
+            ],
+        )
+    )
+    assert result["cases"] == 3
+    assert [f["id"] for f in result["failures"]] == ["wrong"]
+
+
+@pytest.mark.parametrize(
+    "case,message",
+    [
+        (
+            {"id": "old", "text": "x", "expected": {"verdict": "CLEAN", "violations": []}},
+            "needs id, input and expect",
+        ),
+        (
+            {
+                "id": "c",
+                "input": "x",
+                "expect": {"types": ["SSN", "CREDENTIAL"], "verdict": "VIOLATION"},
+            },
+            "sorted and distinct",
+        ),
+        (
+            {"id": "c", "input": "x", "expect": {"types": ["SSN", "SSN"], "verdict": "VIOLATION"}},
+            "sorted and distinct",
+        ),
+        ({"id": "c", "input": "x", "expect": {"types": []}}, r"expect\.verdict"),
+        (
+            {
+                "id": "c",
+                "input": "x",
+                "expect": {
+                    "types": ["PAN"],
+                    "verdict": "VIOLATION",
+                    "violations": [{"type": "SSN"}],
+                },
+            },
+            r"expect\.types does not match expect\.violations",
+        ),
+    ],
+)
+def test_refuses_a_case_that_breaks_the_case_contract(tmp_path, case, message):
+    with pytest.raises(ValueError, match=message):
+        load_conformance_cases(_write_cases(tmp_path, [case]))
 
 
 def test_refuses_a_duplicate_case_id(tmp_path):
-    case = {"id": "same", "text": "x", "expected": {"verdict": "CLEAN", "violations": []}}
-    (tmp_path / "a.jsonl").write_text(json.dumps(case) + "\n" + json.dumps(case) + "\n")
+    case = {"id": "same", "input": "x", "expect": {"types": [], "verdict": "CLEAN"}}
     with pytest.raises(ValueError, match="duplicate case id same"):
-        load_conformance_cases(tmp_path)
+        load_conformance_cases(_write_cases(tmp_path, [case, case]))
 
 
 @pytest.mark.parametrize("origin", [None, 7, ["bench/corpus/ssn.jsonl:1"]])
 def test_refuses_a_case_whose_origin_is_not_a_string(tmp_path, origin):
     # The drift check passes over such a case, so the loader is where it is reported.
-    expected = {"verdict": "CLEAN", "violations": []}
-    case = {"id": "x", "origin": origin, "text": "t", "expected": expected}
+    clean = {"types": [], "verdict": "CLEAN", "violations": []}
+    case = {"id": "x", "input": "t", "expect": clean, "origin": origin}
     (tmp_path / "a.jsonl").write_text("\n" + json.dumps(case) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="a.jsonl:2: origin must be a string"):
         load_conformance_cases(tmp_path)

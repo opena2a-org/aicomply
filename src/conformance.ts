@@ -1,11 +1,17 @@
 /**
  * Pattern pack conformance: per-case exact equality across runtimes.
  *
- * Each case in `pack/conformance/*.jsonl` carries an input text and the exact
- * regex-layer outcome every runtime must produce for it: the verdict and every
- * violation's type, masked value, offsets, confidence and view. Aggregate
- * precision and recall can stay inside tolerance while individual inputs
- * diverge between runtimes; this suite fails on the first divergent case.
+ * Each case in `pack/conformance/*.jsonl` is one JSON line:
+ *
+ *   { "id", "input", "expect": { "types", "verdict", "violations"? }, "origin"?, "fixture"?, "note"? }
+ *
+ * `expect.types` is the sorted list of distinct violation types and
+ * `expect.verdict` the verdict; together they are the outcome every runtime
+ * must reproduce exactly. A case may also store `expect.violations`, every
+ * violation's type, masked value, offsets, confidence and view, and then those
+ * must match exactly as well. Aggregate precision and recall can stay inside
+ * tolerance while individual inputs diverge between runtimes; this suite fails
+ * on the first divergent case.
  *
  * The outcome is the deterministic layer only (normalization plus the regex
  * scan over every content view). The semantic Guard is never consulted, so a
@@ -30,15 +36,26 @@ export interface ConformanceViolation {
   originalEnd: number | null;
 }
 
+/** What this runtime produced for one input. */
 export interface ConformanceOutcome {
+  /** Distinct violation types, sorted. */
+  types: string[];
   verdict: Verdict;
   violations: ConformanceViolation[];
 }
 
+/** What a case requires. `violations`, when present, must match exactly too. */
+export interface ConformanceExpect {
+  /** Distinct violation types, sorted. */
+  types: string[];
+  verdict: Verdict;
+  violations?: ConformanceViolation[];
+}
+
 export interface ConformanceCase {
   id: string;
-  text: string;
-  expected: ConformanceOutcome;
+  input: string;
+  expect: ConformanceExpect;
   /** Where the case came from, e.g. `bench/corpus/ssn.jsonl:12` or a pull request. */
   origin?: string;
   /**
@@ -52,7 +69,7 @@ export interface ConformanceCase {
 
 export interface ConformanceFailure {
   id: string;
-  expected: ConformanceOutcome;
+  expect: ConformanceExpect;
   actual: ConformanceOutcome;
 }
 
@@ -72,22 +89,64 @@ export interface ConformanceRecord {
   failures: ConformanceFailure[];
 }
 
+/** Distinct values, sorted. Type names are ASCII, so every runtime's default string order agrees. */
+function sortedDistinct(values: string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
 /** The deterministic outcome for one input, in the shape cases are stored in. */
-export function conformanceOutcome(text: string): ConformanceOutcome {
-  const result = scanAllViews(normalize(text));
+export function conformanceOutcome(input: string): ConformanceOutcome {
+  const result = scanAllViews(normalize(input));
+  const violations = result.violations.map((v) => ({
+    type: v.type,
+    value: v.value,
+    start: v.start,
+    end: v.end,
+    confidence: v.confidence,
+    view: v.view ?? null,
+    originalStart: v.originalStart ?? null,
+    originalEnd: v.originalEnd ?? null,
+  }));
   return {
+    types: sortedDistinct(violations.map((v) => v.type)),
     verdict: result.verdict,
-    violations: result.violations.map((v) => ({
-      type: v.type,
-      value: v.value,
-      start: v.start,
-      end: v.end,
-      confidence: v.confidence,
-      view: v.view ?? null,
-      originalStart: v.originalStart ?? null,
-      originalEnd: v.originalEnd ?? null,
-    })),
+    violations,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Check one parsed line against the case contract; `where` is `file:line`. */
+function checkCase(where: string, c: unknown): ConformanceCase {
+  if (!isRecord(c) || typeof c.id !== 'string' || typeof c.input !== 'string' || !isRecord(c.expect)) {
+    throw new Error(`${where}: a case needs id, input and expect`);
+  }
+  if (c.origin !== undefined && typeof c.origin !== 'string') {
+    throw new Error(`${where}: origin must be a string`);
+  }
+  const { types, verdict, violations } = c.expect;
+  if (!Array.isArray(types) || !types.every((t) => typeof t === 'string')) {
+    throw new Error(`${where}: expect.types must be an array of strings`);
+  }
+  if (!sameList(types, sortedDistinct(types))) {
+    throw new Error(`${where}: expect.types must be sorted and distinct`);
+  }
+  if (typeof verdict !== 'string') throw new Error(`${where}: expect.verdict must be a string`);
+  if (violations !== undefined) {
+    if (!Array.isArray(violations) || !violations.every(isRecord)) {
+      throw new Error(`${where}: expect.violations must be an array of objects`);
+    }
+    if (!sameList(types, sortedDistinct(violations.map((v) => String(v.type))))) {
+      throw new Error(`${where}: expect.types does not match expect.violations`);
+    }
+  }
+  return c as unknown as ConformanceCase;
 }
 
 /** Read every `*.jsonl` case file in `dir`, in file-name order. */
@@ -98,13 +157,7 @@ export function loadConformanceCases(dir: string): ConformanceCase[] {
     const lines = readFileSync(join(dir, file), 'utf8').split('\n');
     lines.forEach((line, index) => {
       if (line.trim() === '') return;
-      const c = JSON.parse(line) as ConformanceCase;
-      if (typeof c.id !== 'string' || typeof c.text !== 'string' || c.expected === undefined) {
-        throw new Error(`${file}:${index + 1}: a case needs id, text and expected`);
-      }
-      if (c.origin !== undefined && typeof c.origin !== 'string') {
-        throw new Error(`${file}:${index + 1}: origin must be a string`);
-      }
+      const c = checkCase(`${file}:${index + 1}`, JSON.parse(line));
       if (ids.has(c.id)) throw new Error(`${file}:${index + 1}: duplicate case id ${c.id}`);
       ids.add(c.id);
       cases.push(c);
@@ -113,10 +166,12 @@ export function loadConformanceCases(dir: string): ConformanceCase[] {
   return cases;
 }
 
-function sameOutcome(a: ConformanceOutcome, b: ConformanceOutcome): boolean {
-  if (a.verdict !== b.verdict || a.violations.length !== b.violations.length) return false;
-  return a.violations.every((v, i) => {
-    const w = b.violations[i];
+function sameOutcome(expect: ConformanceExpect, actual: ConformanceOutcome): boolean {
+  if (expect.verdict !== actual.verdict || !sameList(expect.types, actual.types)) return false;
+  if (expect.violations === undefined) return true;
+  if (expect.violations.length !== actual.violations.length) return false;
+  return expect.violations.every((v, i) => {
+    const w = actual.violations[i];
     return (
       v.type === w.type &&
       v.value === w.value &&
@@ -149,9 +204,9 @@ export function runConformance(dir: string): ConformanceRecord {
   const cases = loadConformanceCases(dir);
   const failures: ConformanceFailure[] = [];
   for (const c of cases) {
-    const actual = conformanceOutcome(c.text);
-    if (!sameOutcome(c.expected, actual)) {
-      failures.push({ id: c.id, expected: c.expected, actual });
+    const actual = conformanceOutcome(c.input);
+    if (!sameOutcome(c.expect, actual)) {
+      failures.push({ id: c.id, expect: c.expect, actual });
     }
   }
   return {

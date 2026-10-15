@@ -119,11 +119,22 @@ def _contains_digit(value: str) -> bool:
     return any("0" <= ch <= "9" for ch in value)
 
 
+#: The ``validator`` value of a pack entry that runs no post-match check. It is
+#: a name rather than null so every entry states its check explicitly.
+NO_VALIDATOR = "none"
+
+#: Validator names a pack entry may reference, mapped to their implementation.
+#: The names are part of the pack contract: every runtime implements the same
+#: set, with the same semantics.
 VALIDATORS: dict[str, Validator] = {
-    "ssn": _validate_ssn,
-    "pan": _validate_pan,
-    "iban": _validate_iban,
-    "npi": _validate_npi,
+    # SSN area, group and serial rules (no 000, 666 or 9xx area, no 00 group, no 0000 serial).
+    "ssnArea": _validate_ssn,
+    # Card number (PAN): 13-19 digits, Luhn checksum and a known IIN prefix.
+    "luhn": _validate_pan,
+    # IBAN: length 15-34 and the ISO 13616 mod-97 check.
+    "mod97": _validate_iban,
+    # NPI: exactly 10 digits, Luhn over the 80840 prefix.
+    "npiLuhn": _validate_npi,
     "notEmptyAssignmentTarget": _not_empty_assignment_target,
     "containsDigit": _contains_digit,
 }

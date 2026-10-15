@@ -56,10 +56,10 @@ if (process.argv.includes('--seed')) {
     const lines = records.map((rec, i) =>
       JSON.stringify({
         id: `${klass}-${String(i + 1).padStart(4, '0')}`,
+        input: rec.text,
+        expect: conformanceOutcome(rec.text),
         origin: `bench/corpus/${file}:${i + 1}`,
         fixture: SEEDED_FIXTURE_NOTE,
-        text: rec.text,
-        expected: conformanceOutcome(rec.text),
       }),
     );
     const out = caseFileName(klass);
@@ -79,7 +79,7 @@ console.log(`cases:      ${record.cases}`);
 console.log(`passed:     ${record.passed}`);
 for (const f of record.failures.slice(0, 20)) {
   console.log(`FAIL ${f.id}`);
-  console.log(`  expected ${JSON.stringify(f.expected)}`);
+  console.log(`  expect   ${JSON.stringify(f.expect)}`);
   console.log(`  actual   ${JSON.stringify(f.actual)}`);
 }
 if (record.failures.length > 20) console.log(`... ${record.failures.length - 20} more`);

@@ -1,8 +1,13 @@
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { conformanceOutcome, loadConformanceCases, runConformance } from '../conformance';
-import type { ConformanceCase } from '../conformance';
+import {
+  conformanceOutcome,
+  loadConformanceCases,
+  runConformance,
+  type ConformanceCase,
+  type ConformanceRecord,
+} from '../conformance';
 import { PACK_SHA256, PACK_VERSION } from '../classifier/regex/pack';
 
 const ROOT = join(__dirname, '..', '..');
@@ -27,9 +32,9 @@ function seeded(cases: ConformanceCase[]): ConformanceCase[] {
 /**
  * Every corpus-seeded case under `root` that no longer matches what
  * `scripts/conformance.mjs --seed` would write for it: a file not named
- * `<class>-cases.jsonl` after its corpus file, or text that differs from the
- * corpus record its `origin` names. Line numbers count non-empty lines, as the
- * seed script does.
+ * `<class>-cases.jsonl` after its corpus file, or an input that differs from
+ * the text of the corpus record its `origin` names. Line numbers count
+ * non-empty lines, as the seed script does.
  */
 function seedDrift(root: string): string[] {
   const casesDir = join(root, 'pack', 'conformance');
@@ -52,7 +57,7 @@ function seedDrift(root: string): string[] {
         corpus.set(klass, lines.filter((l) => l.length > 0));
       }
       const record = corpus.get(klass)?.[Number(lineNumber) - 1];
-      if (record === undefined || (JSON.parse(record) as { text: unknown }).text !== c.text) {
+      if (record === undefined || (JSON.parse(record) as { text: unknown }).text !== c.input) {
         drift.push(`${c.id}: text differs from ${c.origin}`);
       }
     }
@@ -115,7 +120,7 @@ describe('pattern pack conformance suite', () => {
 
   it('holds each corpus class in <class>-cases.jsonl with the text of the corpus line it names', () => {
     // The suffix keeps every class clear of secret-file name rules (a bare
-    // `credential.jsonl` or `secrets.jsonl` is refused on sight). The text
+    // `credential.jsonl` or `secrets.jsonl` is refused on sight). The input
     // check fails a corpus regeneration that was not followed by a re-seed,
     // which would otherwise keep passing on the old text.
     expect(seedDrift(ROOT)).toEqual([]);
@@ -138,10 +143,10 @@ describe('pattern pack conformance suite', () => {
     try {
       const casesDir = join(root, 'pack', 'conformance');
       mkdirSync(casesDir, { recursive: true });
-      const expected = { verdict: 'CLEAN', violations: [] };
+      const clean = { types: [], verdict: 'CLEAN', violations: [] };
       const names = ['secrets.jsonl', '.Passwords.jsonl', 'credential-cases.jsonl', 'regressions.jsonl'];
       names.forEach((name, i) => {
-        const c = { id: `regression-${i}`, origin: 'pull request #19', text: 'x', expected };
+        const c = { id: `regression-${i}`, input: 'x', expect: clean, origin: 'pull request #19' };
         writeFileSync(join(casesDir, name), `${JSON.stringify(c)}\n`);
       });
       expect(seedDrift(root)).toEqual([]);
@@ -157,9 +162,9 @@ describe('pattern pack conformance suite', () => {
       mkdirSync(join(root, 'bench', 'corpus'), { recursive: true });
       mkdirSync(join(root, 'pack', 'conformance'), { recursive: true });
       writeFileSync(join(root, 'bench', 'corpus', 'secrets.jsonl'), '{"text":"regenerated"}\n{"text":"kept"}\n');
-      const expected = { verdict: 'CLEAN', violations: [] };
-      const stale = { id: 'secrets-0001', origin: 'bench/corpus/secrets.jsonl:1', text: 'old', expected };
-      const kept = { id: 'secrets-0002', origin: 'bench/corpus/secrets.jsonl:2', text: 'kept', expected };
+      const clean = { types: [], verdict: 'CLEAN', violations: [] };
+      const stale = { id: 'secrets-0001', input: 'old', expect: clean, origin: 'bench/corpus/secrets.jsonl:1' };
+      const kept = { id: 'secrets-0002', input: 'kept', expect: clean, origin: 'bench/corpus/secrets.jsonl:2' };
       writeFileSync(join(root, 'pack', 'conformance', 'secrets.jsonl'), `${JSON.stringify(stale)}\n${JSON.stringify(kept)}\n`);
       expect(seedDrift(root)).toEqual([
         'secrets-0001: in secrets.jsonl, not secrets-cases.jsonl',
@@ -177,7 +182,7 @@ describe('pattern pack conformance suite', () => {
     const root = mkdtempSync(join(tmpdir(), 'aicomply-conformance-'));
     try {
       mkdirSync(join(root, 'pack', 'conformance'), { recursive: true });
-      const c = { id: 'x', origin, text: 't', expected: { verdict: 'CLEAN', violations: [] } };
+      const c = { id: 'x', input: 't', expect: { types: [], verdict: 'CLEAN', violations: [] }, origin };
       writeFileSync(join(root, 'pack', 'conformance', 'x-cases.jsonl'), `${JSON.stringify(c)}\n`);
       expect(seedDrift(root)).toEqual([]);
       expect(seeded([c as unknown as ConformanceCase])).toEqual([]);
@@ -186,43 +191,73 @@ describe('pattern pack conformance suite', () => {
     }
   });
 
-  it('fails a case whose stored outcome differs from this runtime', () => {
-    // The suite is not vacuous: one wrong field in one case turns it red.
-    const dir = mkdtempSync(join(tmpdir(), 'aicomply-conformance-'));
-    try {
-      const text = 'const apiKey = process.env.OPENAI_API_KEY;';
-      const good = { id: 'good', text, expected: conformanceOutcome(text) };
-      const bad = {
-        id: 'bad',
-        text: 'SSN 123-45-6789',
-        expected: { verdict: 'VIOLATION', violations: [] },
-      };
-      writeFileSync(join(dir, 'cases.jsonl'), `${JSON.stringify(good)}\n${JSON.stringify(bad)}\n`);
-      const result = runConformance(dir);
-      expect(result.cases).toBe(2);
-      expect(result.passed).toBe(1);
-      expect(result.failures.map((f) => f.id)).toEqual(['bad']);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+  it('stores every case as id, input and expect with sorted distinct types', () => {
+    for (const c of loadConformanceCases(CASES_DIR)) {
+      expect(Object.keys(c).slice(0, 3)).toEqual(['id', 'input', 'expect']);
+      expect(Object.keys(c.expect)).toEqual(['types', 'verdict', 'violations']);
+      expect(c.expect.types).toEqual([...new Set(c.expect.types)].sort());
     }
   });
 
+  it('reports the distinct violation types, sorted', () => {
+    const outcome = conformanceOutcome('SSN 123-45-6788 and key AKIAIOSFODNN7EXAMPLE and SSN 219-09-9999');
+    expect(outcome.types).toEqual(['CREDENTIAL', 'SSN']);
+    expect(outcome.violations.map((v) => v.type)).toHaveLength(3);
+  });
+
+  it('fails a case whose stored outcome differs from this runtime', () => {
+    // The suite is not vacuous: one wrong field in one case turns it red.
+    const input = 'const apiKey = process.env.OPENAI_API_KEY;';
+    const outcome = conformanceOutcome('SSN 123-45-6788');
+    const result = runCases([
+      { id: 'good', input, expect: conformanceOutcome(input) },
+      { id: 'bad-types', input: 'SSN 123-45-6788', expect: { types: [], verdict: 'VIOLATION', violations: [] } },
+      {
+        id: 'bad-offset',
+        input: 'SSN 123-45-6788',
+        expect: { ...outcome, violations: outcome.violations.map((v) => ({ ...v, start: v.start + 1 })) },
+      },
+    ]);
+    expect(result.cases).toBe(3);
+    expect(result.passed).toBe(1);
+    expect(result.failures.map((f) => f.id)).toEqual(['bad-types', 'bad-offset']);
+    expect(result.failures[0].expect.types).toEqual([]);
+  });
+
+  it('runs a case that states only the contract fields, types and verdict', () => {
+    const result = runCases([
+      { id: 'ssn', input: 'SSN 123-45-6788', expect: { types: ['SSN'], verdict: 'VIOLATION' } },
+      { id: 'clean', input: 'nothing here', expect: { types: [], verdict: 'CLEAN' } },
+      { id: 'wrong', input: 'SSN 123-45-6788', expect: { types: ['PAN'], verdict: 'VIOLATION' } },
+    ]);
+    expect(result.cases).toBe(3);
+    expect(result.failures.map((f) => f.id)).toEqual(['wrong']);
+  });
+
+  it.each([
+    ['the superseded text/expected shape', { id: 'old', text: 'x', expected: { verdict: 'CLEAN', violations: [] } }, /needs id, input and expect/],
+    ['unsorted types', { id: 'c', input: 'x', expect: { types: ['SSN', 'CREDENTIAL'], verdict: 'VIOLATION' } }, /sorted and distinct/],
+    ['repeated types', { id: 'c', input: 'x', expect: { types: ['SSN', 'SSN'], verdict: 'VIOLATION' } }, /sorted and distinct/],
+    ['a missing verdict', { id: 'c', input: 'x', expect: { types: [] } }, /expect\.verdict/],
+    [
+      'types that disagree with the stored violations',
+      { id: 'c', input: 'x', expect: { types: ['PAN'], verdict: 'VIOLATION', violations: [{ type: 'SSN' }] } },
+      /expect\.types does not match expect\.violations/,
+    ],
+  ])('refuses a case with %s', (_label, c, message) => {
+    expect(() => withCases([c], (dir) => loadConformanceCases(dir))).toThrow(message);
+  });
+
   it('refuses a duplicate case id', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'aicomply-conformance-'));
-    try {
-      const c = { id: 'same', text: 'x', expected: { verdict: 'CLEAN', violations: [] } };
-      writeFileSync(join(dir, 'a.jsonl'), `${JSON.stringify(c)}\n${JSON.stringify(c)}\n`);
-      expect(() => loadConformanceCases(dir)).toThrow(/duplicate case id same/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const c = { id: 'same', input: 'x', expect: { types: [], verdict: 'CLEAN' } };
+    expect(() => withCases([c, c], (dir) => loadConformanceCases(dir))).toThrow(/duplicate case id same/);
   });
 
   it.each([[null], [7], [['bench/corpus/ssn.jsonl:1']]])('refuses a case whose origin is %p, not a string', (origin) => {
     // The drift check passes over such a case, so the loader is where it is reported.
     const dir = mkdtempSync(join(tmpdir(), 'aicomply-conformance-'));
     try {
-      const c = { id: 'x', origin, text: 't', expected: { verdict: 'CLEAN', violations: [] } };
+      const c = { id: 'x', input: 't', expect: { types: [], verdict: 'CLEAN', violations: [] }, origin };
       writeFileSync(join(dir, 'a.jsonl'), `\n${JSON.stringify(c)}\n`);
       expect(() => loadConformanceCases(dir)).toThrow('a.jsonl:2: origin must be a string');
     } finally {
@@ -230,3 +265,18 @@ describe('pattern pack conformance suite', () => {
     }
   });
 });
+
+/** Write `cases` to a scratch case directory, run `fn` on it, then remove it. */
+function withCases<T>(cases: unknown[], fn: (dir: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), 'aicomply-conformance-'));
+  try {
+    writeFileSync(join(dir, 'cases.jsonl'), cases.map((c) => JSON.stringify(c)).join('\n') + '\n');
+    return fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function runCases(cases: unknown[]): ConformanceRecord {
+  return withCases(cases, (dir) => runConformance(dir));
+}

@@ -9,12 +9,25 @@
  * The loader fails closed: a missing, malformed or non-portable pack throws at
  * import time rather than leaving the classifier running with no patterns,
  * which would report every input as CLEAN.
+ *
+ * File shape (camelCase):
+ *
+ *   { "schemaVersion": 1, "packVersion": "<semver>",
+ *     "referenceForms": [ { "id", "source", "note"? } ],
+ *     "patterns": [ { "id", "class", "source", "flags", "validator",
+ *                     "context": { "confidence" },
+ *                     "aiisId", "techniqueId", "fpEstimate", "note"? } ] }
+ *
+ * `class` is the violation type a match reports, `source` the regex, `validator`
+ * a name from `./validators` or "none", and `context.confidence` the confidence
+ * a match carries (it also decides which of two overlapping matches is kept).
+ * `aiisId`, `techniqueId` and `fpEstimate` are nullable until they are mapped.
  */
 
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { VALIDATORS, type Validator } from './validators';
+import { NO_VALIDATOR, VALIDATORS, type Validator } from './validators';
 import type { PackIdentity } from '../../types';
 
 export const PATTERN_TYPES = [
@@ -36,9 +49,13 @@ export const PACK_SCHEMA_VERSION = 1;
 export interface PatternDefinition {
   /** Stable pack identifier, e.g. `aws-access-key-id`. */
   id: string;
+  /** The entry's `class`. */
   type: PatternType;
+  /** The entry's `source`, compiled with its `flags` plus the global flag. */
   regex: RegExp;
+  /** The entry's `context.confidence`. */
   confidence: number;
+  /** The entry's `validator`; absent for "none". */
   validate?: Validator;
 }
 
@@ -106,16 +123,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function compileRegex(where: string, source: unknown, flags: string): RegExp {
   if (typeof source !== 'string' || source.length === 0) {
-    fail(`${where}: regex must be a non-empty string`);
+    fail(`${where}: source must be a non-empty string`);
   }
   const construct = nonPortableConstruct(source);
   if (construct !== null) {
-    fail(`${where}: regex uses a ${construct}, which is outside the portable subset`);
+    fail(`${where}: source uses a ${construct}, which is outside the portable subset`);
   }
   try {
     return new RegExp(source, flags);
   } catch (err) {
-    fail(`${where}: regex does not compile (${(err as Error).message})`);
+    fail(`${where}: source does not compile (${(err as Error).message})`);
+  }
+}
+
+/** Check the mapping fields: present on every entry, null until mapped. */
+function checkMappingFields(id: string, entry: Record<string, unknown>): void {
+  for (const key of ['aiisId', 'techniqueId'] as const) {
+    if (!(key in entry)) fail(`pattern ${id}: ${key} is missing (use null when unmapped)`);
+    const value = entry[key];
+    if (value !== null && (typeof value !== 'string' || value === '')) {
+      fail(`pattern ${id}: ${key} must be null or a non-empty string`);
+    }
+  }
+  if (!('fpEstimate' in entry)) fail(`pattern ${id}: fpEstimate is missing (use null when unmeasured)`);
+  const fp = entry.fpEstimate;
+  if (fp !== null && (typeof fp !== 'number' || !(fp >= 0 && fp <= 1))) {
+    fail(`pattern ${id}: fpEstimate must be null or a number in [0, 1]`);
   }
 }
 
@@ -152,44 +185,50 @@ export function compilePack(bytes: Buffer): CompiledPack {
     if (seen.has(id)) fail(`pattern id ${id} is duplicated`);
     seen.add(id);
 
-    const type = entry.type;
-    if (typeof type !== 'string' || !(PATTERN_TYPES as readonly string[]).includes(type)) {
-      fail(`pattern ${id}: type ${String(type)} is not one of ${PATTERN_TYPES.join(', ')}`);
+    const klass = entry.class;
+    if (typeof klass !== 'string' || !(PATTERN_TYPES as readonly string[]).includes(klass)) {
+      fail(`pattern ${id}: class ${String(klass)} is not one of ${PATTERN_TYPES.join(', ')}`);
     }
     if (entry.flags !== '' && entry.flags !== 'i') {
       fail(`pattern ${id}: flags must be "" or "i"`);
     }
-    const confidence = entry.confidence;
+    const context = entry.context;
+    if (!isRecord(context)) fail(`pattern ${id}: context must be an object`);
+    const confidence = context.confidence;
     if (typeof confidence !== 'number' || !(confidence > 0 && confidence <= 1)) {
-      fail(`pattern ${id}: confidence must be a number in (0, 1]`);
+      fail(`pattern ${id}: context.confidence must be a number in (0, 1]`);
     }
 
-    // The key is required in both runtimes; null is how an entry says it has
+    // The key is required in both runtimes; "none" is how an entry says it has
     // no validator, so a missing key is a malformed entry, not "none".
     if (!Object.prototype.hasOwnProperty.call(entry, 'validator')) {
-      fail(`pattern ${id}: validator is required (a validator name, or null for none)`);
+      fail(`pattern ${id}: validator is required (a validator name, or "${NO_VALIDATOR}" for no check)`);
+    }
+    const name = entry.validator;
+    if (typeof name !== 'string') {
+      fail(`pattern ${id}: validator must be a name, or "${NO_VALIDATOR}" for no check`);
     }
     let validate: Validator | undefined;
-    if (entry.validator !== null) {
-      const name = entry.validator;
-      if (typeof name !== 'string' || !Object.prototype.hasOwnProperty.call(VALIDATORS, name)) {
-        fail(`pattern ${id}: validator ${String(name)} is not implemented by this runtime`);
+    if (name !== NO_VALIDATOR) {
+      if (!Object.prototype.hasOwnProperty.call(VALIDATORS, name)) {
+        fail(`pattern ${id}: validator ${name} is not implemented by this runtime`);
       }
       validate = VALIDATORS[name];
     }
+    checkMappingFields(id, entry);
 
     // Matching is a scan for every occurrence, so the global flag is always on.
-    const regex = compileRegex(`pattern ${id}`, entry.regex, `g${entry.flags}`);
-    const definition: PatternDefinition = { id, type: type as PatternType, regex, confidence };
+    const regex = compileRegex(`pattern ${id}`, entry.source, `g${entry.flags}`);
+    const definition: PatternDefinition = { id, type: klass as PatternType, regex, confidence };
     if (validate) definition.validate = validate;
     return definition;
   });
 
   const referenceForms = doc.referenceForms.map((entry: unknown, index: number) => {
     if (!isRecord(entry)) fail(`referenceForms[${index}] must be an object`);
-    const source = entry.regex;
+    const source = entry.source;
     if (typeof source !== 'string' || !source.startsWith('^') || !source.endsWith('$')) {
-      fail(`referenceForms[${index}]: regex must be anchored with ^ and $`);
+      fail(`referenceForms[${index}]: source must be anchored with ^ and $`);
     }
     // No global flag: these are tested with .test(), which a global flag
     // would make stateful across calls.

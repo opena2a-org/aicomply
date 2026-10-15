@@ -38,7 +38,7 @@ def main() -> int:
     print(f"passed:     {record['passed']}")
     for failure in record["failures"][:20]:
         print(f"FAIL {failure['id']}")
-        print(f"  expected {json.dumps(failure['expected'])}")
+        print(f"  expect   {json.dumps(failure['expect'])}")
         print(f"  actual   {json.dumps(failure['actual'])}")
     if len(record["failures"]) > 20:
         print(f"... {len(record['failures']) - 20} more")
