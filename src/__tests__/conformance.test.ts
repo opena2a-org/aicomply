@@ -200,7 +200,7 @@ describe('pattern pack conformance suite', () => {
   });
 
   it('reports the distinct violation types, sorted', () => {
-    const outcome = conformanceOutcome('SSN 123-45-6788 and key AKIAIOSFODNN7EXAMPLE and SSN 219-09-9999');
+    const outcome = conformanceOutcome('SSN 123-45-6788 and key AKIAIOSFODNN7EXAMPLE and SSN 219-09-9999'); // FAKE AWS example key
     expect(outcome.types).toEqual(['CREDENTIAL', 'SSN']);
     expect(outcome.violations.map((v) => v.type)).toHaveLength(3);
   });

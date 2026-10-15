@@ -219,7 +219,7 @@ def test_stores_every_case_as_id_input_and_expect_with_sorted_distinct_types():
 
 def test_reports_the_distinct_violation_types_sorted():
     outcome = conformance_outcome(
-        "SSN 123-45-6788 and key AKIAIOSFODNN7EXAMPLE and SSN 219-09-9999"
+        "SSN 123-45-6788 and key AKIAIOSFODNN7EXAMPLE and SSN 219-09-9999"  # FAKE AWS example key
     )
     assert outcome["types"] == ["CREDENTIAL", "SSN"]
     assert len(outcome["violations"]) == 3
