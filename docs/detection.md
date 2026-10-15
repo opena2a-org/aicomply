@@ -34,7 +34,7 @@ When the Guard fires above its confidence threshold, the finding surfaces with `
 Inputs are canonicalized before patterns run:
 
 - **Unicode homoglyphs** are folded via NFKC (`１２３-４５-６７８９` → `123-45-6789`).
-- **Zero-width and bidi-control characters** are stripped (`1​2​3-4​5-6​7​8​9` → `123-45-6789`).
+- **Zero-width and bidi-control characters** are stripped (`123-45-6789` with a zero-width space, U+200B, between each pair of adjacent digits → `123-45-6789`).
 - **Whitespace-injected** values are scanned in a compact view that strips spaces only between digit/separator characters, so prose word boundaries stay intact (`1 2 3 - 4 5 - 6 7 8 9` matches; `My SSN is 123-45-6789` still works).
 - **Base64 / URL-encoded** payloads are extracted and scanned in addition to the canonical stream (bounded recursion, length-gated, ASCII-printable round-trip required).
 
@@ -45,7 +45,7 @@ Every pattern match carries a `view` field (`normalized` / `compact` / `decoded-
 For full threat-model scope see [SECURITY.md](../SECURITY.md). The honest list:
 
 - **Semantic / contextual violations.** A request to "summarize all our user emails" is not a regex hit. The semantic Guard layer targets these, but it is a preview: the NanoMind model has shipped and `@nanomind/daemon` serves it, yet it over-flags benign text (see [Guard status](semantic-guard.md#guard-status-preview-not-production-ready)). The Guard is off unless a daemon is running; when none is reachable over HTTP, `comply()` falls back silently to regex-only.
-- **Cyrillic / Greek look-alikes that are not NFKC-equivalent** (e.g. Cyrillic `а` vs Latin `a`). Those are separate semantic letters; NFKC does not fold them.
+- **Cyrillic / Greek look-alikes that are not NFKC-equivalent** (e.g. Cyrillic small letter a at U+0430 vs Latin `a` at U+0061). Those are separate semantic letters; NFKC does not fold them.
 - **Soft hyphen (U+00AD) and combining marks.** Not stripped from the normalized stream. An attacker can still hide PII by injecting these characters between digits.
 - **Encodings other than Base64 and URL.** Hex, base32, ROT13, HTML entities, quoted-printable are not decoded.
 - **All-letter alphanumeric MRN identifiers** (e.g. UK NHS ULN-style). The MRN regex requires at least one digit, trading recall on all-letter clinical identifiers for precision on prose mentions ("MRN system was updated"). Custom regex needed for those domains.

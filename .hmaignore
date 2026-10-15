@@ -1,11 +1,10 @@
-# aicomply is a DLP / content-normalization library. Its normalization tests,
-# benchmark corpus + generator, and documentation MUST contain invisible-unicode
-# and homoglyph characters as fixtures and worked examples -- those characters
-# are the very inputs the normalize layer exists to fold (NFKC, zero-width strip,
-# homoglyph fold). HackMyAgent's UNICODE-STEGO-001 / UNICODE-STEGO-005 checks
-# fire on these intentional samples. This is the same situation HMA documents in
-# its own .hmaignore ("scanner contains the detection patterns that match the
-# threats it detects").
+# aicomply is a DLP / content-normalization library. Its normalization tests and
+# benchmark corpus + generator MUST contain invisible-unicode and homoglyph
+# characters as fixtures -- those characters are the very inputs the normalize
+# layer exists to fold (NFKC, zero-width strip, homoglyph fold). HackMyAgent's
+# UNICODE-STEGO-001 / UNICODE-STEGO-005 checks fire on these intentional
+# samples. This is the same situation HMA documents in its own .hmaignore
+# ("scanner contains the detection patterns that match the threats it detects").
 #
 # Suppression is path-scoped, not a global check-ID disable, so UNICODE-STEGO
 # still fires on any NEW source file outside these intentional-fixture paths.
@@ -28,13 +27,11 @@ pack/conformance/
 pack/patterns.json
 python/src/aicomply/pack/patterns.json
 
-# Docs demonstrate the invisible-unicode / homoglyph attack with literal examples
-# (e.g. docs/detection.md writes an SSN-shaped number with zero-width spaces
-# between its digits and quotes a Cyrillic look-alike letter; SECURITY.md quotes
-# full-width digits and a Cyrillic look-alike letter). README.md carries no such
-# example, so no rule here names it.
-SECURITY.md
-docs/detection.md
+# The npm package ships README.md, SECURITY.md, STATUS.md and docs/ but not this
+# file, so a scan of the installed package applies none of these rules. Those
+# Markdown files name a zero-width or Cyrillic look-alike character by its code
+# point (for example U+200B) instead of embedding it, and no rule here names
+# them.
 
 # AIM-001 reads the `ai-agent` keyword in package.json as a sign that this
 # project is an agent, and asks for an agent identity file (agent-card.json,
