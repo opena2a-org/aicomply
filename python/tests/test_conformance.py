@@ -71,13 +71,14 @@ def _seed_drift(root: Path) -> list[str]:
     return drift
 
 
-_STORE_NAME = re.compile(r"^\.?(credentials?|secrets?|passwords?)(\.[a-z0-9]+)*$", re.IGNORECASE)
+_STORE_NAME = re.compile(r"^\.?(credentials?|secrets?|passwords?)(\.[^.]+)*$", re.IGNORECASE)
 
 
 def _store_named_case_files(cases_dir: Path) -> list[str]:
     """Every ``*.jsonl`` case file in ``cases_dir`` named like a credential
     store: a leaf of ``credential``, ``secret`` or ``password`` plus
-    extensions, which secret-file name rules refuse on sight whatever the file
+    extensions (any characters but ``.``, so ``secrets.v1-old.jsonl``
+    counts), which secret-file name rules refuse on sight whatever the file
     holds. Checked over every case file, not only the corpus-seeded ones
     ``_seed_drift`` reads."""
     return sorted(p.name for p in cases_dir.glob("*.jsonl") if _STORE_NAME.match(p.name))
@@ -152,6 +153,21 @@ def test_reports_a_store_named_case_file_whose_cases_are_not_corpus_seeded(tmp_p
         (cases_dir / name).write_text(json.dumps(case) + "\n", encoding="utf-8")
     assert _seed_drift(tmp_path) == []
     assert _store_named_case_files(cases_dir) == [".Passwords.jsonl", "secrets.jsonl"]
+
+
+def test_reports_a_store_named_case_file_whose_extension_holds_a_dash_or_underscore(tmp_path):
+    names = (
+        "secrets.v1-old.jsonl",
+        "Credentials.old_copy.jsonl",
+        "credential-cases.jsonl",
+        "secretsanta.jsonl",
+    )
+    for name in names:
+        (tmp_path / name).write_text("", encoding="utf-8")
+    assert _store_named_case_files(tmp_path) == [
+        "Credentials.old_copy.jsonl",
+        "secrets.v1-old.jsonl",
+    ]
 
 
 def test_reports_a_seeded_case_filed_under_its_corpus_name_or_holding_stale_text(tmp_path):
