@@ -67,14 +67,15 @@ function seedDrift(root: string): string[] {
 
 /**
  * Every `*.jsonl` case file in `casesDir` named like a credential store: a leaf
- * of `credential`, `secret` or `password` plus extensions, which secret-file
+ * of `credential`, `secret` or `password` plus extensions (any characters but
+ * `.`, so `secrets.v1-old.jsonl` counts), which secret-file
  * name rules refuse on sight whatever the file holds. Checked over every case
  * file, not only the corpus-seeded ones `seedDrift` reads.
  */
 function storeNamedCaseFiles(casesDir: string): string[] {
   return readdirSync(casesDir)
     .filter((f) => f.endsWith('.jsonl'))
-    .filter((f) => /^\.?(credentials?|secrets?|passwords?)(\.[a-z0-9]+)*$/i.test(f))
+    .filter((f) => /^\.?(credentials?|secrets?|passwords?)(\.[^.]+)*$/i.test(f))
     .sort();
 }
 
@@ -151,6 +152,17 @@ describe('pattern pack conformance suite', () => {
       });
       expect(seedDrift(root)).toEqual([]);
       expect(storeNamedCaseFiles(casesDir)).toEqual(['.Passwords.jsonl', 'secrets.jsonl']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a store-named case file whose extension segment holds - or _', () => {
+    const root = mkdtempSync(join(tmpdir(), 'aicomply-conformance-'));
+    try {
+      const names = ['secrets.v1-old.jsonl', 'Credentials.old_copy.jsonl', 'credential-cases.jsonl', 'secretsanta.jsonl'];
+      for (const name of names) writeFileSync(join(root, name), '');
+      expect(storeNamedCaseFiles(root)).toEqual(['Credentials.old_copy.jsonl', 'secrets.v1-old.jsonl']);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
