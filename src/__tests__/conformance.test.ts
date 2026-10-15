@@ -200,9 +200,12 @@ describe('pattern pack conformance suite', () => {
   });
 
   it('reports the distinct violation types, sorted', () => {
-    const outcome = conformanceOutcome('SSN 123-45-6788 and key AKIAIOSFODNN7EXAMPLE and SSN 219-09-9999'); // FAKE AWS example key
-    expect(outcome.types).toEqual(['CREDENTIAL', 'SSN']);
-    expect(outcome.violations.map((v) => v.type)).toHaveLength(3);
+    const outcome = conformanceOutcome('SSN 123-45-6788 card 4111 1111 1111 1111 and SSN 219-09-9999');
+    const found = outcome.violations.map((v) => v.type);
+    expect(found).toHaveLength(3);
+    // The types first appear out of order, so dropping the sort changes the result.
+    expect([...new Set(found)]).not.toEqual(outcome.types);
+    expect(outcome.types).toEqual(['PAN', 'SSN']);
   });
 
   it('fails a case whose stored outcome differs from this runtime', () => {
