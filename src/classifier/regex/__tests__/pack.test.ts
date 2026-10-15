@@ -12,18 +12,47 @@ import {
   readPackFile,
 } from '../pack';
 import { PATTERNS } from '../patterns';
+import { VALIDATORS } from '../validators';
 import * as api from '../../../index';
 
 const ROOT = join(__dirname, '..', '..', '..', '..');
 const packBytes = readFileSync(join(ROOT, 'pack', 'patterns.json'));
 const packDoc = JSON.parse(packBytes.toString('utf8'));
 
-/** Pack bytes with one pattern entry (by id) overridden. */
-function withPattern(id: string, override: Record<string, unknown>): Buffer {
+type Entry = Record<string, unknown>;
+
+/** Pack bytes with one pattern entry (by id) replaced by `edit(entry)`. */
+function withEntry(id: string, edit: (entry: Entry) => Entry): Buffer {
   const doc = JSON.parse(packBytes.toString('utf8'));
-  doc.patterns = doc.patterns.map((p: { id: string }) => (p.id === id ? { ...p, ...override } : p));
+  doc.patterns = doc.patterns.map((p: Entry) => (p.id === id ? edit({ ...p }) : p));
   return Buffer.from(JSON.stringify(doc));
 }
+
+/** Pack bytes with one pattern entry (by id) overridden. */
+function withPattern(id: string, override: Entry): Buffer {
+  return withEntry(id, (p) => ({ ...p, ...override }));
+}
+
+/** Pack bytes with one key removed from one pattern entry. */
+function withoutKey(id: string, key: string): Buffer {
+  return withEntry(id, (p) => {
+    delete p[key];
+    return p;
+  });
+}
+
+/** The per-pattern fields of the pack contract, in file order. `note` is optional prose. */
+const CONTRACT_FIELDS = [
+  'id',
+  'class',
+  'source',
+  'flags',
+  'validator',
+  'context',
+  'aiisId',
+  'techniqueId',
+  'fpEstimate',
+];
 
 describe('pattern pack', () => {
   it('loads the repository pack file', () => {
@@ -66,8 +95,8 @@ describe('pattern pack', () => {
 
   it('keeps every pack regex inside the portable subset', () => {
     const sources = [
-      ...packDoc.patterns.map((p: { regex: string }) => p.regex),
-      ...packDoc.referenceForms.map((f: { regex: string }) => f.regex),
+      ...packDoc.patterns.map((p: { source: string }) => p.source),
+      ...packDoc.referenceForms.map((f: { source: string }) => f.source),
     ];
     expect(sources.filter((s: string) => nonPortableConstruct(s) !== null)).toEqual([]);
   });
@@ -75,7 +104,59 @@ describe('pattern pack', () => {
   it('turns the former MRN lookahead into the containsDigit validator', () => {
     const mrn = packDoc.patterns.find((p: { id: string }) => p.id === 'mrn');
     expect(mrn.validator).toBe('containsDigit');
-    expect(mrn.regex).not.toContain('(?=');
+    expect(mrn.source).not.toContain('(?=');
+  });
+});
+
+describe('pattern pack file follows the pack contract field names', () => {
+  it('gives every pattern exactly the contract fields, plus an optional note', () => {
+    for (const p of packDoc.patterns as Entry[]) {
+      expect(Object.keys(p).filter((k) => k !== 'note')).toEqual(CONTRACT_FIELDS);
+    }
+  });
+
+  it('keeps the top level to schemaVersion, packVersion, patterns and referenceForms', () => {
+    expect(Object.keys(packDoc)).toEqual(['schemaVersion', 'packVersion', 'referenceForms', 'patterns']);
+    for (const f of packDoc.referenceForms as Entry[]) {
+      expect(Object.keys(f).filter((k) => k !== 'note')).toEqual(['id', 'source']);
+    }
+  });
+
+  it('names validators by the contract names, with "none" for no check', () => {
+    const byId = Object.fromEntries((packDoc.patterns as Entry[]).map((p) => [p.id, p.validator]));
+    expect(byId).toMatchObject({
+      ssn: 'ssnArea',
+      pan: 'luhn',
+      iban: 'mod97',
+      npi: 'npiLuhn',
+      mrn: 'containsDigit',
+      'generic-key-assignment': 'notEmptyAssignmentTarget',
+      'cui-marking': 'none',
+      'aws-access-key-id': 'none',
+    });
+    for (const name of Object.values(byId) as string[]) {
+      expect(name === 'none' || Object.prototype.hasOwnProperty.call(VALIDATORS, name)).toBe(true);
+    }
+  });
+
+  it('implements the same validator names as every other runtime', () => {
+    expect(Object.keys(VALIDATORS).sort()).toEqual([
+      'containsDigit',
+      'luhn',
+      'mod97',
+      'notEmptyAssignmentTarget',
+      'npiLuhn',
+      'ssnArea',
+    ]);
+  });
+
+  it('carries each pattern confidence in context and compiles it unchanged', () => {
+    for (const p of PATTERNS) {
+      const entry = (packDoc.patterns as Entry[]).find((e) => e.id === p.id) as Entry;
+      expect(p.confidence).toBe((entry.context as { confidence: number }).confidence);
+      expect(p.type).toBe(entry.class);
+      expect(p.regex.source).toBe(new RegExp(entry.source as string).source);
+    }
   });
 });
 
@@ -107,18 +188,42 @@ describe('nonPortableConstruct', () => {
 
 describe('compilePack refuses a pack that breaks the contract', () => {
   it.each([
-    ['a lookahead', withPattern('mrn', { regex: '\\bMRN[:\\s#-]*(?=[A-Z0-9]*\\d)([A-Z0-9]{6,12})\\b' }), /lookahead/],
+    ['a lookahead', withPattern('mrn', { source: '\\bMRN[:\\s#-]*(?=[A-Z0-9]*\\d)([A-Z0-9]{6,12})\\b' }), /lookahead/],
     ['an unknown validator', withPattern('ssn', { validator: 'luhnModN' }), /validator luhnModN/],
+    ['a former validator name', withPattern('ssn', { validator: 'ssn' }), /validator ssn /],
     ['a prototype key as validator', withPattern('ssn', { validator: 'constructor' }), /validator constructor/],
-    // JSON.stringify drops an undefined value, so this entry has no validator key.
-    ['an entry with no validator key', withPattern('ssn', { validator: undefined }), /ssn: validator is required/],
-    ['an unknown type', withPattern('ssn', { type: 'PHONE' }), /type PHONE/],
+    ['an entry with no validator key', withoutKey('ssn', 'validator'), /ssn: validator is required/],
+    ['a null validator', withPattern('cui-marking', { validator: null }), /validator must be a name/],
+    ['an unknown class', withPattern('ssn', { class: 'PHONE' }), /class PHONE/],
     ['an unsupported flag', withPattern('ssn', { flags: 'm' }), /flags/],
-    ['a confidence above 1', withPattern('ssn', { confidence: 1.5 }), /confidence/],
+    ['a confidence above 1', withPattern('ssn', { context: { confidence: 1.5 } }), /context\.confidence/],
+    ['a context that is not an object', withPattern('ssn', { context: 0.95 }), /context must be an object/],
+    ['a missing aiisId', withoutKey('ssn', 'aiisId'), /aiisId/],
+    ['an empty techniqueId', withPattern('ssn', { techniqueId: '' }), /techniqueId/],
+    ['an fpEstimate above 1', withPattern('ssn', { fpEstimate: 2 }), /fpEstimate/],
     ['a duplicate id', withPattern('pan', { id: 'ssn' }), /duplicated/],
-    ['a regex that does not compile', withPattern('ssn', { regex: '(\\d{3}' }), /does not compile/],
+    ['a source that does not compile', withPattern('ssn', { source: '(\\d{3}' }), /does not compile/],
   ])('refuses %s', (_label, bytes, message) => {
     expect(() => compilePack(bytes)).toThrow(message);
+  });
+
+  it('refuses an entry in the superseded type/regex/confidence shape', () => {
+    // A pack written to the earlier field names must fail closed, not load
+    // with no class or no source.
+    const bytes = withEntry('ssn', (p) => {
+      const { class: type, source: regex, context } = p;
+      const old: Entry = { ...p, type, regex, confidence: (context as { confidence: number }).confidence };
+      delete old.class;
+      delete old.source;
+      delete old.context;
+      return old;
+    });
+    expect(() => compilePack(bytes)).toThrow(/pattern ssn: class undefined/);
+  });
+
+  it('accepts a filled-in aiisId, techniqueId and fpEstimate', () => {
+    const bytes = withPattern('ssn', { aiisId: 'AIIS-0001', techniqueId: 'T-0001', fpEstimate: 0.02 });
+    expect(compilePack(bytes).patterns.find((p) => p.id === 'ssn')).toBeDefined();
   });
 
   it('refuses another schema version', () => {
@@ -127,7 +232,7 @@ describe('compilePack refuses a pack that breaks the contract', () => {
   });
 
   it('refuses an unanchored reference form', () => {
-    const doc = { ...packDoc, referenceForms: [{ id: 'loose', regex: 'process\\.env' }] };
+    const doc = { ...packDoc, referenceForms: [{ id: 'loose', source: 'process\\.env' }] };
     expect(() => compilePack(Buffer.from(JSON.stringify(doc)))).toThrow(/anchored/);
   });
 

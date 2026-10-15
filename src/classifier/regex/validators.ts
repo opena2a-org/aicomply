@@ -144,12 +144,26 @@ function containsDigit(value: string): boolean {
 
 export type Validator = (value: string) => boolean;
 
-/** Validator names a pack entry may reference, mapped to their implementation. */
+/**
+ * The `validator` value of a pack entry that runs no post-match check. It is
+ * a name rather than null so every entry states its check explicitly.
+ */
+export const NO_VALIDATOR = 'none';
+
+/**
+ * Validator names a pack entry may reference, mapped to their implementation.
+ * The names are part of the pack contract: every runtime implements the same
+ * set, with the same semantics.
+ */
 export const VALIDATORS: Readonly<Record<string, Validator>> = Object.freeze({
-  ssn: validateSsn,
-  pan: validatePan,
-  iban: validateIban,
-  npi: validateNpi,
+  /** SSN area, group and serial rules (no 000, 666 or 9xx area, no 00 group, no 0000 serial). */
+  ssnArea: validateSsn,
+  /** Card number (PAN): 13-19 digits, Luhn checksum and a known IIN prefix. */
+  luhn: validatePan,
+  /** IBAN: length 15-34 and the ISO 13616 mod-97 check. */
+  mod97: validateIban,
+  /** NPI: exactly 10 digits, Luhn over the 80840 prefix. */
+  npiLuhn: validateNpi,
   notEmptyAssignmentTarget,
   containsDigit,
 });

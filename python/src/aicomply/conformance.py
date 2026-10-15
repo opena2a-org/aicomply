@@ -1,10 +1,14 @@
 """Pattern pack conformance: per-case exact equality across runtimes.
 
-Port of conformance.ts. Each case in ``pack/conformance/*.jsonl`` carries an
-input text and the exact regex-layer outcome every runtime must produce: the
-verdict and every violation's type, masked value, offsets, confidence and view.
-Aggregate precision and recall can stay inside tolerance while individual
-inputs diverge between runtimes; this suite fails on the first divergent case.
+Port of conformance.ts. Each case in ``pack/conformance/*.jsonl`` is one JSON
+line, ``{"id", "input", "expect": {"types", "verdict", "violations"?}}`` plus
+optional ``origin``, ``fixture`` and ``note``. ``expect.types`` (the sorted distinct
+violation types) and ``expect.verdict`` are the outcome every runtime must
+reproduce exactly; a case that also stores ``expect.violations`` (each
+violation's type, masked value, offsets, confidence and view) requires those
+to match exactly as well. Aggregate precision and recall can stay inside
+tolerance while individual inputs diverge between runtimes; this suite fails
+on the first divergent case.
 
 The outcome is the deterministic layer only (normalization plus the regex scan
 over every content view). The semantic Guard is never consulted.
@@ -22,25 +26,60 @@ from .classifier.regex.pack import PACK_SHA256, PACK_VERSION
 from .normalize import normalize
 
 
+def _sorted_distinct(values: list[str]) -> list[str]:
+    # Type names are ASCII, so this order equals every runtime's default string order.
+    return sorted(set(values))
+
+
 def conformance_outcome(text: str) -> dict[str, Any]:
-    """The deterministic outcome for one input, in the shape cases are stored in."""
+    """The deterministic outcome for one case ``input``, in the shape cases are stored in."""
     result = _scan_all_views(normalize(text))
+    violations = [
+        {
+            "type": v.type,
+            "value": v.value,
+            "start": v.start,
+            "end": v.end,
+            "confidence": v.confidence,
+            "view": v.view,
+            "originalStart": v.original_start,
+            "originalEnd": v.original_end,
+        }
+        for v in result.violations
+    ]
     return {
+        "types": _sorted_distinct([v.type for v in result.violations]),
         "verdict": result.verdict,
-        "violations": [
-            {
-                "type": v.type,
-                "value": v.value,
-                "start": v.start,
-                "end": v.end,
-                "confidence": v.confidence,
-                "view": v.view,
-                "originalStart": v.original_start,
-                "originalEnd": v.original_end,
-            }
-            for v in result.violations
-        ],
+        "violations": violations,
     }
+
+
+def _check_case(where: str, case: Any) -> dict[str, Any]:
+    """Check one parsed line against the case contract; ``where`` is ``file:line``."""
+    if (
+        not isinstance(case, dict)
+        or not isinstance(case.get("id"), str)
+        or not isinstance(case.get("input"), str)
+        or not isinstance(case.get("expect"), dict)
+    ):
+        raise ValueError(f"{where}: a case needs id, input and expect")
+    if "origin" in case and not isinstance(case["origin"], str):
+        raise ValueError(f"{where}: origin must be a string")
+    expect = case["expect"]
+    types = expect.get("types")
+    if not isinstance(types, list) or not all(isinstance(t, str) for t in types):
+        raise ValueError(f"{where}: expect.types must be an array of strings")
+    if types != _sorted_distinct(types):
+        raise ValueError(f"{where}: expect.types must be sorted and distinct")
+    if not isinstance(expect.get("verdict"), str):
+        raise ValueError(f"{where}: expect.verdict must be a string")
+    if "violations" in expect:
+        violations = expect["violations"]
+        if not isinstance(violations, list) or not all(isinstance(v, dict) for v in violations):
+            raise ValueError(f"{where}: expect.violations must be an array of objects")
+        if types != _sorted_distinct([str(v.get("type")) for v in violations]):
+            raise ValueError(f"{where}: expect.types does not match expect.violations")
+    return case
 
 
 def load_conformance_cases(directory: Path) -> list[dict[str, Any]]:
@@ -51,15 +90,7 @@ def load_conformance_cases(directory: Path) -> list[dict[str, Any]]:
         for number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
             if not line.strip():
                 continue
-            case = json.loads(line)
-            if (
-                not isinstance(case.get("id"), str)
-                or not isinstance(case.get("text"), str)
-                or "expected" not in case
-            ):
-                raise ValueError(f"{path.name}:{number}: a case needs id, text and expected")
-            if "origin" in case and not isinstance(case["origin"], str):
-                raise ValueError(f"{path.name}:{number}: origin must be a string")
+            case = _check_case(f"{path.name}:{number}", json.loads(line))
             if case["id"] in ids:
                 raise ValueError(f"{path.name}:{number}: duplicate case id {case['id']}")
             ids.add(case["id"])
@@ -67,19 +98,21 @@ def load_conformance_cases(directory: Path) -> list[dict[str, Any]]:
     return cases
 
 
-def _same_outcome(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
+def _same_outcome(expect: dict[str, Any], actual: dict[str, Any]) -> bool:
     # Compare the contract fields only, so extra keys a future schema adds to a
     # stored case cannot fail an older runtime. ``==`` on the JSON numbers is
     # exact: both runtimes read and write the same IEEE-754 doubles.
     keys = ("type", "value", "start", "end", "confidence", "view", "originalStart", "originalEnd")
-    if expected["verdict"] != actual["verdict"]:
+    if expect["verdict"] != actual["verdict"] or expect["types"] != actual["types"]:
         return False
-    if len(expected["violations"]) != len(actual["violations"]):
+    if "violations" not in expect:
+        return True
+    if len(expect["violations"]) != len(actual["violations"]):
         return False
     missing = object()
     return all(
         all(e.get(k, missing) == a.get(k) for k in keys)
-        for e, a in zip(expected["violations"], actual["violations"])
+        for e, a in zip(expect["violations"], actual["violations"])
     )
 
 
@@ -88,9 +121,9 @@ def run_conformance(directory: Path) -> dict[str, Any]:
     cases = load_conformance_cases(directory)
     failures = []
     for case in cases:
-        actual = conformance_outcome(case["text"])
-        if not _same_outcome(case["expected"], actual):
-            failures.append({"id": case["id"], "expected": case["expected"], "actual": actual})
+        actual = conformance_outcome(case["input"])
+        if not _same_outcome(case["expect"], actual):
+            failures.append({"id": case["id"], "expect": case["expect"], "actual": actual})
     return {
         "runtime": "python",
         "runtimeVersion": __version__,

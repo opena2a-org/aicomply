@@ -10,6 +10,13 @@ The loader fails closed: a missing, malformed or non-portable pack raises at
 import time rather than leaving the classifier running with no patterns, which
 would report every input as CLEAN.
 
+Each pattern entry carries ``id``, ``class`` (the violation type a match
+reports), ``source`` (the regex), ``flags``, ``validator`` (a name from
+``.validators`` or ``"none"``), ``context`` (``{"confidence": ...}``, the
+confidence a match carries), and the nullable mapping fields ``aiisId``,
+``techniqueId`` and ``fpEstimate``. The file shape is documented once, in
+classifier/regex/pack.ts.
+
 Every regex compiles with ``re.ASCII`` so ``\\d`` / ``\\b`` / ``\\w`` and
 IGNORECASE case-folding match JavaScript's ASCII semantics (JS ``\\d`` is
 ``[0-9]``; Python's default ``\\d`` is Unicode-aware and would diverge on e.g.
@@ -31,7 +38,7 @@ from importlib.resources import files
 from typing import Literal, cast
 
 from ...types import PackIdentity
-from .validators import VALIDATORS, Validator
+from .validators import NO_VALIDATOR, VALIDATORS, Validator
 
 PatternType = Literal["SSN", "PAN", "CUI", "CREDENTIAL", "IBAN", "PASSPORT", "MRN", "NPI"]
 
@@ -56,9 +63,13 @@ _SEMVER = re.compile(r"\d+\.\d+\.\d+", re.ASCII)
 @dataclass
 class PatternDefinition:
     id: str
+    #: The entry's ``class``.
     type: PatternType
+    #: The entry's ``source``, compiled with its ``flags``.
     regex: re.Pattern[str]
+    #: The entry's ``context.confidence``.
     confidence: float
+    #: The entry's ``validator``; None for ``"none"``.
     validate: Validator | None = None
 
 
@@ -133,18 +144,35 @@ def _fail(message: str) -> PackError:
 
 def _compile(where: str, source: object, flags: int) -> re.Pattern[str]:
     if not isinstance(source, str) or not source:
-        raise _fail(f"{where}: regex must be a non-empty string")
+        raise _fail(f"{where}: source must be a non-empty string")
     construct = non_portable_construct(source)
     if construct is not None:
-        raise _fail(f"{where}: regex uses a {construct}, which is outside the portable subset")
+        raise _fail(f"{where}: source uses a {construct}, which is outside the portable subset")
     try:
         return re.compile(source, flags)
     except re.error as err:
-        raise _fail(f"{where}: regex does not compile ({err})") from err
+        raise _fail(f"{where}: source does not compile ({err})") from err
 
 
 def _is_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _check_mapping_fields(pid: str, entry: dict[str, object]) -> None:
+    """The mapping fields are present on every entry and null until mapped."""
+    for key in ("aiisId", "techniqueId"):
+        if key not in entry:
+            raise _fail(f"pattern {pid}: {key} is missing (use null when unmapped)")
+        value = entry[key]
+        if value is not None and (not isinstance(value, str) or not value):
+            raise _fail(f"pattern {pid}: {key} must be null or a non-empty string")
+    if "fpEstimate" not in entry:
+        raise _fail(f"pattern {pid}: fpEstimate is missing (use null when unmeasured)")
+    fp = entry["fpEstimate"]
+    if fp is not None and (
+        isinstance(fp, bool) or not isinstance(fp, (int, float)) or not (0 <= fp <= 1)
+    ):
+        raise _fail(f"pattern {pid}: fpEstimate must be null or a number in [0, 1]")
 
 
 def compile_pack(data: bytes) -> CompiledPack:
@@ -184,39 +212,48 @@ def compile_pack(data: bytes) -> CompiledPack:
             raise _fail(f"pattern id {pid} is duplicated")
         seen.add(pid)
 
-        ptype = entry.get("type")
-        if ptype not in PATTERN_TYPES:
-            raise _fail(f"pattern {pid}: type {ptype} is not one of {', '.join(PATTERN_TYPES)}")
+        klass = entry.get("class")
+        if klass not in PATTERN_TYPES:
+            raise _fail(f"pattern {pid}: class {klass} is not one of {', '.join(PATTERN_TYPES)}")
         flags = entry.get("flags")
         if flags not in ("", "i"):
             raise _fail(f'pattern {pid}: flags must be "" or "i"')
-        confidence = entry.get("confidence")
+        context = entry.get("context")
+        if not isinstance(context, dict):
+            raise _fail(f"pattern {pid}: context must be an object")
+        confidence = context.get("confidence")
         if (
             isinstance(confidence, bool)
             or not isinstance(confidence, (int, float))
             or not (0 < confidence <= 1)
         ):
-            raise _fail(f"pattern {pid}: confidence must be a number in (0, 1]")
+            raise _fail(f"pattern {pid}: context.confidence must be a number in (0, 1]")
 
-        # The key is required in both runtimes; null is how an entry says it has
-        # no validator, so a missing key is a malformed entry, not "none".
+        # The key is required in both runtimes; "none" is how an entry says it
+        # has no validator, so a missing key is a malformed entry, not "none".
         if "validator" not in entry:
             raise _fail(
-                f"pattern {pid}: validator is required (a validator name, or null for none)"
+                f"pattern {pid}: validator is required"
+                f' (a validator name, or "{NO_VALIDATOR}" for no check)'
+            )
+        name = entry["validator"]
+        if not isinstance(name, str):
+            raise _fail(
+                f'pattern {pid}: validator must be a name, or "{NO_VALIDATOR}" for no check'
             )
         validate: Validator | None = None
-        name = entry["validator"]
-        if name is not None:
-            if not isinstance(name, str) or name not in VALIDATORS:
+        if name != NO_VALIDATOR:
+            if name not in VALIDATORS:
                 raise _fail(f"pattern {pid}: validator {name} is not implemented by this runtime")
             validate = VALIDATORS[name]
+        _check_mapping_fields(pid, entry)
 
         re_flags = re.ASCII | (re.IGNORECASE if flags == "i" else 0)
         patterns.append(
             PatternDefinition(
                 id=pid,
-                type=cast(PatternType, ptype),
-                regex=_compile(f"pattern {pid}", entry.get("regex"), re_flags),
+                type=cast(PatternType, klass),
+                regex=_compile(f"pattern {pid}", entry.get("source"), re_flags),
                 confidence=float(confidence),
                 validate=validate,
             )
@@ -226,9 +263,9 @@ def compile_pack(data: bytes) -> CompiledPack:
     for index, entry in enumerate(forms):
         if not isinstance(entry, dict):
             raise _fail(f"referenceForms[{index}] must be an object")
-        source = entry.get("regex")
+        source = entry.get("source")
         if not isinstance(source, str) or not source.startswith("^") or not source.endswith("$"):
-            raise _fail(f"referenceForms[{index}]: regex must be anchored with ^ and $")
+            raise _fail(f"referenceForms[{index}]: source must be anchored with ^ and $")
         reference_forms.append(_compile(f"referenceForms[{index}]", source, re.ASCII))
 
     return CompiledPack(
