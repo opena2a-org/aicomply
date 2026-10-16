@@ -35,8 +35,9 @@ Verdict: VIOLATION  ·  1 finding across 1 input. Block, redact, or log before t
 ```
 
 The CLI prints a detected value's type and none of its characters, so nothing it writes
-to your terminal or logs reveals the value. Exit code is `0` for CLEAN and `1` when anything is flagged, so it
-drops straight into CI:
+to your terminal or logs reveals the value.
+
+Exit code is `0` for CLEAN and `1` when anything is flagged, so it drops straight into CI:
 
 ```bash
 cat transcript.log | npx @opena2a/aicomply scan --json   # machine-readable
@@ -74,9 +75,10 @@ console.log(result.verdict);     // 'VIOLATION'
 console.log(result.violations);  // [{ type: 'SSN', confidence: 0.95, value: '123-...89', ... }]
 ```
 
-The package is a CommonJS build; ES modules import it as shown above. From a CommonJS
-file, `require` it and call `comply()` inside an async function, since CommonJS has no
-top-level `await`:
+The package is a CommonJS build; ES modules import it as shown above.
+
+From a CommonJS file, `require` it and call `comply()` inside an async function, since
+CommonJS has no top-level `await`:
 
 ```javascript
 const { comply } = require('@opena2a/aicomply');
@@ -96,14 +98,16 @@ Drop it into your agent's tool-result handler, your message-egress wrapper, or a
 
 `result.verdict` is `CLEAN` (no findings from the layers that ran, which is not a statement that the content is safe), `VIOLATION` or `DENY`: [verdict semantics](docs/verdicts.md).
 
-For each non-empty input, unless a signed Guard result is supplied, `comply()` POSTs the input verbatim to the loopback address `http://127.0.0.1:47200/v1/infer` for the optional semantic Guard; whichever local process holds that port receives it. Pass `useGuard: false` to make no request: [what the Guard attempt sends](docs/semantic-guard.md#what-the-guard-attempt-sends).
+For each non-empty input, unless a signed Guard result is supplied, `comply()` POSTs the input verbatim to the loopback address `http://127.0.0.1:47200/v1/infer` for the optional semantic Guard; whichever local process holds that port receives it.
+
+Pass `useGuard: false` to make no request: [what the Guard attempt sends](docs/semantic-guard.md#what-the-guard-attempt-sends).
 
 ## Documentation
 
-- [How it works](docs/how-it-works.md): where the check sits in an agent, the regex layer and the optional Guard layer that run one after the other, and the one network request `comply()` makes.
+- [How it works](docs/how-it-works.md): where the check sits, the regex layer then the Guard layer, and the one network request `comply()` makes.
 - [Detection](docs/detection.md): what each layer detects, how inputs are canonicalized before the patterns run, and what the package does not detect.
-- [Enabling the semantic Guard](docs/semantic-guard.md): `npm install @nanomind/daemon`, then `npx nanomind-daemon start`; what the Guard request sends, and why the Guard is a preview, not a production gate.
-- [Measured accuracy](docs/accuracy.md): per-class precision and recall on the synthetic corpus; `npm run accuracy:generate && npm run accuracy:measure` re-runs it in a clone of this repository.
+- [Enabling the semantic Guard](docs/semantic-guard.md): starting it, what its request sends, and why it is a preview, not a production gate.
+- [Measured accuracy](docs/accuracy.md): per-class precision and recall on the synthetic corpus, and the commands that re-run it in a clone of this repository.
 - [Session-scoped use](docs/sessions.md): `ClassificationSession.create()` for Registry fleet-anomaly and supply-chain signals, and failing closed with `onRegistryUnknown`.
 - [Policy packs](docs/policy-packs.md): deny or warn on finding types with `policyPack`, and check a pack with `validatePolicyConfig()`.
 - [Verdicts and per-classifier results](docs/verdicts.md): what `CLEAN`, `VIOLATION` and `DENY` mean, and the `classifierResults`, `layers` and `pack` fields.
