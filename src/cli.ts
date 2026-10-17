@@ -19,7 +19,7 @@
  * small-library pattern. argv is parsed by hand.
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
 import { comply } from './index';
 import { DEFAULT_NANOMIND_DAEMON_URL } from './classifier/guard-client/nanomind-adapter';
 import { PATTERN_TYPES } from './classifier/regex/pack';
@@ -53,16 +53,22 @@ function parseArgs(argv: string[]): ParsedArgs {
     help: false,
     version: false,
   };
+  // `--` ends the options (POSIX utility syntax guideline 10): each later
+  // argument is an operand, so a file whose name starts with - can be named.
+  let optionsEnded = false;
   for (const arg of argv) {
-    if (arg === '--json') parsed.json = true;
+    if (optionsEnded || !arg.startsWith('-') || arg === '-') {
+      if (parsed.command === undefined) parsed.command = arg;
+      else parsed.files.push(arg);
+    } else if (arg === '--') optionsEnded = true;
+    else if (arg === '--json') parsed.json = true;
     else if (arg === '--quiet' || arg === '-q') parsed.quiet = true;
     else if (arg === '--help' || arg === '-h') parsed.help = true;
     else if (arg === '--version' || arg === '-V') parsed.version = true;
-    else if (arg.startsWith('-') && arg !== '-') {
+    else {
       // Unknown flag -- surface it rather than silently ignoring.
       throw new UsageError(`unknown option '${arg}'`);
-    } else if (parsed.command === undefined) parsed.command = arg;
-    else parsed.files.push(arg);
+    }
   }
   return parsed;
 }
@@ -86,6 +92,8 @@ OPTIONS
   --quiet, -q   Print only the verdict line
   --version,-V  Print version
   --help, -h    This help
+  --            Ends the options; each later argument is an input, so a file
+                name can start with - (aicomply scan -- -notes.txt)
 
 PATTERN CLASSES (regex layer)
   SSN         US Social Security numbers
@@ -135,6 +143,8 @@ OPTIONS
                 each finding carries its line and column in the input)
   --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY)
   --help, -h    This help
+  --            Ends the options; each later argument is an input, so a file
+                name can start with - (aicomply scan -- -notes.txt)
 
 EXIT CODES
   0  CLEAN          no findings from the layers that ran
@@ -171,6 +181,28 @@ interface Source {
   content: string;
 }
 
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The glob the help uses (`src/*.txt`) for the files in `dir`, written as one
+ * POSIX shell word: trailing slashes dropped, `./` put before a name that
+ * starts with -, and the name single-quoted unless it holds only letters,
+ * digits and `_@%+=:,./-`.
+ */
+export function filesGlob(dir: string): string {
+  const trimmed = dir.replace(/\/+$/, '');
+  if (trimmed === '') return '/*.txt';
+  const name = trimmed.startsWith('-') ? `./${trimmed}` : trimmed;
+  const word = /^[A-Za-z0-9_@%+=:,./-]+$/.test(name) ? name : `'${name.replace(/'/g, `'"'"'`)}'`;
+  return `${word}/*.txt`;
+}
+
 async function collectSources(files: string[]): Promise<Source[]> {
   const stdinRequested = files.length === 0 || files.includes('-');
   const realFiles = files.filter((f) => f !== '-');
@@ -180,6 +212,13 @@ async function collectSources(files: string[]): Promise<Source[]> {
     try {
       sources.push({ label: file, content: readFileSync(file, 'utf8') });
     } catch {
+      // The path exists, so "check the path" would send the user the wrong way.
+      if (isDirectory(file)) {
+        throw new UsageError(
+          `'${file}' is a directory, and directories are not scanned. Name the files in it:\n` +
+            `  aicomply scan ${filesGlob(file)}`,
+        );
+      }
       throw new UsageError(`cannot read '${file}' (check the path). Try 'aicomply --help'.`);
     }
   }

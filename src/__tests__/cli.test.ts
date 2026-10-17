@@ -4,10 +4,11 @@
  * shape. Detection accuracy itself is covered by the regex/dual-layer suites.
  */
 
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { locate, run } from '../cli';
+import { filesGlob, locate, run } from '../cli';
 import { PATTERN_TYPES } from '../classifier/regex/pack';
 
 function capture(): { out: string[]; err: string[]; restore: () => void } {
@@ -156,6 +157,130 @@ describe('aicomply CLI', () => {
     const code = await run(['scan', join(dir, 'does-not-exist.txt')]);
     cap.restore();
     expect(code).toBe(2);
+  });
+
+  // A directory used to get the missing-file message, "check the path",
+  // though the path exists.
+  it('says a directory argument is a directory and prints the glob for the files in it', async () => {
+    const d = join(dir, 'adir');
+    mkdirSync(d);
+    writeFileSync(join(d, 'clean.txt'), 'The weather is nice today.', 'utf8');
+    // The temporary path holds no character the glob would quote.
+    expect(d).toMatch(/^[A-Za-z0-9_@%+=:,./-]+$/);
+    for (const arg of [d, `${d}/`]) {
+      const cap = capture();
+      const code = await run(['scan', arg]);
+      cap.restore();
+      expect({ arg, code, err: cap.err.join('') }).toEqual({
+        arg,
+        code: 2,
+        err:
+          `aicomply: '${arg}' is a directory, and directories are not scanned. Name the files in it:\n` +
+          `  aicomply scan ${d}/*.txt\n`,
+      });
+    }
+
+    // The printed glob, expanded by a shell, names the file in the directory,
+    // and scanning it exits 0.
+    const files = execFileSync('/bin/sh', ['-c', `printf '%s\\n' ${filesGlob(d)}`], { encoding: 'utf8' })
+      .split('\n')
+      .filter(Boolean);
+    expect(files).toEqual([join(d, 'clean.txt')]);
+    const cap = capture();
+    const code = await run(['scan', ...files]);
+    cap.restore();
+    expect(code).toBe(0);
+  });
+
+  // The glob is pasted into a shell, so the shell has to read the directory's
+  // name back out of it.
+  it('writes the glob for a directory as one shell word that names the directory', () => {
+    const cases: Array<[string, string]> = [
+      ['adir', 'adir'],
+      ['adir//', 'adir'],
+      ["it's a dir", "it's a dir"],
+      ['$HOME and `x`', '$HOME and `x`'],
+      ['-dash dir', './-dash dir'],
+    ];
+    for (const [name, read] of cases) {
+      // set -f stops the shell expanding the glob, so it prints the word itself.
+      const word = execFileSync('/bin/sh', ['-c', `set -f; printf '%s\\n' ${filesGlob(name)}`], {
+        encoding: 'utf8',
+      });
+      expect({ name, word }).toEqual({ name, word: `${read}/*.txt\n` });
+    }
+    expect(filesGlob('/')).toBe('/*.txt');
+  });
+
+  // `--` ends the options (POSIX utility syntax guideline 10), so a file whose
+  // name starts with - can be scanned. It used to be an unknown option.
+  describe('-- ends the options', () => {
+    function inDir<T>(fn: () => Promise<T>): Promise<T> {
+      const cwd = process.cwd();
+      process.chdir(dir);
+      return fn().finally(() => process.chdir(cwd));
+    }
+
+    it('scans the file named after --', async () => {
+      const f = fixture('after-dashes.txt', 'The weather is nice today.');
+      const cap = capture();
+      const code = await run(['scan', '--', f]);
+      cap.restore();
+      expect({ code, err: cap.err.join('') }).toEqual({ code: 0, err: '' });
+      expect(cap.out.join('')).toContain(`CLEAN      ${f}`);
+    });
+
+    it('reads each argument after -- as a file, even one that starts with -', async () => {
+      fixture('-dash.txt', 'The weather is nice today.');
+      fixture('--json', 'SSN 078-05-1120');
+      const cap = capture();
+      const code = await inDir(() => run(['scan', '--', '-dash.txt', '--json']));
+      cap.restore();
+      expect({ code, err: cap.err.join('') }).toEqual({ code: 1, err: '' });
+      // Human output, so the --json after -- was a file and not the option.
+      const out = cap.out.join('');
+      expect(out).toMatch(/^ {2}CLEAN {6}-dash\.txt /m);
+      expect(out).toMatch(/^ {2}VIOLATION {2}--json /m);
+    });
+
+    it('keeps the options given before --', async () => {
+      fixture('-dash.txt', 'The weather is nice today.');
+      const cap = capture();
+      const code = await inDir(() => run(['scan', '--json', '--', '-dash.txt']));
+      cap.restore();
+      expect(code).toBe(0);
+      expect(JSON.parse(cap.out.join(''))).toMatchObject([{ source: '-dash.txt', verdict: 'CLEAN' }]);
+    });
+
+    it('reads a second -- as a file name', async () => {
+      const cap = capture();
+      const code = await inDir(() => run(['scan', '--', '--']));
+      cap.restore();
+      expect({ code, err: cap.err.join('') }).toEqual({
+        code: 2,
+        err: "aicomply: cannot read '--' (check the path). Try 'aicomply --help'.\n",
+      });
+    });
+
+    it('without --, still reads an argument that starts with - as an option', async () => {
+      fixture('-dash.txt', 'The weather is nice today.');
+      const cap = capture();
+      const code = await inDir(() => run(['scan', '-dash.txt']));
+      cap.restore();
+      expect({ code, err: cap.err.join('') }).toEqual({ code: 2, err: "aicomply: unknown option '-dash.txt'\n" });
+    });
+
+    it('is documented in --help and scan --help', async () => {
+      for (const argv of [['--help'], ['scan', '--help']]) {
+        const cap = capture();
+        await run(argv);
+        cap.restore();
+        expect(cap.out.join('')).toContain(
+          '  --            Ends the options; each later argument is an input, so a file\n' +
+            '                name can start with - (aicomply scan -- -notes.txt)\n',
+        );
+      }
+    });
   });
 
   it('clean content exits 0', async () => {

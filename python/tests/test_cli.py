@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 
 from aicomply.classifier.regex.pack import PATTERN_TYPES
-from aicomply.cli import _render_json, _Source, run
+from aicomply.cli import _files_glob, _render_json, _Source, run
 from aicomply.types import ClassifierResult, ComplyResult, Violation
 
 
@@ -221,6 +222,106 @@ def test_scan_quiet(tmp_path, capsys):
 def test_missing_file_exit_2(capsys):
     assert run(["scan", "/no/such/file.txt"]) == 2
     assert "cannot read" in capsys.readouterr().err
+
+
+def _sh(script: str) -> str:
+    return subprocess.run(
+        ["/bin/sh", "-c", script], capture_output=True, text=True, check=True
+    ).stdout
+
+
+# A directory used to get the missing-file message, "check the path", though the
+# path exists.
+def test_directory_argument_names_the_glob_for_the_files_in_it(tmp_path, capsys):
+    d = tmp_path / "adir"
+    d.mkdir()
+    (d / "clean.txt").write_text("The weather is nice today.")
+    # The temporary path holds no character the glob would quote.
+    assert re.fullmatch(r"[A-Za-z0-9_@%+=:,./-]+", str(d))
+    for arg in (str(d), f"{d}/"):
+        assert run(["scan", arg]) == 2
+        assert capsys.readouterr().err == (
+            f"aicomply: '{arg}' is a directory, and directories are not scanned."
+            f" Name the files in it:\n  aicomply scan {d}/*.txt\n"
+        )
+
+    # The printed glob, expanded by a shell, names the file in the directory,
+    # and scanning it exits 0.
+    files = _sh(f"printf '%s\\n' {_files_glob(str(d))}").splitlines()
+    assert files == [str(d / "clean.txt")]
+    assert run(["scan", *files]) == 0
+
+
+# The glob is pasted into a shell, so the shell has to read the directory's name
+# back out of it.
+def test_directory_glob_is_one_shell_word_that_names_the_directory():
+    cases = [
+        ("adir", "adir"),
+        ("adir//", "adir"),
+        ("it's a dir", "it's a dir"),
+        ("$HOME and `x`", "$HOME and `x`"),
+        ("-dash dir", "./-dash dir"),
+    ]
+    for name, read in cases:
+        # set -f stops the shell expanding the glob, so it prints the word itself.
+        word = _sh(f"set -f; printf '%s\\n' {_files_glob(name)}")
+        assert (name, word) == (name, f"{read}/*.txt\n")
+    assert _files_glob("/") == "/*.txt"
+
+
+# ``--`` ends the options (POSIX utility syntax guideline 10), so a file whose
+# name starts with - can be scanned. It used to be an unknown option.
+def test_file_named_after_double_dash_is_scanned(tmp_path, capsys):
+    f = tmp_path / "after-dashes.txt"
+    f.write_text("The weather is nice today.")
+    assert run(["scan", "--", str(f)]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert f"CLEAN      {f}" in captured.out
+
+
+def test_each_argument_after_double_dash_is_a_file(tmp_path, monkeypatch, capsys):
+    (tmp_path / "-dash.txt").write_text("The weather is nice today.")
+    (tmp_path / "--json").write_text("SSN 078-05-1120")
+    monkeypatch.chdir(tmp_path)
+    assert run(["scan", "--", "-dash.txt", "--json"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    # Human output, so the --json after -- was a file and not the option.
+    assert re.search(r"^ {2}CLEAN {6}-dash\.txt ", captured.out, re.M)
+    assert re.search(r"^ {2}VIOLATION {2}--json ", captured.out, re.M)
+
+
+def test_options_before_double_dash_still_apply(tmp_path, monkeypatch, capsys):
+    (tmp_path / "-dash.txt").write_text("The weather is nice today.")
+    monkeypatch.chdir(tmp_path)
+    assert run(["scan", "--json", "--", "-dash.txt"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [(p["source"], p["verdict"]) for p in payload] == [("-dash.txt", "CLEAN")]
+
+
+def test_second_double_dash_is_a_file_name(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert run(["scan", "--", "--"]) == 2
+    assert capsys.readouterr().err == (
+        "aicomply: cannot read '--' (check the path). Try 'aicomply --help'.\n"
+    )
+
+
+def test_dash_argument_without_double_dash_is_still_an_option(tmp_path, monkeypatch, capsys):
+    (tmp_path / "-dash.txt").write_text("The weather is nice today.")
+    monkeypatch.chdir(tmp_path)
+    assert run(["scan", "-dash.txt"]) == 2
+    assert capsys.readouterr().err == "aicomply: unknown option '-dash.txt'\n"
+
+
+def test_help_documents_double_dash(capsys):
+    for argv in (["--help"], ["scan", "--help"]):
+        run(argv)
+        assert (
+            "  --            Ends the options; each later argument is an input, so a file\n"
+            "                name can start with - (aicomply scan -- -notes.txt)\n"
+        ) in capsys.readouterr().out
 
 
 def test_scan_prints_no_characters_of_a_detected_value(tmp_path, capsys):

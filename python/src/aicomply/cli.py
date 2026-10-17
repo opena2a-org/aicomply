@@ -20,6 +20,8 @@ pattern and keep parity with the npm CLI's behaviour.
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import sys
 from bisect import bisect_left
 from dataclasses import dataclass
@@ -46,8 +48,18 @@ class _ParsedArgs:
 
 def _parse_args(argv: list[str]) -> _ParsedArgs:
     parsed = _ParsedArgs(files=[])
+    # ``--`` ends the options (POSIX utility syntax guideline 10): each later
+    # argument is an operand, so a file whose name starts with - can be named.
+    options_ended = False
     for arg in argv:
-        if arg == "--json":
+        if options_ended or not arg.startswith("-") or arg == "-":
+            if parsed.command is None:
+                parsed.command = arg
+            else:
+                parsed.files.append(arg)  # type: ignore[union-attr]
+        elif arg == "--":
+            options_ended = True
+        elif arg == "--json":
             parsed.json = True
         elif arg in ("--quiet", "-q"):
             parsed.quiet = True
@@ -55,12 +67,8 @@ def _parse_args(argv: list[str]) -> _ParsedArgs:
             parsed.help = True
         elif arg in ("--version", "-V"):
             parsed.version = True
-        elif arg.startswith("-") and arg != "-":
-            raise _UsageError(f"unknown option '{arg}'")
-        elif parsed.command is None:
-            parsed.command = arg
         else:
-            parsed.files.append(arg)  # type: ignore[union-attr]
+            raise _UsageError(f"unknown option '{arg}'")
     return parsed
 
 
@@ -83,6 +91,8 @@ OPTIONS
   --quiet, -q   Print only the verdict line
   --version,-V  Print version
   --help, -h    This help
+  --            Ends the options; each later argument is an input, so a file
+                name can start with - (aicomply scan -- -notes.txt)
 
 PATTERN CLASSES (regex layer)
   SSN         US Social Security numbers
@@ -133,6 +143,8 @@ OPTIONS
                 each finding carries its line and column in the input)
   --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY)
   --help, -h    This help
+  --            Ends the options; each later argument is an input, so a file
+                name can start with - (aicomply scan -- -notes.txt)
 
 EXIT CODES
   0  CLEAN          no findings from the layers that ran
@@ -167,6 +179,19 @@ class _Source:
     content: str
 
 
+def _files_glob(directory: str) -> str:
+    """The glob the help uses (``src/*.txt``) for the files in ``directory``.
+
+    Written as one POSIX shell word: trailing slashes dropped, ``./`` put before
+    a name that starts with -, and the name quoted by ``shlex.quote``.
+    """
+    trimmed = directory.rstrip("/")
+    if not trimmed:
+        return "/*.txt"
+    name = f"./{trimmed}" if trimmed.startswith("-") else trimmed
+    return f"{shlex.quote(name)}/*.txt"
+
+
 def _collect_sources(files: list[str]) -> list[_Source]:
     stdin_requested = len(files) == 0 or "-" in files
     real_files = [f for f in files if f != "-"]
@@ -177,6 +202,12 @@ def _collect_sources(files: list[str]) -> list[_Source]:
             with open(f, encoding="utf-8") as fh:
                 sources.append(_Source(label=f, content=fh.read()))
         except OSError:
+            # The path exists, so "check the path" would send the user the wrong way.
+            if os.path.isdir(f):
+                raise _UsageError(
+                    f"'{f}' is a directory, and directories are not scanned."
+                    f" Name the files in it:\n  aicomply scan {_files_glob(f)}"
+                ) from None
             raise _UsageError(
                 f"cannot read '{f}' (check the path). Try 'aicomply --help'."
             ) from None
