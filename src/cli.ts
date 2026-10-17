@@ -238,6 +238,53 @@ export function filesGlob(dir: string): string {
 }
 
 /**
+ * The text of an input. Bytes that start with a UTF-32 or UTF-16 byte order
+ * mark are decoded in that encoding, without the mark; other bytes are decoded
+ * as UTF-8. A byte sequence the encoding cannot decode becomes U+FFFD and the
+ * rest is scanned, as in the Python CLI.
+ */
+export function decodeInput(data: Buffer): string {
+  const [b0, b1, b2, b3] = data;
+  // FF FE 00 00 is checked before FF FE: it is the UTF-32LE mark.
+  if (data.length >= 4 && b0 === 0xff && b1 === 0xfe && b2 === 0 && b3 === 0) {
+    return decodeUtf32(data.subarray(4), true);
+  }
+  if (data.length >= 4 && b0 === 0 && b1 === 0 && b2 === 0xfe && b3 === 0xff) {
+    return decodeUtf32(data.subarray(4), false);
+  }
+  if (data.length >= 2 && b0 === 0xff && b1 === 0xfe) {
+    return new TextDecoder('utf-16le', { ignoreBOM: true }).decode(data.subarray(2));
+  }
+  if (data.length >= 2 && b0 === 0xfe && b1 === 0xff) {
+    // Swapped to little-endian; an odd last byte stays and decodes to U+FFFD.
+    const le = Buffer.from(data.subarray(2));
+    for (let i = 0; i + 1 < le.length; i += 2) {
+      const hi = le[i];
+      le[i] = le[i + 1];
+      le[i + 1] = hi;
+    }
+    return new TextDecoder('utf-16le', { ignoreBOM: true }).decode(le);
+  }
+  return data.toString('utf8');
+}
+
+/**
+ * UTF-32 without its mark. A unit above U+10FFFF or in the surrogate range, and
+ * 1 to 3 bytes left over at the end, each become one U+FFFD.
+ */
+function decodeUtf32(data: Buffer, littleEndian: boolean): string {
+  const parts: string[] = [];
+  let i = 0;
+  for (; i + 4 <= data.length; i += 4) {
+    const cp = littleEndian ? data.readUInt32LE(i) : data.readUInt32BE(i);
+    const valid = cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff);
+    parts.push(valid ? String.fromCodePoint(cp) : '�');
+  }
+  if (i < data.length) parts.push('�');
+  return parts.join('');
+}
+
+/**
  * Reads each named file, then stdin when it is requested. `pipeUnread` is true
  * when stdin is a pipe or socket that is not read because files were named.
  */
@@ -248,7 +295,7 @@ async function collectSources(files: string[], pipeUnread: boolean): Promise<Sou
   for (const file of realFiles) {
     try {
       const data = readFileSync(file);
-      sources.push({ label: file, content: data.toString('utf8'), bytes: data.length });
+      sources.push({ label: file, content: decodeInput(data), bytes: data.length });
     } catch {
       // The path exists, so "check the path" would send the user the wrong way.
       if (isDirectory(file)) {
@@ -271,7 +318,7 @@ async function collectSources(files: string[], pipeUnread: boolean): Promise<Sou
       );
     }
     const data = await readStdin();
-    sources.push({ label: '(stdin)', content: data.toString('utf8'), bytes: data.length });
+    sources.push({ label: '(stdin)', content: decodeInput(data), bytes: data.length });
   }
 
   // comply() runs no layer on empty content and returns CLEAN, so a run in

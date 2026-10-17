@@ -10,7 +10,7 @@ import { createServer, type Server } from 'net';
 import { devNull, tmpdir } from 'os';
 import { join } from 'path';
 import { PassThrough, Readable } from 'stream';
-import { filesGlob, locate, run } from '../cli';
+import { decodeInput, filesGlob, locate, run } from '../cli';
 import { PATTERN_TYPES } from '../classifier/regex/pack';
 
 function capture(): { out: string[]; err: string[]; restore: () => void } {
@@ -52,8 +52,8 @@ function fixture(name: string, content: string): string {
 }
 
 /** Serve `data` as stdin from a pipe, not a terminal; afterEach restores it. */
-function pipeStdin(data: string): void {
-  const stream = Readable.from(data === '' ? [] : [Buffer.from(data, 'utf8')]);
+function pipeStdin(data: string | Buffer): void {
+  const stream = Readable.from(data.length === 0 ? [] : [Buffer.from(data)]);
   jest.spyOn(process, 'stdin', 'get').mockReturnValue(stream as unknown as typeof process.stdin);
 }
 
@@ -732,8 +732,71 @@ describe('aicomply CLI', () => {
   // The value is masked, so a finding's location is the only thing a user can
   // search for in a long log or a staged diff. Line and column are 1-based
   // positions in the original content of the input.
+  // Text that starts with a UTF-32 or UTF-16 byte order mark is decoded in
+  // that encoding without the mark. Decoded as UTF-8 it reached the patterns
+  // with NUL characters between its letters and was reported CLEAN.
+  describe('input with a UTF-16 or UTF-32 byte order mark', () => {
+    const text = 'Customer SSN 078-05-1120 on file\n';
+    const utf16be = (s: string) => Buffer.from(s, 'utf16le').swap16();
+    const utf32 = (s: string, le: boolean) => {
+      const cps = [...s].map((c) => c.codePointAt(0) as number);
+      const b = Buffer.alloc(cps.length * 4);
+      cps.forEach((cp, i) => (le ? b.writeUInt32LE(cp, i * 4) : b.writeUInt32BE(cp, i * 4)));
+      return b;
+    };
+    const INPUTS: Array<[string, Buffer]> = [
+      ['utf-16-le', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')])],
+      ['utf-16-be', Buffer.concat([Buffer.from([0xfe, 0xff]), utf16be(text)])],
+      ['utf-32-le', Buffer.concat([Buffer.from([0xff, 0xfe, 0, 0]), utf32(text, true)])],
+      ['utf-32-be', Buffer.concat([Buffer.from([0, 0, 0xfe, 0xff]), utf32(text, false)])],
+    ];
+
+    it('decodeInput drops the mark and returns the text', () => {
+      for (const [name, data] of INPUTS) {
+        expect({ name, text: decodeInput(data) }).toEqual({ name, text });
+      }
+    });
+
+    it.each(INPUTS)('reports the SSN in a %s file and on stdin', async (name, data) => {
+      const p = join(dir, `${name}.txt`);
+      writeFileSync(p, data);
+      for (const [source, args] of [[p, [p]], ['(stdin)', []]] as Array<[string, string[]]>) {
+        if (args.length === 0) pipeStdin(data);
+        const cap = capture();
+        const code = await run(['scan', ...args, '--json']);
+        cap.restore();
+        expect(cap.err.join('')).toBe('');
+        expect(code).toBe(1);
+        const [entry] = JSON.parse(cap.out.join(''));
+        expect(entry).toMatchObject({ source, bytes: data.length, verdict: 'VIOLATION' });
+        expect(entry.findings.map((f: { type: string; line: number; column: number }) => [f.type, f.line, f.column]))
+          .toEqual([['SSN', 1, 14]]);
+      }
+    });
+
+    // UTF-32LE: a surrogate unit, a unit above U+10FFFF and 2 bytes left over;
+    // UTF-16BE: a lone high surrogate and 1 byte left over. Each becomes one
+    // U+FFFD, as in the Python CLI.
+    it('turns units that do not decode into one U+FFFD each', () => {
+      const ssn = 'SSN 078-05-1120 ';
+      const u32 = Buffer.concat([
+        Buffer.from([0xff, 0xfe, 0, 0, 0x00, 0xd8, 0, 0, 0xff, 0xff, 0x11, 0]),
+        utf32(ssn, true),
+        Buffer.from([0x5a, 0]),
+      ]);
+      const u16 = Buffer.concat([Buffer.from([0xfe, 0xff, 0xd8, 0x00]), utf16be(ssn), Buffer.from([0x5a])]);
+      expect(decodeInput(u32)).toBe(`��${ssn}�`);
+      expect(decodeInput(u16)).toBe(`�${ssn}�`);
+    });
+
+    it('keeps decoding other input as UTF-8, a UTF-8 mark included', () => {
+      expect(decodeInput(Buffer.from('﻿SSN', 'utf8'))).toBe('﻿SSN');
+      expect(decodeInput(Buffer.from([0x62, 0xff, 0xfe]))).toBe('b��');
+    });
+  });
+
   describe('finding location', () => {
-    const line3 = 'ticket: SSN 078-05-1120 on file';
+    const line3 ='ticket: SSN 078-05-1120 on file';
     const content = `line one\nline two\n${line3}\n`;
     const column = line3.indexOf('078-05-1120') + 1;
 
