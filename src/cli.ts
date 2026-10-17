@@ -108,7 +108,8 @@ USAGE
   echo "text" | aicomply scan  Pipe content from stdin
 
 OPTIONS
-  --json        Machine-readable JSON output (verdict + findings, values masked)
+  --json        Machine-readable JSON output (verdict + findings, values masked;
+                each finding carries its line and column in the input)
   --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY)
   --help, -h    This help
 
@@ -179,6 +180,69 @@ function guardActive(result: ComplyResult): boolean {
   return result.classifierResults.guard !== undefined;
 }
 
+/** A finding's 1-based line and column in the original content of its input. */
+export interface FindingLocation {
+  line: number;
+  column: number;
+}
+
+// The renderers locate every finding of one input in turn, so the newline
+// offsets of the last content are kept instead of recounted per finding: a
+// large log can carry thousands of findings.
+let newlineCache: { content: string; offsets: number[] } | undefined;
+
+function newlineOffsets(content: string): number[] {
+  if (newlineCache === undefined || newlineCache.content !== content) {
+    const offsets: number[] = [];
+    for (let i = content.indexOf('\n'); i !== -1; i = content.indexOf('\n', i + 1)) {
+      offsets.push(i);
+    }
+    newlineCache = { content, offsets };
+  }
+  return newlineCache.offsets;
+}
+
+/**
+ * Where a position in the original content is: `line` is one plus the number
+ * of `\n` before `originalStart`, and `column` counts from 1 after the last of
+ * them, in the string's own indexing (UTF-16 code units). Only `\n` ends a
+ * line, so a `\r` stays the last character of its line. Returns undefined when
+ * there is no position to locate.
+ */
+export function locate(
+  content: string,
+  originalStart: number | undefined,
+): FindingLocation | undefined {
+  if (
+    originalStart === undefined ||
+    !Number.isInteger(originalStart) ||
+    originalStart < 0 ||
+    originalStart > content.length
+  ) {
+    return undefined;
+  }
+  const offsets = newlineOffsets(content);
+  // Count the newlines before originalStart; the offsets ascend.
+  let lo = 0;
+  let hi = offsets.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (offsets[mid] < originalStart) lo = mid + 1;
+    else hi = mid;
+  }
+  const lastNewline = lo === 0 ? -1 : offsets[lo - 1];
+  return { line: lo + 1, column: originalStart - lastNewline };
+}
+
+/**
+ * Only a pattern match comes from a content view and carries original
+ * positions. For a decoded-base64 / decoded-url match those positions are the
+ * enclosing encoded token, so that is what the location names.
+ */
+function locateFinding(content: string, v: Violation): FindingLocation | undefined {
+  return v.view === undefined ? undefined : locate(content, v.originalStart);
+}
+
 export function renderHuman(sources: Source[], results: ComplyResult[]): void {
   const out = process.stdout;
   let anyGuard = false;
@@ -209,8 +273,10 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
     for (const v of res.violations as Violation[]) {
       const layer = v.classifier;
       const view = v.view && v.view !== 'normalized' ? `  view ${v.view}` : '';
+      const loc = locateFinding(src.content, v);
+      const where = loc ? `  line ${loc.line} col ${loc.column}` : '';
       out.write(
-        `    ${v.type.padEnd(12)} ${MASKED_VALUE.padEnd(18)} confidence ${v.confidence.toFixed(2)}  layer ${layer}${view}\n`,
+        `    ${v.type.padEnd(12)} ${MASKED_VALUE.padEnd(18)} confidence ${v.confidence.toFixed(2)}  layer ${layer}${view}${where}\n`,
       );
     }
     out.write('\n');
@@ -256,15 +322,22 @@ export function renderJson(sources: Source[], results: ComplyResult[]): void {
     source: src.label,
     verdict: results[i].verdict,
     guardActive: guardActive(results[i]),
-    findings: results[i].violations.map((v) => ({
-      type: v.type,
-      maskedValue: MASKED_VALUE,
-      confidence: v.confidence,
-      classifier: v.classifier,
-      // Only pattern matches come from a content view. A Guard finding has
-      // none, so it prints null rather than claiming the normalized stream.
-      view: v.view ?? null,
-    })),
+    findings: results[i].violations.map((v) => {
+      const loc = locateFinding(src.content, v);
+      return {
+        type: v.type,
+        maskedValue: MASKED_VALUE,
+        confidence: v.confidence,
+        classifier: v.classifier,
+        // Only pattern matches come from a content view. A Guard finding has
+        // none, so it prints null rather than claiming the normalized stream.
+        view: v.view ?? null,
+        // The value is masked, so its place in the input is what a user
+        // searches for; null for a finding with no position there.
+        line: loc?.line ?? null,
+        column: loc?.column ?? null,
+      };
+    }),
   }));
   process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
 }

@@ -38,7 +38,7 @@ Inputs are canonicalized before patterns run:
 - **Whitespace-injected** values are scanned in a compact view that strips spaces only between digit/separator characters, so prose word boundaries stay intact (`1 2 3 - 4 5 - 6 7 8 9` matches; `My SSN is 123-45-6789` still works).
 - **Base64 / URL-encoded** payloads are extracted and scanned in addition to the canonical stream (bounded recursion, length-gated, ASCII-printable round-trip required).
 
-Every pattern match carries a `view` field (`normalized` / `compact` / `decoded-base64` / `decoded-url`) and best-effort original-content anchoring so you can audit which canonicalization surfaced each match. Findings that do not come from a pattern match have no `view`: Guard findings, `POLICY_DENY` / `POLICY_WARN`, `SUPPLY_CHAIN_ALERT` and `FLEET_ANOMALY_ELEVATED`. The CLI's `--json` output prints `"view": null` for them.
+Every pattern match carries a `view` field (`normalized` / `compact` / `decoded-base64` / `decoded-url`) and best-effort original-content anchoring so you can audit which canonicalization surfaced each match. Findings that do not come from a pattern match have no `view`: Guard findings, `POLICY_DENY` / `POLICY_WARN`, `SUPPLY_CHAIN_ALERT` and `FLEET_ANOMALY_ELEVATED`. The CLI's `--json` output prints `"view": null` for them. Each CLI finding also carries `line` and `column`, 1-based positions in the original input; a `decoded-base64` or `decoded-url` finding points at the start of the encoded token it was decoded from, and a finding without a `view`, such as a Guard finding, prints `"line": null, "column": null`.
 
 ## What this package does NOT detect
 

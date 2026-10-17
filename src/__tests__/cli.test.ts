@@ -7,7 +7,7 @@
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { run } from '../cli';
+import { locate, run } from '../cli';
 
 function capture(): { out: string[]; err: string[]; restore: () => void } {
   const out: string[] = [];
@@ -286,5 +286,93 @@ describe('aicomply CLI', () => {
     cap.restore();
     expect(code).toBe(1);
     expect(cap.out.join('').trim()).toBe('VIOLATION');
+  });
+
+  // The value is masked, so a finding's location is the only thing a user can
+  // search for in a long log or a staged diff. Line and column are 1-based
+  // positions in the original content of the input.
+  describe('finding location', () => {
+    const line3 = 'ticket: SSN 078-05-1120 on file';
+    const content = `line one\nline two\n${line3}\n`;
+    const column = line3.indexOf('078-05-1120') + 1;
+
+    it('locate: a match at index 0 is line 1 col 1', () => {
+      expect(locate('078-05-1120', 0)).toEqual({ line: 1, column: 1 });
+    });
+
+    it('locate: a match after two newlines is on line 3', () => {
+      const start = content.indexOf('078-05-1120');
+      expect(locate(content, start)).toEqual({ line: 3, column });
+    });
+
+    it('locate: only \\n ends a line, so \\r stays on the previous line', () => {
+      const crlf = `line one\r\nline two\r\n${line3}\r\n`;
+      expect(locate(crlf, crlf.indexOf('078-05-1120'))).toEqual({ line: 3, column });
+      // A match on the \r itself is the last character of line 1.
+      expect(locate(crlf, crlf.indexOf('\r'))).toEqual({ line: 1, column: 'line one'.length + 1 });
+    });
+
+    it('locate: no original position gives no location', () => {
+      expect(locate(content, undefined)).toBeUndefined();
+    });
+
+    it('ends the finding line with the line and column of the match', async () => {
+      const f = fixture('located.txt', content);
+      const cap = capture();
+      const code = await run(['scan', f]);
+      cap.restore();
+      expect(code).toBe(1);
+      const findingLine = cap.out.join('').split('\n').find((l) => l.startsWith('    SSN '));
+      expect(findingLine).toMatch(/^ {4}SSN {10}••• {16}confidence /);
+      expect(findingLine?.endsWith(`layer regex  line 3 col ${column}`)).toBe(true);
+    });
+
+    it('--json gives each finding a line and column after view', async () => {
+      const f = fixture('located-json.txt', content);
+      const cap = capture();
+      await run(['scan', f, '--json']);
+      cap.restore();
+      const finding = JSON.parse(cap.out.join(''))[0].findings[0];
+      expect(finding).toMatchObject({ type: 'SSN', view: 'normalized', line: 3, column });
+      expect(Object.keys(finding)).toEqual([
+        'type', 'maskedValue', 'confidence', 'classifier', 'view', 'line', 'column',
+      ]);
+    });
+
+    it('locates a decoded-base64 finding at its encoded token', async () => {
+      const encoded = Buffer.from('My SSN is 078-05-1120').toString('base64');
+      const f = fixture('located-b64.txt', `note\n${encoded}\n`);
+      const cap = capture();
+      await run(['scan', f, '--json']);
+      cap.restore();
+      const finding = JSON.parse(cap.out.join(''))[0].findings[0];
+      expect(finding).toMatchObject({ type: 'SSN', view: 'decoded-base64', line: 2, column: 1 });
+    });
+
+    it('prints no location for a finding without original positions', async () => {
+      const { renderHuman, renderJson } = await import('../cli');
+      const guard = guardResult('guard');
+      delete (guard.violations[0] as { view?: unknown }).view;
+      const sources = [{ label: 'x.txt', content: 'line one\nline two\n' }];
+
+      const cap = capture();
+      try {
+        renderHuman(sources, [guard]);
+      } finally {
+        cap.restore();
+      }
+      const findingLine = cap.out.join('').split('\n').find((l) => l.startsWith('    tool_misuse '));
+      expect(findingLine?.endsWith('layer guard')).toBe(true);
+
+      const capJson = capture();
+      try {
+        renderJson(sources, [guard]);
+      } finally {
+        capJson.restore();
+      }
+      const finding = JSON.parse(capJson.out.join(''))[0].findings[0];
+      expect(finding).toHaveProperty('line', null);
+      expect(finding).toHaveProperty('column', null);
+    });
   });
 });

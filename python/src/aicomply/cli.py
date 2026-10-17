@@ -21,11 +21,12 @@ from __future__ import annotations
 
 import json
 import sys
+from bisect import bisect_left
 from dataclasses import dataclass
 
 from . import __version__, comply
 from .classifier.guard_client import DEFAULT_NANOMIND_DAEMON_URL
-from .types import ComplyResult
+from .types import ComplyResult, Violation
 
 
 class _UsageError(Exception):
@@ -105,7 +106,8 @@ USAGE
   echo "text" | aicomply scan  Pipe content from stdin
 
 OPTIONS
-  --json        Machine-readable JSON output (verdict + findings, values masked)
+  --json        Machine-readable JSON output (verdict + findings, values masked;
+                each finding carries its line and column in the input)
   --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY)
   --help, -h    This help
 
@@ -172,6 +174,47 @@ def _guard_active(result: ComplyResult) -> bool:
     return "guard" in result.classifier_results
 
 
+# The renderers locate every finding of one input in turn, so the newline
+# offsets of the last content are kept instead of recounted per finding: a
+# large log can carry thousands of findings.
+_newline_cache: tuple[str, list[int]] | None = None
+
+
+def _newline_offsets(content: str) -> list[int]:
+    global _newline_cache
+    if _newline_cache is None or _newline_cache[0] is not content:
+        offsets: list[int] = []
+        i = content.find("\n")
+        while i != -1:
+            offsets.append(i)
+            i = content.find("\n", i + 1)
+        _newline_cache = (content, offsets)
+    return _newline_cache[1]
+
+
+def _locate(content: str, original_start: int | None) -> tuple[int, int] | None:
+    """(line, column), 1-based, of a position in the original content.
+
+    ``line`` is one plus the number of ``\\n`` before ``original_start`` and
+    ``column`` counts from 1 after the last of them, in the string's own
+    indexing (code points). Only ``\\n`` ends a line, so a ``\\r`` stays the
+    last character of its line. None when there is no position to locate.
+    """
+    if original_start is None or original_start < 0 or original_start > len(content):
+        return None
+    offsets = _newline_offsets(content)
+    before = bisect_left(offsets, original_start)
+    last_newline = offsets[before - 1] if before else -1
+    return before + 1, original_start - last_newline
+
+
+def _locate_finding(content: str, v: Violation) -> tuple[int, int] | None:
+    # Only a pattern match comes from a content view and carries original
+    # positions. For a decoded-base64 / decoded-url match those positions are
+    # the enclosing encoded token, so that is what the location names.
+    return None if v.view is None else _locate(content, v.original_start)
+
+
 def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
     out = sys.stdout
     any_guard = False
@@ -201,9 +244,11 @@ def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
         out.write(f"   {n} finding{'' if n == 1 else 's'}\n")
         for v in res.violations:
             view = f"  view {v.view}" if v.view and v.view != "normalized" else ""
+            loc = _locate_finding(src.content, v)
+            where = f"  line {loc[0]} col {loc[1]}" if loc else ""
             out.write(
                 f"    {v.type:<12} {_MASKED_VALUE:<18} confidence {v.confidence:.2f}  "
-                f"layer {v.classifier}{view}\n"
+                f"layer {v.classifier}{view}{where}\n"
             )
         out.write("\n")
 
@@ -230,24 +275,30 @@ def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
         )
 
 
+def _json_finding(content: str, v: Violation) -> dict:
+    loc = _locate_finding(content, v)
+    return {
+        "type": v.type,
+        "maskedValue": _MASKED_VALUE,
+        "confidence": v.confidence,
+        "classifier": v.classifier,
+        # Only pattern matches come from a content view; a Guard
+        # finding has none and prints null.
+        "view": v.view,
+        # The value is masked, so its place in the input is what a user
+        # searches for; null for a finding with no position there.
+        "line": loc[0] if loc else None,
+        "column": loc[1] if loc else None,
+    }
+
+
 def _render_json(sources: list[_Source], results: list[ComplyResult]) -> None:
     payload = [
         {
             "source": src.label,
             "verdict": res.verdict,
             "guardActive": _guard_active(res),
-            "findings": [
-                {
-                    "type": v.type,
-                    "maskedValue": _MASKED_VALUE,
-                    "confidence": v.confidence,
-                    "classifier": v.classifier,
-                    # Only pattern matches come from a content view; a Guard
-                    # finding has none and prints null.
-                    "view": v.view,
-                }
-                for v in res.violations
-            ],
+            "findings": [_json_finding(src.content, v) for v in res.violations],
         }
         for src, res in zip(sources, results)
     ]
