@@ -25,6 +25,8 @@
  * normalized stream.
  */
 
+import { OffsetMapBuilder, offsetMapToArray, type OffsetMap } from './offset-map';
+
 const ASCII_WHITESPACE: ReadonlySet<number> = new Set([
   0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20,
 ]);
@@ -59,59 +61,52 @@ function isTokenChar(cp: number): boolean {
   return cp === 0x2d || cp === 0x5f || cp === 0x2f || cp === 0x2e || cp === 0x3a;
 }
 
+/** A CompactFormResult with the offset map as an OffsetMap. */
+export interface CompactStage {
+  compact: string;
+  offsets: OffsetMap;
+  removedCount: number;
+}
+
 export function buildCompactForm(input: string): CompactFormResult {
-  // Pre-decode the input into a positions array so we can look both
-  // backwards (at the previous emitted code point) and forwards (at the
-  // next non-whitespace code point) when deciding whether to strip a
-  // whitespace run.
-  const codePoints: { text: string; offset: number; cp: number }[] = [];
-  let cursor = 0;
-  for (const ch of input) {
-    const cp = ch.codePointAt(0) ?? 0;
-    codePoints.push({ text: ch, offset: cursor, cp });
-    cursor += ch.length;
-  }
+  const { compact, offsets, removedCount } = compactStage(input);
+  return { compact, offsetMap: offsetMapToArray(offsets, compact.length), removedCount };
+}
 
-  const outputParts: string[] = [];
-  const offsetMap: number[] = [];
+/**
+ * buildCompactForm() with the map as an OffsetMap. Every whitespace and token
+ * character is one code unit outside the surrogate range, so the input is read
+ * a code unit at a time, and each run between two stripped whitespace runs
+ * goes to the output as one slice of the input.
+ */
+export function compactStage(input: string): CompactStage {
+  const parts: string[] = [];
+  const offsets = new OffsetMapBuilder(input.length);
   let removed = 0;
-  let lastEmittedCp: number | null = null;
-
-  for (let i = 0; i < codePoints.length; i += 1) {
-    const here = codePoints[i]!;
-    if (!isWhitespace(here.cp)) {
-      outputParts.push(here.text);
-      for (let k = 0; k < here.text.length; k += 1) offsetMap.push(here.offset + k);
-      lastEmittedCp = here.cp;
+  // input[copied, i) is a run that goes to the output as it is.
+  let copied = 0;
+  let i = 0;
+  while (i < input.length) {
+    if (!isWhitespace(input.charCodeAt(i))) {
+      i += 1;
       continue;
     }
-    // Whitespace run: find the next non-whitespace code point.
-    let j = i + 1;
-    while (j < codePoints.length && isWhitespace(codePoints[j]!.cp)) j += 1;
-    const nextCp = j < codePoints.length ? codePoints[j]!.cp : null;
-
-    const stripRun = lastEmittedCp !== null && nextCp !== null
-      && isTokenChar(lastEmittedCp) && isTokenChar(nextCp);
-
+    // Whitespace run input[i, end). The character before it is not
+    // whitespace, so it is the last one emitted.
+    let end = i + 1;
+    while (end < input.length && isWhitespace(input.charCodeAt(end))) end += 1;
+    const stripRun = i > 0 && end < input.length
+      && isTokenChar(input.charCodeAt(i - 1)) && isTokenChar(input.charCodeAt(end));
     if (stripRun) {
-      // Skip all whitespace in this run.
-      for (let k = i; k < j; k += 1) removed += codePoints[k]!.text.length;
-      i = j - 1; // for-loop's i += 1 advances to j
-    } else {
-      // Keep the whitespace run verbatim.
-      for (let k = i; k < j; k += 1) {
-        const ws = codePoints[k]!;
-        outputParts.push(ws.text);
-        for (let m = 0; m < ws.text.length; m += 1) offsetMap.push(ws.offset + m);
-      }
-      lastEmittedCp = codePoints[j - 1]?.cp ?? lastEmittedCp;
-      i = j - 1;
+      parts.push(input.slice(copied, i));
+      offsets.copy(copied, i - copied);
+      removed += end - i;
+      copied = end;
     }
+    i = end;
   }
-
-  return {
-    compact: outputParts.join(''),
-    offsetMap,
-    removedCount: removed,
-  };
+  offsets.copy(copied, input.length - copied);
+  if (removed === 0) return { compact: input, offsets: offsets.finish(), removedCount: 0 };
+  parts.push(input.slice(copied));
+  return { compact: parts.join(''), offsets: offsets.finish(), removedCount: removed };
 }

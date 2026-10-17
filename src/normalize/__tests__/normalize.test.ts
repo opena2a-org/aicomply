@@ -12,7 +12,7 @@
  *   - No-op behavior on clean ASCII input
  */
 
-import { normalize } from '../index';
+import { normalize, normalizeForScan } from '../index';
 import { normalizeNFKC } from '../nfkc';
 import { stripZeroWidth } from '../zero-width';
 import { buildCompactForm } from '../whitespace';
@@ -228,6 +228,36 @@ describe('normalize() pipeline end-to-end', () => {
   it('offsetMap length equals normalizedContent length', () => {
     const r = normalize('１​２​３');
     expect(r.offsetMap.length).toBe(r.normalizedContent.length);
+  });
+
+  it('offsetMap has one entry per normalized character when only the last character is stripped', () => {
+    // NFKC turns U+FB01 into "fi", both from index 0; the trailing U+200B goes.
+    const r = normalize('\u{FB01}le 078-05-1120\u{200B}');
+    expect(r.normalizedContent).toBe('file 078-05-1120');
+    expect(r.offsetMap).toEqual([0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+  });
+});
+
+describe('normalizeForScan() (the views the classifier scans)', () => {
+  it('holds no offset map for content that no stage changes', () => {
+    const content = 'Customer SSN 078-05-1120 on file\n'.repeat(1000);
+    const r = normalizeForScan(content);
+    expect(r.normalizedContent).toBe(content);
+    expect(r.offsetMap).toBeUndefined();
+    expect(r.decodedExtractions).toEqual([]);
+  });
+
+  it('holds the offset maps of normalize() as Uint32Arrays', () => {
+    const input = '\u{FF11} 2 3-45-6789 \u{FB01}le\u{200B}';
+    const scan = normalizeForScan(input);
+    const full = normalize(input);
+    expect(scan.offsetMap).toBeInstanceOf(Uint32Array);
+    expect(Array.from(scan.offsetMap ?? [])).toEqual(full.offsetMap);
+    const compact = scan.decodedExtractions.find((e) => e.source === 'compact');
+    expect(compact?.offsetMap).toBeInstanceOf(Uint32Array);
+    expect(Array.from(compact?.offsetMap ?? [])).toEqual(
+      full.decodedExtractions.find((e) => e.source === 'compact')?.offsetMap,
+    );
   });
 });
 

@@ -25,7 +25,8 @@ import { verifyClassification } from '../../arp/verify';
 import { RegistryIntelligenceCache } from '../../registry';
 import type { RegistryLookupResult } from '../../registry';
 import { assembleRiskContext } from '../../risk';
-import { normalize } from '../../normalize';
+import { normalizeForScan } from '../../normalize';
+import type { ScanNormalization } from '../../normalize/types';
 import { policyStepProblems } from '../../policy';
 import { showString } from '../../show-string';
 import type { ClassifierResult, ComplyLayer, ComplyResult, PolicyPack, RegistryUnknownAction, RiskContext, Violation, ViolationView } from '../../types';
@@ -278,7 +279,7 @@ export async function classifyDualLayer(
   // Pre-regex adversarial normalization (threat-model scope 2026-05-28).
   // NFKC + zero-width strip produce normalizedContent; the compact form
   // and any Base64/URL-decoded segments are scanned in addition.
-  const norm = normalize(content);
+  const norm = normalizeForScan(content);
   const regexResult = scanAllViews(norm);
 
   // A supplied Guard result is verified, as comply() does for empty content;
@@ -428,7 +429,7 @@ export async function verifySuppliedGuard(
  * the normalized view - avoids double-reporting the same SSN that's
  * detected both raw and via the compact-form pass.
  */
-export function scanAllViews(norm: ReturnType<typeof normalize>): ClassifierResult {
+export function scanAllViews(norm: ScanNormalization): ClassifierResult {
   const normalizedScan = classifyWithRegex(norm.normalizedContent, {
     view: 'normalized',
     offsetMap: norm.offsetMap,

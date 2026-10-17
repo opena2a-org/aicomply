@@ -90,3 +90,22 @@ export interface NormalizationResult {
    */
   decodedExtractions: DecodedExtraction[];
 }
+
+/** A DecodedExtraction whose offset map can be a typed array. */
+export interface ScanExtraction extends Omit<DecodedExtraction, 'offsetMap'> {
+  offsetMap?: ArrayLike<number>;
+}
+
+/**
+ * The views the regex layer scans. A NormalizationResult is one; the
+ * classifier's own has typed-array offset maps, and an `offsetMap` that is
+ * undefined when each position of normalizedContent is the same position of
+ * originalContent.
+ */
+export interface ScanNormalization {
+  originalContent: string;
+  normalizedContent: string;
+  offsetMap: ArrayLike<number> | undefined;
+  steps: NormalizationStep[];
+  decodedExtractions: ScanExtraction[];
+}
