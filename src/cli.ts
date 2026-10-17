@@ -13,7 +13,7 @@
  * Exit codes make it usable as a CI gate:
  *   0  CLEAN          - no findings
  *   1  VIOLATION/DENY - findings present
- *   2  usage error
+ *   2  usage error, or no input (stdin is a terminal or every input is 0 bytes)
  *
  * Dependency-free by design (no commander / yargs) to honor the org's
  * small-library pattern. argv is parsed by hand.
@@ -111,7 +111,7 @@ PATTERN CLASSES (regex layer)
 EXIT CODES
   0  CLEAN          no findings from the layers that ran
   1  VIOLATION/DENY findings present (usable as a CI gate)
-  2  usage error
+  2  usage error, or no input: stdin is a terminal or every input is 0 bytes
 
 EXAMPLES
   aicomply scan ./support-ticket.txt
@@ -125,7 +125,9 @@ const SCAN_HELP = `aicomply scan -- scan files or piped stdin for sensitive cont
 
 Runs the deterministic regex layer over each input, plus the optional semantic
 Guard layer when a local nanomind-daemon is reachable. Prints a verdict per
-input and an overall verdict.
+input and an overall verdict. An input of 0 bytes is not classified: it is
+listed as "0 bytes, nothing to classify" (--json: "bytes": 0, "layers": []),
+and the inputs that were scanned decide the exit code.
 
 The regex layer checks SSNs, card and bank account numbers, passport and
 medical record numbers, provider identifiers (NPI), credentials and CUI
@@ -140,7 +142,8 @@ USAGE
 
 OPTIONS
   --json        Machine-readable JSON output (verdict + findings, values masked;
-                each finding carries its line and column in the input)
+                each finding carries its line and column in the input, and each
+                input its size in bytes and the layers that ran)
   --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY)
   --help, -h    This help
   --            Ends the options; each later argument is an input, so a file
@@ -149,7 +152,7 @@ OPTIONS
 EXIT CODES
   0  CLEAN          no findings from the layers that ran
   1  VIOLATION/DENY findings present (usable as a CI gate)
-  2  usage error
+  2  usage error, or no input: stdin is a terminal or every input is 0 bytes
 
 EXAMPLES
   aicomply scan ./support-ticket.txt
@@ -166,13 +169,12 @@ EXAMPLES
  */
 const MASKED_VALUE = '•••';
 
-function readStdin(): Promise<string> {
+function readStdin(): Promise<Buffer> {
   return new Promise((resolve) => {
-    let data = '';
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk) => (data += chunk));
-    process.stdin.on('end', () => resolve(data));
-    process.stdin.on('error', () => resolve(data));
+    const chunks: Buffer[] = [];
+    process.stdin.on('data', (chunk: Buffer) => chunks.push(chunk));
+    process.stdin.on('end', () => resolve(Buffer.concat(chunks)));
+    process.stdin.on('error', () => resolve(Buffer.concat(chunks)));
   });
 }
 
@@ -209,6 +211,8 @@ function unreadStdin(): 'content' | 'stream' | undefined {
 interface Source {
   label: string;
   content: string;
+  /** How many bytes the input delivered. An input of 0 bytes is not classified. */
+  bytes: number;
 }
 
 function isDirectory(path: string): boolean {
@@ -239,7 +243,8 @@ async function collectSources(files: string[]): Promise<Source[]> {
 
   for (const file of realFiles) {
     try {
-      sources.push({ label: file, content: readFileSync(file, 'utf8') });
+      const data = readFileSync(file);
+      sources.push({ label: file, content: data.toString('utf8'), bytes: data.length });
     } catch {
       // The path exists, so "check the path" would send the user the wrong way.
       if (isDirectory(file)) {
@@ -261,7 +266,18 @@ async function collectSources(files: string[]): Promise<Source[]> {
           '  echo "My SSN is 123-45-6789" | aicomply scan',
       );
     }
-    sources.push({ label: '(stdin)', content: await readStdin() });
+    const data = await readStdin();
+    sources.push({ label: '(stdin)', content: data.toString('utf8'), bytes: data.length });
+  }
+
+  // comply() runs no layer on empty content and returns CLEAN, so a run in
+  // which no input carried a byte would print a verdict nothing reached.
+  // Files come first in `sources`, then stdin.
+  if (sources.every((s) => s.bytes === 0)) {
+    const empty = sources.map((s, i) =>
+      i < realFiles.length ? `${s.label} is 0 bytes` : `${s.label} delivered 0 bytes`,
+    );
+    throw new UsageError(`no input: ${empty.join(', ')}`);
   }
 
   return sources;
@@ -344,6 +360,11 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
   for (let i = 0; i < sources.length; i++) {
     const src = sources[i];
     const res = results[i];
+    if (src.bytes === 0) {
+      // No layer ran on it, so it gets no verdict and adds none to the total.
+      out.write(`  EMPTY      ${src.label}   0 bytes, nothing to classify\n\n`);
+      continue;
+    }
     if (guardActive(res)) anyGuard = true;
     totalFindings += res.violations.length;
     if (res.verdict === 'DENY') worst = 'DENY';
@@ -411,8 +432,11 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
 export function renderJson(sources: Source[], results: ComplyResult[]): void {
   const payload = sources.map((src, i) => ({
     source: src.label,
+    // An input of 0 bytes was not classified; its `layers` is [].
+    bytes: src.bytes,
     verdict: results[i].verdict,
     guardActive: guardActive(results[i]),
+    layers: results[i].layers,
     findings: results[i].violations.map((v) => {
       const loc = locateFinding(src.content, v);
       return {
@@ -482,12 +506,15 @@ async function runInner(argv: string[]): Promise<number> {
   for (const src of sources) {
     results.push(await comply({ content: src.content }));
   }
+  // An input of 0 bytes was not classified, so the inputs that were decide
+  // the verdict and the exit code.
+  const scanned = results.filter((_, i) => sources[i].bytes > 0);
 
   if (args.json) renderJson(sources, results);
   else if (args.quiet) {
-    const worst = results.some((r) => r.verdict === 'DENY')
+    const worst = scanned.some((r) => r.verdict === 'DENY')
       ? 'DENY'
-      : results.some((r) => r.verdict === 'VIOLATION')
+      : scanned.some((r) => r.verdict === 'VIOLATION')
         ? 'VIOLATION'
         : 'CLEAN';
     process.stdout.write(`${worst}\n`);
@@ -496,7 +523,7 @@ async function runInner(argv: string[]): Promise<number> {
   if (unread === 'stream') process.stderr.write(`aicomply: ${STDIN_NOT_READ}\n`);
 
   // Exit 1 if anything is not CLEAN, so the CLI works as a CI gate.
-  return results.some((r) => r.verdict !== 'CLEAN') ? 1 : 0;
+  return scanned.some((r) => r.verdict !== 'CLEAN') ? 1 : 0;
 }
 
 // Only run when invoked as a binary, not when imported by tests.

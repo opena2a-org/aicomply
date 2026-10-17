@@ -35,7 +35,10 @@ aicomply scan ./support-ticket.txt
 cat transcript.log | aicomply scan --json
 ```
 
-Exit codes make it a drop-in CI gate: `0` CLEAN, `1` findings present, `2` usage error.
+Exit codes make it a drop-in CI gate: `0` CLEAN, `1` findings present, `2` usage error or
+no input (stdin is a terminal, or every input is 0 bytes). An input of 0 bytes beside
+others is listed as `0 bytes, nothing to classify` (`--json`: `"bytes": 0`,
+`"layers": []`) and does not decide the exit code.
 
 ## Library API
 
