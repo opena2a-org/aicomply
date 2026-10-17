@@ -172,10 +172,24 @@ EXAMPLES
 _MASKED_VALUE = "•••"
 
 
+def _bom_encoding(data: bytes) -> str | None:
+    """``utf-32`` or ``utf-16`` when ``data`` starts with that encoding's byte
+    order mark, else None. Both codecs read the mark, pick the byte order from
+    it and drop it. FF FE 00 00 is checked first: it is the UTF-32LE mark.
+    """
+    if data.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        return "utf-32"
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "utf-16"
+    return None
+
+
 def _read_stdin() -> tuple[str, int]:
     """The text on stdin and the number of bytes that delivered it.
 
-    The bytes are decoded with the encoding of ``sys.stdin``, keeping line
+    Bytes that start with a UTF-32 or UTF-16 byte order mark are decoded in
+    that encoding, without the mark, as in the TS CLI. Other bytes are decoded
+    with the encoding of ``sys.stdin``, keeping line
     endings except on Windows, where they are translated as in universal-newlines
     mode. A byte sequence the encoding cannot decode becomes U+FFFD and the rest
     is scanned, as Node's ``Buffer.toString('utf8')`` does in the TS CLI. A read
@@ -187,7 +201,7 @@ def _read_stdin() -> tuple[str, int]:
         return "", 0
     text = io.TextIOWrapper(
         io.BytesIO(data),
-        encoding=sys.stdin.encoding,
+        encoding=_bom_encoding(data) or sys.stdin.encoding,
         errors="replace",
         newline=None if sys.platform == "win32" else "\n",
     ).read()
@@ -269,9 +283,12 @@ def _collect_sources(files: list[str], pipe_unread: bool) -> list[_Source]:
             raise _UsageError(
                 f"cannot read '{f}' (check the path). Try 'aicomply --help'."
             ) from None
-        # UTF-8 with universal newlines. A byte sequence that is not valid UTF-8
-        # becomes U+FFFD and the rest is scanned, as in the TS CLI.
-        content = io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="replace").read()
+        # UTF-32 or UTF-16 when the file starts with that byte order mark, else
+        # UTF-8, with universal newlines. A byte sequence the encoding cannot
+        # decode becomes U+FFFD and the rest is scanned, as in the TS CLI.
+        content = io.TextIOWrapper(
+            io.BytesIO(data), encoding=_bom_encoding(data) or "utf-8", errors="replace"
+        ).read()
         sources.append(_Source(label=f, content=content, byte_count=len(data)))
 
     if _stdin_requested(files):

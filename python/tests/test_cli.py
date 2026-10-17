@@ -359,6 +359,83 @@ def test_file_that_is_not_utf8_is_scanned_with_replacement_characters(tmp_path, 
     _assert_not_utf8_entry_is_scanned(entry, str(f))
 
 
+# Text that starts with a UTF-32 or UTF-16 byte order mark is decoded in that
+# encoding without the mark. Decoded as UTF-8 it reached the patterns with NUL
+# characters between its letters and was reported CLEAN.
+_BOM_TEXT = "Customer SSN 078-05-1120 on file\n"
+_BOM_INPUTS = {
+    "utf-16-le": b"\xff\xfe" + _BOM_TEXT.encode("utf-16-le"),
+    "utf-16-be": b"\xfe\xff" + _BOM_TEXT.encode("utf-16-be"),
+    "utf-32-le": b"\xff\xfe\x00\x00" + _BOM_TEXT.encode("utf-32-le"),
+    "utf-32-be": b"\x00\x00\xfe\xff" + _BOM_TEXT.encode("utf-32-be"),
+}
+
+
+def _assert_bom_entry_is_scanned(entry: dict, source: str, data: bytes) -> None:
+    assert entry["source"] == source
+    assert entry["bytes"] == len(data)
+    assert entry["verdict"] == "VIOLATION"
+    [finding] = entry["findings"]
+    assert (finding["type"], finding["line"], finding["column"]) == ("SSN", 1, 14)
+
+
+@pytest.mark.parametrize("encoding", sorted(_BOM_INPUTS))
+def test_file_with_a_utf16_or_utf32_byte_order_mark_is_decoded_in_that_encoding(
+    encoding, tmp_path, capsys
+):
+    data = _BOM_INPUTS[encoding]
+    f = tmp_path / f"{encoding}.txt"
+    f.write_bytes(data)
+    assert run(["scan", str(f), "--json"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    [entry] = json.loads(captured.out)
+    _assert_bom_entry_is_scanned(entry, str(f), data)
+
+    assert run(["scan", str(f), "--quiet"]) == 1
+    assert capsys.readouterr().out == "VIOLATION\n"
+
+
+@pytest.mark.parametrize("encoding", sorted(_BOM_INPUTS))
+def test_stdin_with_a_utf16_or_utf32_byte_order_mark_is_decoded_in_that_encoding(
+    encoding, monkeypatch, capsys
+):
+    data = _BOM_INPUTS[encoding]
+    _pipe_stdin(monkeypatch, data)
+    assert run(["scan", "--json"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    [entry] = json.loads(captured.out)
+    _assert_bom_entry_is_scanned(entry, "(stdin)", data)
+
+
+def test_utf16_and_utf32_units_that_do_not_decode_become_replacement_characters(
+    tmp_path, capsys
+):
+    # UTF-32LE: a surrogate unit, a unit above U+10FFFF and 2 bytes left over;
+    # UTF-16BE: a lone high surrogate and 1 byte left over. Each becomes one
+    # U+FFFD, so the number after "SSN " starts at column 7 and 6, as in the
+    # TS CLI.
+    ssn = "SSN 078-05-1120 "
+    cases = {
+        "utf-32-le": (
+            b"\xff\xfe\x00\x00"
+            + b"\x00\xd8\x00\x00\xff\xff\x11\x00"
+            + ssn.encode("utf-32-le")
+            + b"Z\x00",
+            7,
+        ),
+        "utf-16-be": (b"\xfe\xff" + b"\xd8\x00" + ssn.encode("utf-16-be") + b"Z", 6),
+    }
+    for name, (data, column) in cases.items():
+        f = tmp_path / f"bad-{name}.txt"
+        f.write_bytes(data)
+        assert run(["scan", str(f), "--json"]) == 1
+        [entry] = json.loads(capsys.readouterr().out)
+        [finding] = entry["findings"]
+        assert (name, finding["type"], finding["column"]) == (name, "SSN", column)
+
+
 def test_input_of_0_bytes_beside_others_is_reported_and_scanned_inputs_decide(tmp_path, capsys):
     empty = tmp_path / "empty.txt"
     clean = tmp_path / "clean.txt"
