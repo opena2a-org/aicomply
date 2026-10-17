@@ -552,12 +552,34 @@ async function runInner(argv: string[]): Promise<number> {
   return scanned.some((r) => r.verdict !== 'CLEAN') ? 1 : 0;
 }
 
+/**
+ * Exits with `code` once stdout and stderr have handed everything written to
+ * them to the operating system. When stdout is a pipe, write() can return
+ * while most of the output is still queued, and process.exit() discards that
+ * queue: a --json report piped to another command arrived cut off. A write's
+ * callback runs after every earlier write to the same stream has finished, so
+ * an empty write marks the end of the queue. The callback also runs when the
+ * write fails, as it does with EPIPE once the reader has closed the pipe
+ * (`| head`); the 'error' listener keeps that failure from being thrown as an
+ * unhandled 'error' event.
+ */
+function exitWhenFlushed(code: number): void {
+  const streams = [process.stdout, process.stderr];
+  let pending = streams.length;
+  for (const stream of streams) {
+    stream.on('error', () => {});
+    stream.write('', () => {
+      if (--pending === 0) process.exit(code);
+    });
+  }
+}
+
 // Only run when invoked as a binary, not when imported by tests.
 if (require.main === module) {
   run(process.argv.slice(2))
-    .then((code) => process.exit(code))
+    .then((code) => exitWhenFlushed(code))
     .catch((err) => {
       process.stderr.write(`aicomply: ${err instanceof Error ? err.message : String(err)}\n`);
-      process.exit(2);
+      exitWhenFlushed(2);
     });
 }
