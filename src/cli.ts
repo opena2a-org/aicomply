@@ -293,28 +293,55 @@ export interface FindingLocation {
   column: number;
 }
 
-// The renderers locate every finding of one input in turn, so the newline
-// offsets of the last content are kept instead of recounted per finding: a
-// large log can carry thousands of findings.
-let newlineCache: { content: string; offsets: number[] } | undefined;
+interface ContentOffsets {
+  content: string;
+  newlines: number[];
+  /** Index of the high surrogate of each surrogate pair. */
+  surrogatePairs: number[];
+}
 
-function newlineOffsets(content: string): number[] {
-  if (newlineCache === undefined || newlineCache.content !== content) {
-    const offsets: number[] = [];
+// The renderers locate every finding of one input in turn, so the newline and
+// surrogate-pair offsets of the last content are kept instead of recounted per
+// finding: a large log can carry thousands of findings.
+let offsetCache: ContentOffsets | undefined;
+
+function contentOffsets(content: string): ContentOffsets {
+  if (offsetCache === undefined || offsetCache.content !== content) {
+    const newlines: number[] = [];
     for (let i = content.indexOf('\n'); i !== -1; i = content.indexOf('\n', i + 1)) {
-      offsets.push(i);
+      newlines.push(i);
     }
-    newlineCache = { content, offsets };
+    // A character outside the Basic Multilingual Plane, such as an emoji, is
+    // one code point held in two UTF-16 code units: a high surrogate followed
+    // by a low one.
+    const surrogatePairs: number[] = [];
+    const pair = /[\uD800-\uDBFF][\uDC00-\uDFFF]/g;
+    for (let m = pair.exec(content); m !== null; m = pair.exec(content)) {
+      surrogatePairs.push(m.index);
+    }
+    offsetCache = { content, newlines, surrogatePairs };
   }
-  return newlineCache.offsets;
+  return offsetCache;
+}
+
+/** How many of the ascending `offsets` are below `limit`. */
+function countBelow(offsets: number[], limit: number): number {
+  let lo = 0;
+  let hi = offsets.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (offsets[mid] < limit) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 /**
  * Where a position in the original content is: `line` is one plus the number
- * of `\n` before `originalStart`, and `column` counts from 1 after the last of
- * them, in the string's own indexing (UTF-16 code units). Only `\n` ends a
- * line, so a `\r` stays the last character of its line. Returns undefined when
- * there is no position to locate.
+ * of `\n` before `originalStart`, and `column` is one plus the number of code
+ * points between the last of them and `originalStart`, the count the Python
+ * CLI prints. Only `\n` ends a line, so a `\r` stays the last character of its
+ * line. Returns undefined when there is no position to locate.
  */
 export function locate(
   content: string,
@@ -328,17 +355,16 @@ export function locate(
   ) {
     return undefined;
   }
-  const offsets = newlineOffsets(content);
-  // Count the newlines before originalStart; the offsets ascend.
-  let lo = 0;
-  let hi = offsets.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
-    if (offsets[mid] < originalStart) lo = mid + 1;
-    else hi = mid;
-  }
-  const lastNewline = lo === 0 ? -1 : offsets[lo - 1];
-  return { line: lo + 1, column: originalStart - lastNewline };
+  const { newlines, surrogatePairs } = contentOffsets(content);
+  const before = countBelow(newlines, originalStart);
+  const lineStart = before === 0 ? 0 : newlines[before - 1] + 1;
+  // originalStart counts UTF-16 code units. A pair is two of them and one
+  // code point, so each pair on the line that ends before originalStart takes
+  // one off the column. A `\n` is never inside a pair, so no pair spans
+  // lineStart.
+  const pairs =
+    countBelow(surrogatePairs, originalStart - 1) - countBelow(surrogatePairs, lineStart);
+  return { line: before + 1, column: originalStart - lineStart + 1 - pairs };
 }
 
 /**

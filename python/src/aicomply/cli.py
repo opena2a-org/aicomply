@@ -317,9 +317,12 @@ def _locate(content: str, original_start: int | None) -> tuple[int, int] | None:
     """(line, column), 1-based, of a position in the original content.
 
     ``line`` is one plus the number of ``\\n`` before ``original_start`` and
-    ``column`` counts from 1 after the last of them, in the string's own
-    indexing (code points). Only ``\\n`` ends a line, so a ``\\r`` stays the
-    last character of its line. None when there is no position to locate.
+    ``column`` is one plus the number of code points between the last of them
+    and ``original_start``, the count the TypeScript CLI prints. A Python
+    string is indexed by code point, so ``column`` is ``original_start`` minus
+    the index of that ``\\n`` (taken as -1 on the first line). Only ``\\n``
+    ends a line, so a ``\\r`` stays the last character of its line. None when
+    there is no position to locate.
     """
     if original_start is None or original_start < 0 or original_start > len(content):
         return None
