@@ -175,21 +175,22 @@ _MASKED_VALUE = "•••"
 def _read_stdin() -> tuple[str, int]:
     """The text on stdin and the number of bytes that delivered it.
 
-    The bytes are decoded with the encoding and error handler of ``sys.stdin``,
-    keeping line endings except on Windows, where they are translated as in
-    universal-newlines mode. A read or decode error leaves the text empty.
+    The bytes are decoded with the encoding of ``sys.stdin``, keeping line
+    endings except on Windows, where they are translated as in universal-newlines
+    mode. A byte sequence the encoding cannot decode becomes U+FFFD and the rest
+    is scanned, as Node's ``Buffer.toString('utf8')`` does in the TS CLI. A read
+    error leaves the text empty and the byte count 0.
     """
-    data = b""
     try:
         data = sys.stdin.buffer.read()
-        text = io.TextIOWrapper(
-            io.BytesIO(data),
-            encoding=sys.stdin.encoding,
-            errors=sys.stdin.errors,
-            newline=None if sys.platform == "win32" else "\n",
-        ).read()
     except Exception:
-        return "", len(data)
+        return "", 0
+    text = io.TextIOWrapper(
+        io.BytesIO(data),
+        encoding=sys.stdin.encoding,
+        errors="replace",
+        newline=None if sys.platform == "win32" else "\n",
+    ).read()
     return text, len(data)
 
 
@@ -268,9 +269,9 @@ def _collect_sources(files: list[str], pipe_unread: bool) -> list[_Source]:
             raise _UsageError(
                 f"cannot read '{f}' (check the path). Try 'aicomply --help'."
             ) from None
-        # Decoded as open(f, encoding="utf-8") decodes: strict UTF-8 with
-        # universal newlines.
-        content = io.TextIOWrapper(io.BytesIO(data), encoding="utf-8").read()
+        # UTF-8 with universal newlines. A byte sequence that is not valid UTF-8
+        # becomes U+FFFD and the rest is scanned, as in the TS CLI.
+        content = io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="replace").read()
         sources.append(_Source(label=f, content=content, byte_count=len(data)))
 
     if _stdin_requested(files):

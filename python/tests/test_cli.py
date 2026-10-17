@@ -319,6 +319,46 @@ def test_whitespace_only_input_is_scanned_and_json_gives_bytes_and_layers(monkey
     }
 
 
+# Bytes that are not valid UTF-8 become U+FFFD and the rest is scanned, as Node's
+# Buffer.toString('utf8') does in the TS CLI: 0xff 0xfe are two replacement
+# characters, so the SSN starts at column 18 in both CLIs.
+_NOT_UTF8 = b"bad \xff\xfe bytes SSN 078-05-1120\n"
+
+
+def _assert_not_utf8_entry_is_scanned(entry: dict, source: str) -> None:
+    assert entry["source"] == source
+    assert entry["bytes"] == len(_NOT_UTF8)
+    assert entry["verdict"] == "VIOLATION"
+    assert entry["layers"] == ["normalize", "regex"]
+    [finding] = entry["findings"]
+    assert (finding["type"], finding["line"], finding["column"]) == ("SSN", 1, 18)
+
+
+def test_stdin_that_is_not_utf8_is_scanned_with_replacement_characters(monkeypatch, capsys):
+    _pipe_stdin(monkeypatch, _NOT_UTF8)
+    assert run(["scan", "--json"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    [entry] = json.loads(captured.out)
+    _assert_not_utf8_entry_is_scanned(entry, "(stdin)")
+
+    _pipe_stdin(monkeypatch, _NOT_UTF8)
+    assert run(["scan"]) == 1
+    out = capsys.readouterr().out
+    assert "CLEAN" not in out
+    assert "layer regex  line 1 col 18" in out
+
+
+def test_file_that_is_not_utf8_is_scanned_with_replacement_characters(tmp_path, capsys):
+    f = tmp_path / "not-utf8.txt"
+    f.write_bytes(_NOT_UTF8)
+    assert run(["scan", str(f), "--json"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    [entry] = json.loads(captured.out)
+    _assert_not_utf8_entry_is_scanned(entry, str(f))
+
+
 def test_input_of_0_bytes_beside_others_is_reported_and_scanned_inputs_decide(tmp_path, capsys):
     empty = tmp_path / "empty.txt"
     clean = tmp_path / "clean.txt"
