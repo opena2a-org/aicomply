@@ -790,7 +790,7 @@ describe('aicomply CLI', () => {
     });
 
     it('keeps decoding other input as UTF-8, a UTF-8 mark included', () => {
-      expect(decodeInput(Buffer.from('﻿SSN', 'utf8'))).toBe('﻿SSN');
+      expect(decodeInput(Buffer.from('\u{FEFF}SSN', 'utf8'))).toBe('\u{FEFF}SSN');
       expect(decodeInput(Buffer.from([0x62, 0xff, 0xfe]))).toBe('b��');
     });
   });
