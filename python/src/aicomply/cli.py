@@ -245,7 +245,12 @@ def _files_glob(directory: str) -> str:
     return f"{shlex.quote(name)}/*.txt"
 
 
-def _collect_sources(files: list[str]) -> list[_Source]:
+def _collect_sources(files: list[str], pipe_unread: bool) -> list[_Source]:
+    """Reads each named file, then stdin when it is requested.
+
+    ``pipe_unread`` is true when stdin is a pipe or socket that is not read
+    because files were named.
+    """
     real_files = [f for f in files if f != "-"]
     sources: list[_Source] = []
 
@@ -280,13 +285,16 @@ def _collect_sources(files: list[str]) -> list[_Source]:
 
     # comply() runs no layer on empty content and returns CLEAN, so a run in
     # which no input carried a byte would print a verdict nothing reached.
-    # Files come first in ``sources``, then stdin.
+    # Files come first in ``sources``, then stdin. A pipe or socket left unread
+    # can hold the content meant for the scan, so the line that says stdin was
+    # not read follows the error, as it follows a report.
     if all(s.byte_count == 0 for s in sources):
         empty = [
             f"{s.label} is 0 bytes" if i < len(real_files) else f"{s.label} delivered 0 bytes"
             for i, s in enumerate(sources)
         ]
-        raise _UsageError("no input: " + ", ".join(empty))
+        note = f"\naicomply: {_STDIN_NOT_READ}" if pipe_unread else ""
+        raise _UsageError("no input: " + ", ".join(empty) + note)
 
     return sources
 
@@ -470,7 +478,8 @@ def _run_inner(argv: list[str]) -> int:
 
     files = args.files or []
     # A file with content on stdin is a usage error before any scan; a pipe or
-    # socket gets one stderr line after the report.
+    # socket gets one stderr line after the report, or after the no-input error
+    # when every named file is 0 bytes.
     unread =None if _stdin_requested(files) else _unread_stdin()
     if unread == "content":
         raise _UsageError(
@@ -479,7 +488,7 @@ def _run_inner(argv: list[str]) -> int:
             "  aicomply scan - <files>"
         )
 
-    sources = _collect_sources(files)
+    sources = _collect_sources(files, unread == "stream")
     results = [comply(src.content) for src in sources]
     # An input of 0 bytes was not classified, so the inputs that were decide
     # the verdict and the exit code.

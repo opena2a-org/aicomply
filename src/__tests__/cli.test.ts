@@ -528,6 +528,51 @@ describe('aicomply CLI', () => {
       expect(stdinGet).not.toHaveBeenCalled();
     });
 
+    // A run whose named files are all 0 bytes ends with no input before any
+    // report, and the pipe it left unread can hold the content meant for it.
+    posixIt.each([['human', []], ['--json', ['--json']], ['--quiet', ['--quiet']]])(
+      'adds the line after no input when every named file is 0 bytes (%s output)',
+      async (_mode, flags) => {
+        const empty = fixture('named-empty.txt', '');
+        stdinIs(fifo);
+        const stdinGet = jest.spyOn(process, 'stdin', 'get');
+        const cap = capture();
+        const code = await run(['scan', empty, ...(flags as string[])]);
+        cap.restore();
+        expect({ code, out: cap.out.join('') }).toEqual({ code: 2, out: '' });
+        expect(cap.err.join('')).toBe(`aicomply: no input: ${empty} is 0 bytes\n${NOT_READ}`);
+        expect(stdinGet).not.toHaveBeenCalled();
+      },
+    );
+
+    posixIt('names each file of 0 bytes, then the line, with a socket on stdin', async () => {
+      const a = fixture('named-empty-a.txt', '');
+      const b = fixture('named-empty-b.txt', '');
+      stdinIs(socketPath);
+      const stdinGet = jest.spyOn(process, 'stdin', 'get');
+      const cap = capture();
+      const code = await run(['scan', a, b, '--quiet']);
+      cap.restore();
+      expect({ code, out: cap.out.join('') }).toEqual({ code: 2, out: '' });
+      expect(cap.err.join('')).toBe(
+        `aicomply: no input: ${a} is 0 bytes, ${b} is 0 bytes\n${NOT_READ}`,
+      );
+      expect(stdinGet).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['/dev/null', () => devNull],
+      ['an empty file', () => fixture('stdin-empty.txt', '')],
+    ])('gives only no input when every named file is 0 bytes and stdin is %s', async (_name, path) => {
+      const empty = fixture('named-empty.txt', '');
+      stdinIs(path());
+      const cap = capture();
+      const code = await run(['scan', empty]);
+      cap.restore();
+      expect(code).toBe(2);
+      expect(cap.err.join('')).toBe(`aicomply: no input: ${empty} is 0 bytes\n`);
+    });
+
     it('refuses a file with content on stdin and names the combined form', async () => {
       const clean = fixture('named-clean.txt', 'The weather is nice today.');
       stdinIs(fixture('stdin-content.txt', 'SSN 078-05-1120\n'));

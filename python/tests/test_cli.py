@@ -518,6 +518,50 @@ def test_files_named_socket_keeps_the_exit_code_of_the_files(tmp_path):
     assert result.stderr == _NOT_READ
 
 
+# A run whose named files are all 0 bytes ends with no input before any report,
+# and the pipe it left unread can hold the content meant for it.
+@pytest.mark.parametrize("flags", [[], ["--json"], ["--quiet"]], ids=["human", "json", "quiet"])
+def test_files_named_all_0_bytes_pipe_line_follows_no_input(tmp_path, flags):
+    empty = tmp_path / "empty.txt"
+    empty.write_bytes(b"")
+    read_end, write_end = os.pipe()
+    try:
+        os.write(write_end, b"SSN 078-05-1120\n")
+        result = _scan([str(empty), *flags], tmp_path, stdin=read_end)
+    finally:
+        os.close(read_end)
+        os.close(write_end)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr == f"aicomply: no input: {empty} is 0 bytes\n" + _NOT_READ
+
+
+def test_files_named_all_0_bytes_socket_names_each_file_before_the_line(tmp_path):
+    a = tmp_path / "empty-a.txt"
+    b = tmp_path / "empty-b.txt"
+    a.write_bytes(b"")
+    b.write_bytes(b"")
+    ours, theirs = socket.socketpair()
+    with ours, theirs:
+        ours.sendall(b"SSN 078-05-1120\n")
+        result = _scan([str(a), str(b), "--quiet"], tmp_path, stdin=theirs.fileno())
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr == f"aicomply: no input: {a} is 0 bytes, {b} is 0 bytes\n" + _NOT_READ
+
+
+@pytest.mark.parametrize("holds", ["/dev/null", "an empty file"])
+def test_files_named_all_0_bytes_gives_only_no_input_when_stdin_holds_nothing(tmp_path, holds):
+    empty = tmp_path / "empty.txt"
+    empty.write_bytes(b"")
+    with empty.open("rb") as stdin:
+        source = subprocess.DEVNULL if holds == "/dev/null" else stdin
+        result = _scan([str(empty)], tmp_path, stdin=source)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr == f"aicomply: no input: {empty} is 0 bytes\n"
+
+
 @pytest.mark.parametrize("flags", [[], ["--json"], ["--quiet"]], ids=["human", "json", "quiet"])
 def test_files_named_file_with_content_on_stdin_is_a_usage_error(tmp_path, flags):
     redirected = tmp_path / "stdin.txt"
