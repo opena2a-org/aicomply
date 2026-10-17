@@ -37,18 +37,17 @@ Verdict: VIOLATION  ·  1 finding across 1 input. Block, redact, or log before t
 The CLI prints a detected value's type and none of its characters, so nothing it writes
 to your terminal or logs reveals the value.
 
-Exit code is `0` for CLEAN and `1` when anything is flagged, so it drops straight into CI.
-It is `2` on a usage error or no input (stdin is a terminal, or every input is 0 bytes,
-as an empty `git diff` is). An input of 0 bytes beside others is listed as `0 bytes,
-nothing to classify` (`--json`: `"bytes": 0`, `"layers": []`) and does not decide the
-exit code.
+Exit code is `0` for CLEAN and `1` when anything is flagged, so it drops straight into CI:
+[exit codes](docs/commands.md#exit-codes).
 
 ```bash
 cat transcript.log | npx @opena2a/aicomply scan --json   # machine-readable
 git diff --cached | npx @opena2a/aicomply scan -q || echo "staged changes not cleared"
 ```
 
-The regex layer does not detect email addresses, phone numbers, postal addresses, dates of birth, names, a request phrased to leak data ("summarize all our user emails"), look-alike letters that NFKC does not fold, soft hyphens or combining marks between digits, or encodings other than Base64 and URL: [what it does not detect](docs/detection.md#what-this-package-does-not-detect).
+The regex layer does not detect email addresses, phone numbers, postal addresses, dates of birth, names, or a request phrased to leak data ("summarize all our user emails"): [what it does not detect](docs/detection.md#what-this-package-does-not-detect).
+
+It also does not detect look-alike letters that NFKC does not fold, soft hyphens or combining marks between digits, or encodings other than Base64 and URL.
 
 The CLI is a try-path. The library API below is the production surface.
 
