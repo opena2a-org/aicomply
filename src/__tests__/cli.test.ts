@@ -920,9 +920,8 @@ describe('aicomply CLI', () => {
   // module. These tests start the source in a child process, with a preloaded
   // hook that transpiles each .ts file as it is required: the release workflow
   // runs `npm test` before `npm run build`, and a local dist/ can be stale.
-  describe('output through a pipe', () => {
-    const CLI = join(__dirname, '..', 'cli.ts');
-    const HOOK = `const { readFileSync } = require('fs');
+  const CLI = join(__dirname, '..', 'cli.ts');
+  const HOOK = `const { readFileSync } = require('fs');
 const ts = require(${JSON.stringify(require.resolve('typescript'))});
 require.extensions['.ts'] = (module, filename) => {
   const { outputText } = ts.transpileModule(readFileSync(filename, 'utf8'), {
@@ -936,8 +935,10 @@ require.extensions['.ts'] = (module, filename) => {
   module._compile(outputText, filename);
 };
 `;
-    // Warnings from the Node.js runtime would land on the stderr these tests read.
-    const ENV = { ...process.env, NODE_NO_WARNINGS: '1' };
+  // Warnings from the Node.js runtime would land on the stderr these tests read.
+  const ENV = { ...process.env, NODE_NO_WARNINGS: '1' };
+
+  describe('output through a pipe', () => {
     // 3,000 findings take both output formats far past a 64 KiB pipe buffer.
     const content = Array.from(
       { length: 3000 },
@@ -1045,6 +1046,38 @@ require.extensions['.ts'] = (module, filename) => {
       const done = finished(child);
       child.stdout.once('data', () => child.stdout.destroy());
       expect(await done).toEqual({ code: 1, stderr: '' });
+    }, 60_000);
+  });
+
+  describe('input of many megabytes', () => {
+    // A scan of a 77 MB file ended with "JavaScript heap out of memory" and
+    // exit 134: normalization held an array entry, and in the compact view an
+    // object, for each character. Before the change, the scan below ran out
+    // of heap with a 512 MB limit.
+    let hook: string;
+    let large: string;
+
+    beforeAll(() => {
+      hook = fixture('transpile-hook.js', HOOK);
+      large = fixture(
+        'large.txt',
+        'filler line with nothing sensitive in it at all\n'.repeat(333_333) +
+          'Customer SSN 078-05-1120 on file\n',
+      );
+    });
+
+    it('reports the finding in a 16 MB file with a 128 MB heap limit', () => {
+      expect(fs.statSync(large).size).toBe(16_000_017);
+      const child = spawnSync(
+        process.execPath,
+        ['--max-old-space-size=128', '-r', hook, CLI, 'scan', large, '--quiet'],
+        { env: ENV, stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      expect({
+        status: child.status,
+        stdout: child.stdout.toString(),
+        stderr: child.stderr.toString(),
+      }).toEqual({ status: 1, stdout: 'VIOLATION\n', stderr: '' });
     }, 60_000);
   });
 });

@@ -21,7 +21,7 @@ export interface ScanViewOptions {
    * original (pre-normalization) content. When omitted, original* fields
    * on violations equal start/end (i.e. content IS the original).
    */
-  offsetMap?: number[];
+  offsetMap?: ArrayLike<number>;
   /**
    * For decoded extractions, the enclosing token's range in the original
    * content. Findings inside a decoded segment are anchored to this
