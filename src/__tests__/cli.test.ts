@@ -9,7 +9,7 @@ import fs, { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { createServer, type Server } from 'net';
 import { devNull, tmpdir } from 'os';
 import { join } from 'path';
-import { PassThrough } from 'stream';
+import { PassThrough, Readable } from 'stream';
 import { filesGlob, locate, run } from '../cli';
 import { PATTERN_TYPES } from '../classifier/regex/pack';
 
@@ -49,6 +49,12 @@ function fixture(name: string, content: string): string {
   const p = join(dir, name);
   writeFileSync(p, content, 'utf8');
   return p;
+}
+
+/** Serve `data` as stdin from a pipe, not a terminal; afterEach restores it. */
+function pipeStdin(data: string): void {
+  const stream = Readable.from(data === '' ? [] : [Buffer.from(data, 'utf8')]);
+  jest.spyOn(process, 'stdin', 'get').mockReturnValue(stream as unknown as typeof process.stdin);
 }
 
 describe('aicomply CLI', () => {
@@ -564,6 +570,120 @@ describe('aicomply CLI', () => {
     });
   });
 
+  // comply() runs no layer on empty content and returns CLEAN, so a stdin that
+  // was never connected, or an empty file, must not pass the gate as CLEAN.
+  describe('input of 0 bytes', () => {
+    const MODES = [[], ['--json'], ['--quiet']];
+
+    it('exits 2 with no input on stderr and nothing on stdout when stdin delivers 0 bytes', async () => {
+      for (const mode of MODES) {
+        pipeStdin('');
+        const cap = capture();
+        const code = await run(['scan', ...mode]);
+        cap.restore();
+        expect({ mode, code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({
+          mode,
+          code: 2,
+          out: '',
+          err: 'aicomply: no input: (stdin) delivered 0 bytes\n',
+        });
+      }
+    });
+
+    it('exits 2 with no input on stderr and nothing on stdout for a file of 0 bytes', async () => {
+      const f = fixture('empty.txt', '');
+      for (const mode of MODES) {
+        const cap = capture();
+        const code = await run(['scan', f, ...mode]);
+        cap.restore();
+        expect({ mode, code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({
+          mode,
+          code: 2,
+          out: '',
+          err: `aicomply: no input: ${f} is 0 bytes\n`,
+        });
+      }
+    });
+
+    it('names each input when none of them carried a byte', async () => {
+      const a = fixture('empty-a.txt', '');
+      const b = fixture('empty-b.txt', '');
+      pipeStdin('');
+      const cap = capture();
+      const code = await run(['scan', a, '-', b]);
+      cap.restore();
+      expect(code).toBe(2);
+      expect(cap.out.join('')).toBe('');
+      expect(cap.err.join('')).toBe(
+        `aicomply: no input: ${a} is 0 bytes, ${b} is 0 bytes, (stdin) delivered 0 bytes\n`,
+      );
+    });
+
+    it('scans an input of whitespace only, and --json gives its bytes and layers', async () => {
+      pipeStdin('\n');
+      const cap = capture();
+      const code = await run(['scan', '--json']);
+      cap.restore();
+      expect(code).toBe(0);
+      expect(cap.err.join('')).toBe('');
+      const [entry] = JSON.parse(cap.out.join(''));
+      expect(Object.keys(entry)).toEqual([
+        'source', 'bytes', 'verdict', 'guardActive', 'layers', 'findings',
+      ]);
+      expect(entry).toEqual({
+        source: '(stdin)',
+        bytes: 1,
+        verdict: 'CLEAN',
+        guardActive: false,
+        layers: ['normalize', 'regex'],
+        findings: [],
+      });
+    });
+
+    it('reports an input of 0 bytes beside others, and the scanned inputs decide the exit', async () => {
+      const empty = fixture('empty-beside.txt', '');
+      const clean = fixture('clean-beside.txt', 'nothing here');
+      const dirty = fixture('dirty-beside.txt', 'card 4111111111111111');
+
+      const cap = capture();
+      const code = await run(['scan', empty, clean]);
+      cap.restore();
+      expect(code).toBe(0);
+      const lines = cap.out.join('').trimEnd().split('\n');
+      expect(lines).toContain(`  EMPTY      ${empty}   0 bytes, nothing to classify`);
+      expect(lines.pop()).toBe('Verdict: CLEAN  ·  no findings from the layers that ran.');
+
+      const capJson = capture();
+      const jsonCode = await run(['scan', empty, clean, '--json']);
+      capJson.restore();
+      expect(jsonCode).toBe(0);
+      const [emptyEntry, cleanEntry] = JSON.parse(capJson.out.join(''));
+      expect(emptyEntry).toMatchObject({ source: empty, bytes: 0, layers: [], findings: [] });
+      expect(cleanEntry).toMatchObject({
+        source: clean,
+        bytes: 'nothing here'.length,
+        layers: ['normalize', 'regex'],
+      });
+
+      const capQuiet = capture();
+      const dirtyCode = await run(['scan', empty, dirty, '--quiet']);
+      capQuiet.restore();
+      expect(dirtyCode).toBe(1);
+      expect(capQuiet.out.join('')).toBe('VIOLATION\n');
+    });
+
+    it('--help and scan --help give the exit code for no input', async () => {
+      for (const argv of [['--help'], ['scan', '--help']]) {
+        const cap = capture();
+        await run(argv);
+        cap.restore();
+        expect(cap.out.join('')).toContain(
+          '  2  usage error, or no input: stdin is a terminal or every input is 0 bytes\n',
+        );
+      }
+    });
+  });
+
   // The value is masked, so a finding's location is the only thing a user can
   // search for in a long log or a staged diff. Line and column are 1-based
   // positions in the original content of the input.
@@ -629,7 +749,7 @@ describe('aicomply CLI', () => {
       const { renderHuman, renderJson } = await import('../cli');
       const guard = guardResult('guard');
       delete (guard.violations[0] as { view?: unknown }).view;
-      const sources = [{ label: 'x.txt', content: 'line one\nline two\n' }];
+      const sources = [{ label: 'x.txt', content: 'line one\nline two\n', bytes: 18 }];
 
       const cap = capture();
       try {

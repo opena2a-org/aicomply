@@ -11,7 +11,7 @@ in one command before writing integration code:
 Exit codes make it usable as a CI gate:
     0  CLEAN          - no findings
     1  VIOLATION/DENY - findings present
-    2  usage error
+    2  usage error, or no input (stdin is a terminal or every input is 0 bytes)
 
 Dependency-free by design (argv parsed by hand) to honor the org small-library
 pattern and keep parity with the npm CLI's behaviour.
@@ -19,6 +19,7 @@ pattern and keep parity with the npm CLI's behaviour.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shlex
@@ -112,7 +113,7 @@ PATTERN CLASSES (regex layer)
 EXIT CODES
   0  CLEAN          no findings from the layers that ran
   1  VIOLATION/DENY findings present (usable as a CI gate)
-  2  usage error
+  2  usage error, or no input: stdin is a terminal or every input is 0 bytes
 
 EXAMPLES
   aicomply scan ./support-ticket.txt
@@ -127,7 +128,9 @@ SCAN_HELP = """aicomply scan -- scan files or piped stdin for sensitive content
 
 Runs the deterministic regex layer over each input, plus the optional semantic
 Guard layer when a local nanomind-daemon is reachable. Prints a verdict per
-input and an overall verdict.
+input and an overall verdict. An input of 0 bytes is not classified: it is
+listed as "0 bytes, nothing to classify" (--json: "bytes": 0, "layers": []),
+and the inputs that were scanned decide the exit code.
 
 The regex layer checks SSNs, card and bank account numbers, passport and
 medical record numbers, provider identifiers (NPI), credentials and CUI
@@ -142,7 +145,8 @@ USAGE
 
 OPTIONS
   --json        Machine-readable JSON output (verdict + findings, values masked;
-                each finding carries its line and column in the input)
+                each finding carries its line and column in the input, and each
+                input its size in bytes and the layers that ran)
   --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY)
   --help, -h    This help
   --            Ends the options; each later argument is an input, so a file
@@ -151,7 +155,7 @@ OPTIONS
 EXIT CODES
   0  CLEAN          no findings from the layers that ran
   1  VIOLATION/DENY findings present (usable as a CI gate)
-  2  usage error
+  2  usage error, or no input: stdin is a terminal or every input is 0 bytes
 
 EXAMPLES
   aicomply scan ./support-ticket.txt
@@ -168,11 +172,25 @@ EXAMPLES
 _MASKED_VALUE = "•••"
 
 
-def _read_stdin() -> str:
+def _read_stdin() -> tuple[str, int]:
+    """The text on stdin and the number of bytes that delivered it.
+
+    The bytes are decoded with the encoding and error handler of ``sys.stdin``,
+    keeping line endings except on Windows, where they are translated as in
+    universal-newlines mode. A read or decode error leaves the text empty.
+    """
+    data = b""
     try:
-        return sys.stdin.read()
+        data = sys.stdin.buffer.read()
+        text = io.TextIOWrapper(
+            io.BytesIO(data),
+            encoding=sys.stdin.encoding,
+            errors=sys.stdin.errors,
+            newline=None if sys.platform == "win32" else "\n",
+        ).read()
     except Exception:
-        return ""
+        return "", len(data)
+    return text, len(data)
 
 
 def _stdin_requested(files: list[str]) -> bool:
@@ -210,6 +228,8 @@ def _unread_stdin() -> Literal["content", "stream"] | None:
 class _Source:
     label: str
     content: str
+    # How many bytes the input delivered. An input of 0 bytes is not classified.
+    byte_count: int
 
 
 def _files_glob(directory: str) -> str:
@@ -231,8 +251,8 @@ def _collect_sources(files: list[str]) -> list[_Source]:
 
     for f in real_files:
         try:
-            with open(f, encoding="utf-8") as fh:
-                sources.append(_Source(label=f, content=fh.read()))
+            with open(f, "rb") as fh:
+                data = fh.read()
         except OSError:
             # The path exists, so "check the path" would send the user the wrong way.
             if os.path.isdir(f):
@@ -243,6 +263,10 @@ def _collect_sources(files: list[str]) -> list[_Source]:
             raise _UsageError(
                 f"cannot read '{f}' (check the path). Try 'aicomply --help'."
             ) from None
+        # Decoded as open(f, encoding="utf-8") decodes: strict UTF-8 with
+        # universal newlines.
+        content = io.TextIOWrapper(io.BytesIO(data), encoding="utf-8").read()
+        sources.append(_Source(label=f, content=content, byte_count=len(data)))
 
     if _stdin_requested(files):
         if sys.stdin.isatty():
@@ -251,7 +275,18 @@ def _collect_sources(files: list[str]) -> list[_Source]:
                 "  aicomply scan ./file.txt\n"
                 '  echo "My SSN is 123-45-6789" | aicomply scan'
             )
-        sources.append(_Source(label="(stdin)", content=_read_stdin()))
+        content, byte_count = _read_stdin()
+        sources.append(_Source(label="(stdin)", content=content, byte_count=byte_count))
+
+    # comply() runs no layer on empty content and returns CLEAN, so a run in
+    # which no input carried a byte would print a verdict nothing reached.
+    # Files come first in ``sources``, then stdin.
+    if all(s.byte_count == 0 for s in sources):
+        empty = [
+            f"{s.label} is 0 bytes" if i < len(real_files) else f"{s.label} delivered 0 bytes"
+            for i, s in enumerate(sources)
+        ]
+        raise _UsageError("no input: " + ", ".join(empty))
 
     return sources
 
@@ -309,6 +344,10 @@ def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
 
     out.write("\n")
     for src, res in zip(sources, results):
+        if src.byte_count == 0:
+            # No layer ran on it, so it gets no verdict and adds none to the total.
+            out.write(f"  EMPTY      {src.label}   0 bytes, nothing to classify\n\n")
+            continue
         if _guard_active(res):
             any_guard = True
         total_findings += len(res.violations)
@@ -385,8 +424,11 @@ def _render_json(sources: list[_Source], results: list[ComplyResult]) -> None:
     payload = [
         {
             "source": src.label,
+            # An input of 0 bytes was not classified; its "layers" is [].
+            "bytes": src.byte_count,
             "verdict": res.verdict,
             "guardActive": _guard_active(res),
+            "layers": list(res.layers),
             "findings": [_json_finding(src.content, v) for v in res.violations],
         }
         for src, res in zip(sources, results)
@@ -436,15 +478,18 @@ def _run_inner(argv: list[str]) -> int:
 
     sources = _collect_sources(files)
     results = [comply(src.content) for src in sources]
+    # An input of 0 bytes was not classified, so the inputs that were decide
+    # the verdict and the exit code.
+    scanned = [res for src, res in zip(sources, results) if src.byte_count > 0]
 
     if args.json:
         _render_json(sources, results)
     elif args.quiet:
         worst = (
             "DENY"
-            if any(r.verdict == "DENY" for r in results)
+            if any(r.verdict == "DENY" for r in scanned)
             else "VIOLATION"
-            if any(r.verdict == "VIOLATION" for r in results)
+            if any(r.verdict == "VIOLATION" for r in scanned)
             else "CLEAN"
         )
         sys.stdout.write(f"{worst}\n")
@@ -457,7 +502,7 @@ def _run_inner(argv: list[str]) -> int:
         sys.stdout.flush()
         sys.stderr.write(f"aicomply: {_STDIN_NOT_READ}\n")
 
-    return 1 if any(r.verdict != "CLEAN" for r in results) else 0
+    return 1 if any(r.verdict != "CLEAN" for r in scanned) else 0
 
 
 def main() -> None:

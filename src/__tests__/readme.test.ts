@@ -221,7 +221,7 @@ describe('README', () => {
       return true;
     });
     try {
-      renderHuman([{ label: '(stdin)', content }], [result]);
+      renderHuman([{ label: '(stdin)', content, bytes: Buffer.byteLength(content) }], [result]);
     } finally {
       spy.mockRestore();
     }

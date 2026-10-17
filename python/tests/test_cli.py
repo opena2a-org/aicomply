@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -17,6 +18,11 @@ import aicomply
 from aicomply.classifier.regex.pack import PATTERN_TYPES
 from aicomply.cli import _files_glob, _render_json, _Source, run
 from aicomply.types import ClassifierResult, ComplyResult, Violation
+
+
+def _pipe_stdin(monkeypatch, data: bytes) -> None:
+    """Serve ``data`` as stdin from a pipe, not a terminal."""
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(data), encoding="utf-8"))
 
 
 def test_version(capsys):
@@ -166,7 +172,7 @@ def test_json_prints_null_view_for_a_finding_without_one(capsys):
             "guard": ClassifierResult(classifier="guard", verdict="VIOLATION", violations=[guard]),
         },
     )
-    _render_json([_Source(label="x.txt", content="c")], [result])
+    _render_json([_Source(label="x.txt", content="c", byte_count=1)], [result])
     payload = json.loads(capsys.readouterr().out)
     assert "view" in payload[0]["findings"][0]
     assert payload[0]["findings"][0]["view"] is None
@@ -214,7 +220,7 @@ def test_json_prints_null_location_for_a_finding_without_one(capsys):
             "guard": ClassifierResult(classifier="guard", verdict="VIOLATION", violations=[guard]),
         },
     )
-    _render_json([_Source(label="x.txt", content="line one\nline two\n")], [result])
+    _render_json([_Source(label="x.txt", content="line one\nline two\n", byte_count=18)], [result])
     finding = json.loads(capsys.readouterr().out)[0]["findings"][0]
     assert finding["line"] is None
     assert finding["column"] is None
@@ -225,6 +231,94 @@ def test_scan_quiet(tmp_path, capsys):
     f.write_text("SSN 516-81-3086")
     assert run(["scan", str(f), "--quiet"]) == 1
     assert capsys.readouterr().out.strip() == "VIOLATION"
+
+
+# comply() runs no layer on empty content and returns CLEAN, so a stdin that was
+# never connected, or an empty file, must not pass the gate as CLEAN (mirror of
+# the TS CLI tests).
+_MODES = ([], ["--json"], ["--quiet"])
+
+
+def test_stdin_of_0_bytes_exits_2_with_no_input(monkeypatch, capsys):
+    for mode in _MODES:
+        _pipe_stdin(monkeypatch, b"")
+        assert run(["scan", *mode]) == 2, mode
+        captured = capsys.readouterr()
+        assert captured.out == "", mode
+        assert captured.err == "aicomply: no input: (stdin) delivered 0 bytes\n", mode
+
+
+def test_file_of_0_bytes_exits_2_with_no_input(tmp_path, capsys):
+    f = tmp_path / "empty.txt"
+    f.write_bytes(b"")
+    for mode in _MODES:
+        assert run(["scan", str(f), *mode]) == 2, mode
+        captured = capsys.readouterr()
+        assert captured.out == "", mode
+        assert captured.err == f"aicomply: no input: {f} is 0 bytes\n", mode
+
+
+def test_no_input_names_each_input_of_0_bytes(tmp_path, monkeypatch, capsys):
+    a = tmp_path / "empty-a.txt"
+    b = tmp_path / "empty-b.txt"
+    a.write_bytes(b"")
+    b.write_bytes(b"")
+    _pipe_stdin(monkeypatch, b"")
+    assert run(["scan", str(a), "-", str(b)]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        f"aicomply: no input: {a} is 0 bytes, {b} is 0 bytes, (stdin) delivered 0 bytes\n"
+    )
+
+
+def test_whitespace_only_input_is_scanned_and_json_gives_bytes_and_layers(monkeypatch, capsys):
+    _pipe_stdin(monkeypatch, b"\n")
+    assert run(["scan", "--json"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    [entry] = json.loads(captured.out)
+    assert list(entry) == ["source", "bytes", "verdict", "guardActive", "layers", "findings"]
+    assert entry == {
+        "source": "(stdin)",
+        "bytes": 1,
+        "verdict": "CLEAN",
+        "guardActive": False,
+        "layers": ["normalize", "regex"],
+        "findings": [],
+    }
+
+
+def test_input_of_0_bytes_beside_others_is_reported_and_scanned_inputs_decide(tmp_path, capsys):
+    empty = tmp_path / "empty.txt"
+    clean = tmp_path / "clean.txt"
+    dirty = tmp_path / "dirty.txt"
+    empty.write_bytes(b"")
+    clean.write_bytes(b"nothing here")
+    dirty.write_bytes(b"card 4111111111111111")
+
+    assert run(["scan", str(empty), str(clean)]) == 0
+    lines = capsys.readouterr().out.rstrip().splitlines()
+    assert f"  EMPTY      {empty}   0 bytes, nothing to classify" in lines
+    assert lines[-1] == "Verdict: CLEAN  ·  no findings from the layers that ran."
+
+    assert run(["scan", str(empty), str(clean), "--json"]) == 0
+    empty_entry, clean_entry = json.loads(capsys.readouterr().out)
+    assert (empty_entry["source"], empty_entry["bytes"]) == (str(empty), 0)
+    assert (empty_entry["layers"], empty_entry["findings"]) == ([], [])
+    assert (clean_entry["bytes"], clean_entry["layers"]) == (12, ["normalize", "regex"])
+
+    assert run(["scan", str(empty), str(dirty), "--quiet"]) == 1
+    assert capsys.readouterr().out == "VIOLATION\n"
+
+
+def test_help_gives_the_exit_code_for_no_input(capsys):
+    for argv in (["--help"], ["scan", "--help"]):
+        assert run(argv) == 0
+        assert (
+            "  2  usage error, or no input: stdin is a terminal or every input is 0 bytes\n"
+            in capsys.readouterr().out
+        )
 
 
 def test_missing_file_exit_2(capsys):
