@@ -237,7 +237,11 @@ export function filesGlob(dir: string): string {
   return `${word}/*.txt`;
 }
 
-async function collectSources(files: string[]): Promise<Source[]> {
+/**
+ * Reads each named file, then stdin when it is requested. `pipeUnread` is true
+ * when stdin is a pipe or socket that is not read because files were named.
+ */
+async function collectSources(files: string[], pipeUnread: boolean): Promise<Source[]> {
   const realFiles = files.filter((f) => f !== '-');
   const sources: Source[] = [];
 
@@ -272,12 +276,15 @@ async function collectSources(files: string[]): Promise<Source[]> {
 
   // comply() runs no layer on empty content and returns CLEAN, so a run in
   // which no input carried a byte would print a verdict nothing reached.
-  // Files come first in `sources`, then stdin.
+  // Files come first in `sources`, then stdin. A pipe or socket left unread
+  // can hold the content meant for the scan, so the line that says stdin was
+  // not read follows the error, as it follows a report.
   if (sources.every((s) => s.bytes === 0)) {
     const empty = sources.map((s, i) =>
       i < realFiles.length ? `${s.label} is 0 bytes` : `${s.label} delivered 0 bytes`,
     );
-    throw new UsageError(`no input: ${empty.join(', ')}`);
+    const note = pipeUnread ? `\naicomply: ${STDIN_NOT_READ}` : '';
+    throw new UsageError(`no input: ${empty.join(', ')}${note}`);
   }
 
   return sources;
@@ -518,7 +525,8 @@ async function runInner(argv: string[]): Promise<number> {
   }
 
   // A file with content on stdin is a usage error before any scan; a pipe or
-  // socket gets one stderr line after the report.
+  // socket gets one stderr line after the report, or after the no-input error
+  // when every named file is 0 bytes.
   const unread = stdinRequested(args.files) ? undefined : unreadStdin();
   if (unread === 'content') {
     throw new UsageError(
@@ -527,7 +535,7 @@ async function runInner(argv: string[]): Promise<number> {
     );
   }
 
-  const sources = await collectSources(args.files);
+  const sources = await collectSources(args.files, unread === 'stream');
   const results: ComplyResult[] = [];
   for (const src of sources) {
     results.push(await comply({ content: src.content }));
