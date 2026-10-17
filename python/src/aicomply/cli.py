@@ -22,9 +22,11 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import stat
 import sys
 from bisect import bisect_left
 from dataclasses import dataclass
+from typing import Literal
 
 from . import __version__, comply
 from .classifier.guard_client import DEFAULT_NANOMIND_DAEMON_URL
@@ -173,6 +175,37 @@ def _read_stdin() -> str:
         return ""
 
 
+def _stdin_requested(files: list[str]) -> bool:
+    """stdin is scanned when no file is named or ``-`` is among the files."""
+    return len(files) == 0 or "-" in files
+
+
+_STDIN_NOT_READ = "stdin not read because files were named; add - to scan it too"
+
+
+def _unread_stdin() -> Literal["content", "stream"] | None:
+    """What stdin holds when files are named without ``-``, so it is not scanned.
+
+    Decided from fstat alone, never by reading: reading a pipe to its end waits
+    until its writer closes it, so a writer that holds it open and never writes
+    would hold up the scan.
+
+    ``"content"``  a regular file with bytes (``aicomply scan a.txt < b.txt``)
+    ``"stream"``   a pipe or socket: what it carries is known only by reading it
+    ``None``       anything else: a terminal or /dev/null (character devices),
+                   an empty file, or no descriptor 0
+    """
+    try:
+        st = os.fstat(0)
+    except OSError:
+        return None
+    if stat.S_ISREG(st.st_mode):
+        return "content" if st.st_size > 0 else None
+    if stat.S_ISFIFO(st.st_mode) or stat.S_ISSOCK(st.st_mode):
+        return "stream"
+    return None
+
+
 @dataclass
 class _Source:
     label: str
@@ -193,7 +226,6 @@ def _files_glob(directory: str) -> str:
 
 
 def _collect_sources(files: list[str]) -> list[_Source]:
-    stdin_requested = len(files) == 0 or "-" in files
     real_files = [f for f in files if f != "-"]
     sources: list[_Source] = []
 
@@ -212,7 +244,7 @@ def _collect_sources(files: list[str]) -> list[_Source]:
                 f"cannot read '{f}' (check the path). Try 'aicomply --help'."
             ) from None
 
-    if stdin_requested:
+    if _stdin_requested(files):
         if sys.stdin.isatty():
             raise _UsageError(
                 "no input. Pass a file or pipe content:\n"
@@ -391,7 +423,18 @@ def _run_inner(argv: list[str]) -> int:
         )
         return 2
 
-    sources = _collect_sources(args.files or [])
+    files = args.files or []
+    # A file with content on stdin is a usage error before any scan; a pipe or
+    # socket gets one stderr line after the report.
+    unread =None if _stdin_requested(files) else _unread_stdin()
+    if unread == "content":
+        raise _UsageError(
+            "stdin is a file with content and is not read because files were named;"
+            " add - to scan it too:\n"
+            "  aicomply scan - <files>"
+        )
+
+    sources = _collect_sources(files)
     results = [comply(src.content) for src in sources]
 
     if args.json:
@@ -407,6 +450,12 @@ def _run_inner(argv: list[str]) -> int:
         sys.stdout.write(f"{worst}\n")
     else:
         _render_human(sources, results)
+
+    if unread == "stream":
+        # A piped stdout is block-buffered; flushing it first keeps the line
+        # after the report where both streams go to one log.
+        sys.stdout.flush()
+        sys.stderr.write(f"aicomply: {_STDIN_NOT_READ}\n")
 
     return 1 if any(r.verdict != "CLEAN" for r in results) else 0
 

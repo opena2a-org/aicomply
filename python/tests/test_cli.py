@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import socket
 import subprocess
+import sys
+from pathlib import Path
+from typing import IO
 
+import pytest
+
+import aicomply
 from aicomply.classifier.regex.pack import PATTERN_TYPES
 from aicomply.cli import _files_glob, _render_json, _Source, run
 from aicomply.types import ClassifierResult, ComplyResult, Violation
@@ -322,6 +330,99 @@ def test_help_documents_double_dash(capsys):
             "  --            Ends the options; each later argument is an input, so a file\n"
             "                name can start with - (aicomply scan -- -notes.txt)\n"
         ) in capsys.readouterr().out
+
+
+# With files named and no ``-`` among them, stdin is not scanned. These tests run
+# the CLI in a child process so its stdin is a real pipe, socket or file. The
+# child imports the aicomply this test imports and inherits NODE_ENV and
+# MOCK_NANOMIND_URL from the conftest fixture, so its Guard request goes to the
+# closed port, as the tests' own do.
+_NOT_READ = "aicomply: stdin not read because files were named; add - to scan it too\n"
+_PACKAGE_PARENT = str(Path(aicomply.__file__).resolve().parents[1])
+
+
+def _scan(
+    args: list[str],
+    cwd: Path,
+    stdin: int | IO[bytes] | None = None,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """``aicomply scan *args`` in a child process, given ``stdin`` or ``input_text``."""
+    return subprocess.run(
+        [sys.executable, "-m", "aicomply", "scan", *args],
+        stdin=stdin,
+        input=input_text,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+        env={**os.environ, "PYTHONPATH": _PACKAGE_PARENT},
+        timeout=60,
+        check=False,
+    )
+
+
+def _clean_file(tmp_path: Path) -> str:
+    f = tmp_path / "clean.txt"
+    f.write_text("The weather is nice today.")
+    return str(f)
+
+
+@pytest.mark.parametrize("flags", [[], ["--json"], ["--quiet"]], ids=["human", "json", "quiet"])
+def test_files_named_pipe_is_not_read_and_one_stderr_line_says_so(tmp_path, flags):
+    read_end, write_end = os.pipe()
+    try:
+        os.write(write_end, b"SSN 078-05-1120\n")
+        # The write end stays open while the CLI runs, so a CLI that read
+        # stdin would wait for an end of file that does not come.
+        result = _scan([_clean_file(tmp_path), *flags], tmp_path, stdin=read_end)
+    finally:
+        os.close(read_end)
+        os.close(write_end)
+    assert result.returncode == 0
+    assert result.stderr == _NOT_READ
+
+
+def test_files_named_socket_keeps_the_exit_code_of_the_files(tmp_path):
+    dirty = tmp_path / "dirty.txt"
+    dirty.write_text("SSN 078-05-1120\n")
+    ours, theirs = socket.socketpair()
+    with ours, theirs:
+        ours.sendall(b"The weather is nice today.\n")
+        result = _scan([str(dirty), "--quiet"], tmp_path, stdin=theirs.fileno())
+    assert result.returncode == 1
+    assert result.stdout == "VIOLATION\n"
+    assert result.stderr == _NOT_READ
+
+
+@pytest.mark.parametrize("flags", [[], ["--json"], ["--quiet"]], ids=["human", "json", "quiet"])
+def test_files_named_file_with_content_on_stdin_is_a_usage_error(tmp_path, flags):
+    redirected = tmp_path / "stdin.txt"
+    redirected.write_text("SSN 078-05-1120\n")
+    with redirected.open("rb") as stdin:
+        result = _scan([_clean_file(tmp_path), *flags], tmp_path, stdin=stdin)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "\n  aicomply scan - <files>\n" in result.stderr
+
+
+@pytest.mark.parametrize("holds", ["/dev/null", "an empty file"])
+def test_files_named_prints_nothing_about_stdin_that_holds_nothing(tmp_path, holds):
+    empty = tmp_path / "empty.txt"
+    empty.write_text("")
+    with empty.open("rb") as stdin:
+        source = subprocess.DEVNULL if holds == "/dev/null" else stdin
+        result = _scan([_clean_file(tmp_path)], tmp_path, stdin=source)
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
+def test_dash_among_files_reads_stdin_as_before(tmp_path):
+    result = _scan(
+        ["-", _clean_file(tmp_path), "--quiet"], tmp_path, input_text="SSN 078-05-1120\n"
+    )
+    assert result.returncode == 1
+    assert result.stdout == "VIOLATION\n"
+    assert result.stderr == ""
 
 
 def test_scan_prints_no_characters_of_a_detected_value(tmp_path, capsys):
