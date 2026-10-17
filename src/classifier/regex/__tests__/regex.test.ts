@@ -1,4 +1,4 @@
-import { scanPatterns, luhnCheck } from '../patterns';
+import { dropOverlappingRepeats, scanPatterns, luhnCheck, type PatternMatch } from '../patterns';
 import { classifyWithRegex } from '..';
 
 describe('luhnCheck', () => {
@@ -487,5 +487,82 @@ describe('passport patterns', () => {
     const matches = scanPatterns('iPhone A1234567, Part B12345678');
     const passports = matches.filter(m => m.type === 'PASSPORT');
     expect(passports).toHaveLength(0);
+  });
+});
+
+describe('matches of one value at overlapping ranges', () => {
+  function match(value: string, start: number, end: number): PatternMatch {
+    return { type: 'SSN', value, start, end, confidence: 0.95 };
+  }
+
+  /** The matches kept when each match is compared with every match kept before it. */
+  function keptComparingEachPair(matches: PatternMatch[]): PatternMatch[] {
+    const kept: PatternMatch[] = [];
+    for (const m of matches) {
+      if (!kept.some((d) => m.start < d.end && m.end > d.start && m.value === d.value)) kept.push(m);
+    }
+    return kept;
+  }
+
+  /** A seeded generator of numbers in [0, 1), so a failing list can be reproduced. */
+  function seeded(seed: number): () => number {
+    let state = seed >>> 0;
+    return () => {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let t = state;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  it('keeps the first of two matches of one value whose ranges overlap', () => {
+    const first = match('078-05-1120', 4, 15);
+    const second = match('078-05-1120', 0, 15);
+    expect(dropOverlappingRepeats([first, second])).toEqual([first]);
+  });
+
+  it('keeps matches of one value at separate ranges, and of two values at one range', () => {
+    const matches = [match('a', 5, 10), match('a', 0, 5), match('b', 0, 5)];
+    expect(dropOverlappingRepeats(matches)).toEqual(matches);
+  });
+
+  it('keeps a match whose range overlaps only that of a match it drops', () => {
+    const matches = [match('a', 0, 4), match('a', 3, 8), match('a', 6, 10)];
+    expect(dropOverlappingRepeats(matches)).toEqual([matches[0], matches[2]]);
+  });
+
+  it('keeps what comparing each match with every kept match keeps, in the same order, on 2,000 random lists', () => {
+    const random = seeded(201);
+    let dropped = 0;
+    for (let round = 0; round < 2000; round += 1) {
+      const span = 1 + Math.floor(random() * 40);
+      const longest = Math.floor(random() * 10);
+      const values = ['a', 'b', 'c'].slice(0, 1 + Math.floor(random() * 3));
+      const matches: PatternMatch[] = [];
+      for (let n = Math.floor(random() * 30); n > 0; n -= 1) {
+        const start = Math.floor(random() * span);
+        const end = start + Math.floor(random() * (longest + 1));
+        matches.push(match(values[Math.floor(random() * values.length)], start, end));
+      }
+      const indices = (kept: PatternMatch[]) => kept.map((m) => matches.indexOf(m));
+      const expected = keptComparingEachPair(matches);
+      expect(indices(dropOverlappingRepeats(matches))).toEqual(indices(expected));
+      dropped += matches.length - expected.length;
+    }
+    // The lists hold overlapping matches of one value, not only separate ones.
+    expect(dropped).toBeGreaterThan(0);
+  });
+
+  it('scans 200,000 findings of one SSN and one card number in under 3 seconds of CPU time', () => {
+    // Each match was compared with every match kept before it, so the time
+    // grew with the square of the number of findings: this input took 22
+    // seconds of CPU time.
+    const content = 'Customer SSN 078-05-1120 paid with 4111 1111 1111 1111\n'.repeat(100_000);
+    const before = process.cpuUsage();
+    const matches = scanPatterns(content);
+    const used = process.cpuUsage(before);
+    expect(matches).toHaveLength(200_000);
+    expect((used.user + used.system) / 1000).toBeLessThan(3000);
   });
 });

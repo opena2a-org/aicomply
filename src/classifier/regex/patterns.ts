@@ -84,15 +84,70 @@ export function scanPatterns(content: string): PatternMatch[] {
 
   // Deduplicate overlapping matches: higher confidence wins
   matches.sort((a, b) => b.confidence - a.confidence);
-  const deduped: PatternMatch[] = [];
-  for (const m of matches) {
-    const overlaps = deduped.some(
-      (d) => m.start < d.end && m.end > d.start && m.value === d.value
-    );
-    if (!overlaps) {
-      deduped.push(m);
-    }
+  return dropOverlappingRepeats(matches);
+}
+
+/**
+ * `matches` in their order, without each match whose range overlaps the range
+ * of an earlier kept match with the same value. scanPatterns() passes its
+ * matches highest confidence first, pack order breaking a tie, so of two
+ * matches of one value at overlapping ranges the first in that order is kept.
+ *
+ * The kept matches of one value do not overlap one another, so ordered by
+ * start, then end, each ends at or before the start of the next. Of those that
+ * start before a match ends, the last in that order ends last, and the match
+ * overlaps one of them only if it overlaps that one. Each match is compared
+ * with that one kept match, found by binary search and a Fenwick tree, not
+ * with every kept match: that took time that grew with the square of the
+ * number of findings.
+ */
+export function dropOverlappingRepeats(matches: PatternMatch[]): PatternMatch[] {
+  // The indices of the matches of each value, in match order.
+  const byValue = new Map<string, number[]>();
+  for (let i = 0; i < matches.length; i += 1) {
+    const indices = byValue.get(matches[i].value);
+    if (indices === undefined) byValue.set(matches[i].value, [i]);
+    else indices.push(i);
   }
 
-  return deduped;
+  const kept = new Uint8Array(matches.length);
+  // The place of a match among the matches of its value ordered by start, then end.
+  const place = new Int32Array(matches.length);
+  for (const indices of byValue.values()) {
+    if (indices.length === 1) {
+      kept[indices[0]] = 1;
+      continue;
+    }
+    const ordered = indices
+      .slice()
+      .sort((a, b) => matches[a].start - matches[b].start || matches[a].end - matches[b].end);
+    ordered.forEach((index, p) => {
+      place[index] = p;
+    });
+    // Fenwick tree over places: lastKept[k] is the last place of a kept match
+    // among places k - (k & -k) to k - 1, or -1 when none of them is kept.
+    const lastKept = new Int32Array(ordered.length + 1).fill(-1);
+    for (const index of indices) {
+      const { start, end } = matches[index];
+      // The matches at places 0 to startsBefore - 1 start before this one ends.
+      let startsBefore = 0;
+      let hi = ordered.length;
+      while (startsBefore < hi) {
+        const mid = (startsBefore + hi) >>> 1;
+        if (matches[ordered[mid]].start < end) startsBefore = mid + 1;
+        else hi = mid;
+      }
+      let last = -1;
+      for (let k = startsBefore; k > 0; k -= k & -k) {
+        if (lastKept[k] > last) last = lastKept[k];
+      }
+      if (last !== -1 && matches[ordered[last]].end > start) continue;
+      kept[index] = 1;
+      const p = place[index];
+      for (let k = p + 1; k <= ordered.length; k += k & -k) {
+        if (lastKept[k] < p) lastKept[k] = p;
+      }
+    }
+  }
+  return matches.filter((_, i) => kept[i] === 1);
 }
