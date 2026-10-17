@@ -409,6 +409,26 @@ describe('README', () => {
     expect(VERDICTS).not.toMatch(/safe\s+to\s+forward/i);
   });
 
+  it('names the PII the pattern pack has no class for, first in what it does not detect', () => {
+    // The pack has no pattern for an email address or a phone number, so
+    // content holding only those is CLEAN; the docs say so before anything else.
+    const heading = lineOf(/^## What this package does NOT detect$/, 1, DETECTION_LINES);
+    expect(heading).toBeGreaterThan(0);
+    const next = lineOf(/^#/, heading + 1, DETECTION_LINES);
+    const section = DETECTION_LINES.slice(heading, next === -1 ? undefined : next - 1);
+    const firstBullet = section.find((l) => l.startsWith('- ')) ?? '';
+    expect(firstBullet).toMatch(/e-?mail address/i);
+    expect(firstBullet).toMatch(/phone number/i);
+    expect(firstBullet).toContain('`CLEAN`');
+
+    const linkLine = lineOf(/\]\(docs\/detection\.md#what-this-package-does-not-detect\)/);
+    expect(linkLine).toBeGreaterThan(0);
+    const sentence = LINES[linkLine - 1];
+    expect(sentence).toMatch(/e-?mail address/i);
+    expect(sentence).toMatch(/phone number/i);
+    expect(sentence.search(/e-?mail address/i)).toBeLessThan(sentence.indexOf('a request phrased'));
+  });
+
   it('names the one build the package ships', () => {
     // package.json has no ESM entry beside `main`; ESM reaches the CommonJS
     // build through Node's interop. Adding one means updating this README claim.

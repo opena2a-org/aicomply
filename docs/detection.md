@@ -44,6 +44,7 @@ Every pattern match carries a `view` field (`normalized` / `compact` / `decoded-
 
 For full threat-model scope see [SECURITY.md](../SECURITY.md). The honest list:
 
+- **Email addresses, phone numbers, postal addresses, dates of birth, personal names**, and any other personal data outside the classes in the table above. The pattern pack has no pattern for them, so content holding only those is `CLEAN`.
 - **Semantic / contextual violations.** A request to "summarize all our user emails" is not a regex hit. The semantic Guard layer targets these, but it is a preview: the NanoMind model has shipped and `@nanomind/daemon` serves it, yet it over-flags benign text (see [Guard status](semantic-guard.md#guard-status-preview-not-production-ready)). The Guard is off unless a daemon is running; when none is reachable over HTTP, `comply()` falls back silently to regex-only.
 - **Cyrillic / Greek look-alikes that are not NFKC-equivalent** (e.g. Cyrillic small letter a at U+0430 vs Latin `a` at U+0061). Those are separate semantic letters; NFKC does not fold them.
 - **Soft hyphen (U+00AD) and combining marks.** Not stripped from the normalized stream. An attacker can still hide PII by injecting these characters between digits.

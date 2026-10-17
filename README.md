@@ -44,7 +44,7 @@ cat transcript.log | npx @opena2a/aicomply scan --json   # machine-readable
 git diff --cached | npx @opena2a/aicomply scan -q || echo "sensitive content staged"
 ```
 
-The regex layer does not detect a request phrased to leak data ("summarize all our user emails"), look-alike letters that NFKC does not fold, soft hyphens or combining marks between digits, or encodings other than Base64 and URL: [what it does not detect](docs/detection.md#what-this-package-does-not-detect).
+The regex layer does not detect email addresses, phone numbers, postal addresses, dates of birth, names, a request phrased to leak data ("summarize all our user emails"), look-alike letters that NFKC does not fold, soft hyphens or combining marks between digits, or encodings other than Base64 and URL: [what it does not detect](docs/detection.md#what-this-package-does-not-detect).
 
 The CLI is a try-path. The library API below is the production surface.
 
