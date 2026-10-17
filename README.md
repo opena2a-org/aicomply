@@ -24,7 +24,7 @@ echo "My SSN is 123-45-6789, please update the record." | npx @opena2a/aicomply 
 
 ```
   VIOLATION  (stdin)   1 finding
-    SSN          •••                confidence 0.95  layer regex
+    SSN          •••                confidence 0.95  layer regex  line 1 col 11
 
   Semantic Guard layer: inactive (preview; no nanomind-daemon on http://127.0.0.1:47200).
   It targets prompt-injection / exfiltration the regex layer cannot see, but the

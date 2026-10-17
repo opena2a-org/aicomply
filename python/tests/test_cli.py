@@ -128,6 +128,54 @@ def test_json_prints_null_view_for_a_finding_without_one(capsys):
     assert payload[0]["findings"][0]["view"] is None
 
 
+# The value is masked, so a finding's location is the only thing a user can
+# search for in a long log or a staged diff (mirror of the TS CLI tests).
+_LINE3 = "ticket: SSN 078-05-1120 on file"
+_LOCATED = f"line one\nline two\n{_LINE3}\n"
+_COLUMN = _LINE3.index("078-05-1120") + 1
+
+
+def test_finding_line_ends_with_line_and_column(tmp_path, capsys):
+    f = tmp_path / "located.txt"
+    f.write_text(_LOCATED)
+    assert run(["scan", str(f)]) == 1
+    lines = capsys.readouterr().out.split("\n")
+    finding = next(line for line in lines if line.startswith("    SSN "))
+    assert finding.endswith(f"layer regex  line 3 col {_COLUMN}")
+
+
+def test_json_finding_carries_line_and_column(tmp_path, capsys):
+    f = tmp_path / "located.txt"
+    f.write_text(_LOCATED)
+    assert run(["scan", str(f), "--json"]) == 1
+    finding = json.loads(capsys.readouterr().out)[0]["findings"][0]
+    assert finding["type"] == "SSN"
+    assert finding["line"] == 3
+    assert finding["column"] == _COLUMN
+    assert list(finding) == [
+        "type", "maskedValue", "confidence", "classifier", "view", "line", "column",
+    ]
+
+
+def test_json_prints_null_location_for_a_finding_without_one(capsys):
+    guard = Violation(
+        type="tool_misuse", value="***GUARD***", start=0, end=1,
+        confidence=1.0, classifier="guard",
+    )
+    result = ComplyResult(
+        verdict="VIOLATION",
+        violations=[guard],
+        classifier_results={
+            "regex": ClassifierResult(classifier="regex", verdict="CLEAN"),
+            "guard": ClassifierResult(classifier="guard", verdict="VIOLATION", violations=[guard]),
+        },
+    )
+    _render_json([_Source(label="x.txt", content="line one\nline two\n")], [result])
+    finding = json.loads(capsys.readouterr().out)[0]["findings"][0]
+    assert finding["line"] is None
+    assert finding["column"] is None
+
+
 def test_scan_quiet(tmp_path, capsys):
     f = tmp_path / "pii.txt"
     f.write_text("SSN 516-81-3086")
