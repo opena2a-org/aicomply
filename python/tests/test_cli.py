@@ -16,7 +16,7 @@ import pytest
 
 import aicomply
 from aicomply.classifier.regex.pack import PATTERN_TYPES
-from aicomply.cli import _files_glob, _render_json, _Source, run
+from aicomply.cli import _files_glob, _locate, _render_json, _Source, run
 from aicomply.types import ClassifierResult, ComplyResult, Violation
 
 
@@ -224,6 +224,36 @@ def test_json_prints_null_location_for_a_finding_without_one(capsys):
     finding = json.loads(capsys.readouterr().out)[0]["findings"][0]
     assert finding["line"] is None
     assert finding["column"] is None
+
+
+# The column counts code points, as the TS CLI does: a character outside the
+# Basic Multilingual Plane is one column (mirror of the TS CLI tests).
+_EMOJI = "\U0001F600"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (f"{_EMOJI}{_EMOJI} SSN 078-05-1120", (1, 8)),
+        (f"{_EMOJI}{_EMOJI}\nSSN 078-05-1120", (2, 5)),
+        # A lone high surrogate, then an emoji.
+        (f"\ud83d{_EMOJI} SSN 078-05-1120", (1, 8)),
+    ],
+)
+def test_locate_counts_the_column_in_code_points(text, expected):
+    assert _locate(text, text.index("078-05-1120")) == expected
+
+
+def test_column_counts_a_character_outside_the_bmp_once(tmp_path, capsys):
+    f = tmp_path / "located-emoji.txt"
+    f.write_text(f"{_EMOJI}{_EMOJI} SSN 078-05-1120\n", encoding="utf-8")
+    assert run(["scan", str(f), "--json"]) == 1
+    finding = json.loads(capsys.readouterr().out)[0]["findings"][0]
+    assert (finding["type"], finding["line"], finding["column"]) == ("SSN", 1, 8)
+    assert run(["scan", str(f)]) == 1
+    lines = capsys.readouterr().out.split("\n")
+    finding_line = next(line for line in lines if line.startswith("    SSN "))
+    assert finding_line.endswith("layer regex  line 1 col 8")
 
 
 def test_scan_quiet(tmp_path, capsys):

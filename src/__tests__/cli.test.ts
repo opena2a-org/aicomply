@@ -708,6 +708,42 @@ describe('aicomply CLI', () => {
       expect(locate(crlf, crlf.indexOf('\r'))).toEqual({ line: 1, column: 'line one'.length + 1 });
     });
 
+    // The column counts code points, as the Python CLI does. A character
+    // outside the Basic Multilingual Plane is two UTF-16 code units of a JS
+    // string and one code point.
+    const emoji = '\u{1F600}';
+
+    it('locate: a character outside the BMP before the match is one column', () => {
+      const text = `${emoji}${emoji} SSN 078-05-1120`;
+      expect(locate(text, text.indexOf('078-05-1120'))).toEqual({ line: 1, column: 8 });
+    });
+
+    it('locate: a character outside the BMP on an earlier line leaves the column alone', () => {
+      const text = `${emoji}${emoji}\nSSN 078-05-1120`;
+      expect(locate(text, text.indexOf('078-05-1120'))).toEqual({ line: 2, column: 5 });
+    });
+
+    it('locate: a lone surrogate is one code point', () => {
+      // A lone high surrogate, then one that pairs with the low surrogate after it.
+      const text = `\uD83D${emoji} SSN 078-05-1120`;
+      expect(locate(text, text.indexOf('078-05-1120'))).toEqual({ line: 1, column: 8 });
+    });
+
+    it('prints the column in code points when a character outside the BMP precedes the match', async () => {
+      const f = fixture('located-emoji.txt', `${emoji}${emoji} SSN 078-05-1120\n`);
+      const capJson = capture();
+      await run(['scan', f, '--json']);
+      capJson.restore();
+      const finding = JSON.parse(capJson.out.join(''))[0].findings[0];
+      expect(finding).toMatchObject({ type: 'SSN', line: 1, column: 8 });
+
+      const cap = capture();
+      await run(['scan', f]);
+      cap.restore();
+      const findingLine = cap.out.join('').split('\n').find((l) => l.startsWith('    SSN '));
+      expect(findingLine?.endsWith('layer regex  line 1 col 8')).toBe(true);
+    });
+
     it('locate: no original position gives no location', () => {
       expect(locate(content, undefined)).toBeUndefined();
     });
