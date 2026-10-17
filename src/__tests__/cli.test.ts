@@ -4,8 +4,8 @@
  * shape. Detection accuracy itself is covered by the regex/dual-layer suites.
  */
 
-import { execFileSync } from 'child_process';
-import fs, { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { execFileSync, spawn, spawnSync } from 'child_process';
+import fs, { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { createServer, type Server } from 'net';
 import { devNull, tmpdir } from 'os';
 import { join } from 'path';
@@ -806,5 +806,137 @@ describe('aicomply CLI', () => {
       expect(finding).toHaveProperty('line', null);
       expect(finding).toHaveProperty('column', null);
     });
+  });
+
+  // The bin wrapper exits the process, so it runs only when cli.ts is the main
+  // module. These tests start the source in a child process, with a preloaded
+  // hook that transpiles each .ts file as it is required: the release workflow
+  // runs `npm test` before `npm run build`, and a local dist/ can be stale.
+  describe('output through a pipe', () => {
+    const CLI = join(__dirname, '..', 'cli.ts');
+    const HOOK = `const { readFileSync } = require('fs');
+const ts = require(${JSON.stringify(require.resolve('typescript'))});
+require.extensions['.ts'] = (module, filename) => {
+  const { outputText } = ts.transpileModule(readFileSync(filename, 'utf8'), {
+    fileName: filename,
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+  });
+  module._compile(outputText, filename);
+};
+`;
+    // Warnings from the Node.js runtime would land on the stderr these tests read.
+    const ENV = { ...process.env, NODE_NO_WARNINGS: '1' };
+    // 3,000 findings take both output formats far past a 64 KiB pipe buffer.
+    const content = Array.from(
+      { length: 3000 },
+      (_, i) => `ticket ${i + 1}: SSN 078-05-1120 on file\n`,
+    ).join('');
+    let hook: string;
+    let log: string;
+
+    beforeAll(() => {
+      hook = fixture('transpile-hook.js', HOOK);
+      log = fixture('many.log', content);
+    });
+
+    function start(args: string[]) {
+      return spawn(process.execPath, ['-r', hook, CLI, ...args], {
+        env: ENV,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    }
+
+    /** The child's exit code and stderr, once it has exited and its pipes have closed. */
+    function finished(child: ReturnType<typeof start>): Promise<{ code: number | null; stderr: string }> {
+      let stderr = '';
+      child.stderr.setEncoding('utf8').on('data', (c: string) => (stderr += c));
+      return new Promise((resolve, reject) => {
+        child.on('error', reject);
+        child.on('close', (code) => resolve({ code, stderr }));
+      });
+    }
+
+    /**
+     * What the CLI writes when its stdout is a regular file. Without `input`,
+     * stdin is /dev/null, as start() gives it: a pipe on stdin beside a named
+     * file adds the CLI's "stdin not read" line to stderr.
+     */
+    function outputToFile(args: string[], input?: string): Buffer {
+      const path = join(dir, 'stdout.txt');
+      const fd = openSync(path, 'w');
+      try {
+        const child = spawnSync(process.execPath, ['-r', hook, CLI, ...args], {
+          env: ENV,
+          input,
+          stdio: [input === undefined ? 'ignore' : 'pipe', fd, 'pipe'],
+        });
+        expect({ status: child.status, stderr: child.stderr.toString() }).toEqual({ status: 1, stderr: '' });
+      } finally {
+        closeSync(fd);
+      }
+      return readFileSync(path);
+    }
+
+    /**
+     * Runs the CLI with stdout as a pipe that is left unread until the child
+     * exits or `holdMs` passes, whichever comes first. A CLI that exits with
+     * output still queued loses what the pipe did not hold, however small each
+     * of its writes is.
+     */
+    async function cliIntoHeldPipe(
+      args: string[],
+      holdMs: number,
+    ): Promise<{ code: number | null; stderr: string; stdout: Buffer }> {
+      const child = start(args);
+      const done = finished(child);
+      const chunks: Buffer[] = [];
+      let reading = false;
+      const read = () => {
+        if (reading) return;
+        reading = true;
+        clearTimeout(timer);
+        child.stdout.on('data', (c: Buffer) => chunks.push(c));
+      };
+      const timer = setTimeout(read, holdMs);
+      child.on('exit', read);
+      return { ...(await done), stdout: Buffer.concat(chunks) };
+    }
+
+    it('--json from stdin to a pipe is byte for byte the output written to a file', () => {
+      // `cat transcript.log | npx @opena2a/aicomply scan --json`, as the README shows it.
+      const expected = outputToFile(['scan', '--json'], content);
+      const piped = spawnSync(process.execPath, ['-r', hook, CLI, 'scan', '--json'], {
+        env: ENV,
+        input: content,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      expect({ status: piped.status, stderr: piped.stderr.toString() }).toEqual({ status: 1, stderr: '' });
+      expect(piped.stdout.length).toBe(expected.length);
+      expect(piped.stdout.equals(expected)).toBe(true);
+      expect(JSON.parse(piped.stdout.toString('utf8'))[0].findings).toHaveLength(3000);
+    }, 60_000);
+
+    it('human-readable output to a pipe keeps its last lines when the reader lags behind', async () => {
+      const expected = outputToFile(['scan', log]);
+      const piped = await cliIntoHeldPipe(['scan', log], 2000);
+      expect({ code: piped.code, stderr: piped.stderr }).toEqual({ code: 1, stderr: '' });
+      expect(piped.stdout.length).toBe(expected.length);
+      expect(piped.stdout.equals(expected)).toBe(true);
+      expect(piped.stdout.toString('utf8').trimEnd().split('\n').pop()).toMatch(
+        /^Verdict: VIOLATION {2}· {2}3000 findings across 1 input\. /,
+      );
+    }, 60_000);
+
+    it('exits with the verdict code and no error output when the reader closes the pipe early', async () => {
+      // Like `aicomply scan many.log --json | head -c 1`.
+      const child = start(['scan', log, '--json']);
+      const done = finished(child);
+      child.stdout.once('data', () => child.stdout.destroy());
+      expect(await done).toEqual({ code: 1, stderr: '' });
+    }, 60_000);
   });
 });
