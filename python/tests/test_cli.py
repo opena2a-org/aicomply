@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 
+from aicomply.classifier.regex.pack import PATTERN_TYPES
 from aicomply.cli import _render_json, _Source, run
 from aicomply.types import ClassifierResult, ComplyResult, Violation
 
@@ -75,6 +77,39 @@ def test_soft_hyphen_ssn_is_not_called_safe(tmp_path, capsys):
     verdict_line = capsys.readouterr().out.rstrip().splitlines()[-1]
     assert verdict_line.startswith("Verdict: ")
     assert "safe" not in verdict_line.lower()
+
+
+# The pattern pack has no class for an email address, a phone number, a postal
+# address, a date or a name, so content holding only those is CLEAN. The
+# per-input line names what was checked, not "no PII".
+def test_clean_input_names_the_pattern_classes_checked(tmp_path, capsys):
+    email = "@".join(["jane.doe", "example.com"])
+    phone = "(303) 555-0142"
+    f = tmp_path / "contact.txt"
+    f.write_text(f"Reach me at {email} or {phone}\n")
+    assert run(["scan", str(f)]) == 0
+    out = capsys.readouterr().out
+    line = next((ln for ln in out.splitlines() if str(f) in ln), "")
+    assert "CLEAN" in line
+    assert "PII" not in line
+    assert f" {len(PATTERN_TYPES)} pattern classes " in line
+    assert "safe" not in line.lower()
+
+
+def test_help_names_the_pattern_classes_and_links_what_is_not_detected(capsys):
+    for argv in (["--help"], ["scan", "--help"]):
+        assert run(argv) == 0
+        out = capsys.readouterr().out
+        assert "docs/detection.md" in out
+        assert "Detects PII," not in out
+        assert "(PII, credentials, regulated data)" not in out
+    # The per-input CLEAN line says `aicomply --help` lists the classes.
+    assert run(["--help"]) == 0
+    out = capsys.readouterr().out
+    for t in PATTERN_TYPES:
+        assert re.search(rf"^  {t} +\S", out, re.MULTILINE), t
+    assert re.search(r"e-?mail addresses", out, re.IGNORECASE)
+    assert "phone numbers" in out
 
 
 def test_help_describes_exit_code_0_as_what_was_checked(capsys):

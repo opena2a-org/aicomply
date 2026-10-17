@@ -22,6 +22,7 @@
 import { readFileSync } from 'fs';
 import { comply } from './index';
 import { DEFAULT_NANOMIND_DAEMON_URL } from './classifier/guard-client/nanomind-adapter';
+import { PATTERN_TYPES } from './classifier/regex/pack';
 import type { ComplyResult, Violation } from './types';
 
 // Keep in sync with package.json version on every release bump.
@@ -68,9 +69,12 @@ function parseArgs(argv: string[]): ParsedArgs {
 
 const HELP = `aicomply -- inline content classifier for AI agent I/O
 
-Detects PII, credentials, and regulated data before your agent ships content to
-a hosted LLM. Runs a deterministic regex layer always, plus an optional semantic
-Guard layer when a local nanomind-daemon is reachable.
+Detects SSNs, card and bank account numbers, passport and medical record
+numbers, provider identifiers (NPI), credentials and CUI markings before your
+agent ships content to a hosted LLM. Runs a deterministic regex layer always,
+plus an optional semantic Guard layer when a local nanomind-daemon is reachable.
+Email addresses, phone numbers, postal addresses, dates of birth and names are
+not detected (see PATTERN CLASSES).
 
 USAGE
   aicomply scan [file...]      Scan files for sensitive content
@@ -82,6 +86,19 @@ OPTIONS
   --quiet, -q   Print only the verdict line
   --version,-V  Print version
   --help, -h    This help
+
+PATTERN CLASSES (regex layer)
+  SSN         US Social Security numbers
+  PAN         payment card numbers
+  IBAN        bank account numbers
+  PASSPORT    passport numbers
+  MRN         medical record numbers
+  NPI         US National Provider Identifiers
+  CREDENTIAL  API keys and access tokens
+  CUI         Controlled Unclassified Information markings
+  Content holding only other data, such as email addresses, phone numbers,
+  postal addresses, dates of birth or names, is CLEAN. What is not detected:
+  https://github.com/opena2a-org/aicomply/blob/main/docs/detection.md
 
 EXIT CODES
   0  CLEAN          no findings from the layers that ran
@@ -98,9 +115,15 @@ The library API is the production surface: https://github.com/opena2a-org/aicomp
 
 const SCAN_HELP = `aicomply scan -- scan files or piped stdin for sensitive content
 
-Runs the deterministic regex layer (PII, credentials, regulated data) over each
-input, plus the optional semantic Guard layer when a local nanomind-daemon is
-reachable. Prints a verdict per input and an overall verdict.
+Runs the deterministic regex layer over each input, plus the optional semantic
+Guard layer when a local nanomind-daemon is reachable. Prints a verdict per
+input and an overall verdict.
+
+The regex layer checks SSNs, card and bank account numbers, passport and
+medical record numbers, provider identifiers (NPI), credentials and CUI
+markings (aicomply --help lists the classes). It does not detect email
+addresses, phone numbers, postal addresses, dates of birth or names:
+  https://github.com/opena2a-org/aicomply/blob/main/docs/detection.md
 
 USAGE
   aicomply scan [file...]      Scan one or more files
@@ -266,7 +289,7 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
           : 'VIOLATION ';
     out.write(`  ${tag} ${src.label}`);
     if (res.verdict === 'CLEAN') {
-      out.write('   no PII, credentials, or regulated data detected\n\n');
+      out.write(`   no finding in the ${PATTERN_TYPES.length} pattern classes (aicomply --help lists them)\n\n`);
       continue;
     }
     out.write(`   ${res.violations.length} finding${res.violations.length === 1 ? '' : 's'}\n`);

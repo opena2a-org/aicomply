@@ -8,6 +8,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { locate, run } from '../cli';
+import { PATTERN_TYPES } from '../classifier/regex/pack';
 
 function capture(): { out: string[]; err: string[]; restore: () => void } {
   const out: string[] = [];
@@ -188,6 +189,46 @@ describe('aicomply CLI', () => {
     const verdictLine = cap.out.join('').trimEnd().split('\n').pop() ?? '';
     expect(verdictLine.startsWith('Verdict: ')).toBe(true);
     expect(verdictLine).not.toMatch(/safe/i);
+  });
+
+  // The pattern pack has no class for an email address, a phone number, a
+  // postal address, a date or a name, so content holding only those is CLEAN.
+  // The per-input line names what was checked, not "no PII".
+  it('words a CLEAN input as the pattern classes checked, not as no PII', async () => {
+    const email = ['jane.doe', 'example.com'].join('@');
+    const phone = '(303) 555-0142';
+    const f = fixture('contact.txt', `Reach me at ${email} or ${phone}\n`);
+    const cap = capture();
+    const code = await run(['scan', f]);
+    cap.restore();
+    expect(code).toBe(0);
+    const line = cap.out.join('').split('\n').find((l) => l.includes(f)) ?? '';
+    expect(line).toContain('CLEAN');
+    expect(line).not.toContain('PII');
+    expect(line).toContain(` ${PATTERN_TYPES.length} pattern classes `);
+    expect(line).not.toMatch(/\bsafe\b/i);
+  });
+
+  it('--help and scan --help name the pattern classes and link what is not detected', async () => {
+    for (const argv of [['--help'], ['scan', '--help']]) {
+      const cap = capture();
+      await run(argv);
+      cap.restore();
+      const out = cap.out.join('');
+      expect(out).toContain('docs/detection.md');
+      expect(out).not.toContain('Detects PII,');
+      expect(out).not.toContain('(PII, credentials, regulated data)');
+    }
+    // The per-input CLEAN line says `aicomply --help` lists the classes.
+    const cap = capture();
+    await run(['--help']);
+    cap.restore();
+    const out = cap.out.join('');
+    for (const type of PATTERN_TYPES) {
+      expect({ type, listed: new RegExp(`^  ${type} +\\S`, 'm').test(out) }).toEqual({ type, listed: true });
+    }
+    expect(out).toMatch(/e-?mail addresses/i);
+    expect(out).toMatch(/phone numbers/i);
   });
 
   it('--help and scan --help describe exit code 0 as what was checked', async () => {
