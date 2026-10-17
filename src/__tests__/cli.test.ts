@@ -5,9 +5,11 @@
  */
 
 import { execFileSync } from 'child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
+import fs, { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { createServer, type Server } from 'net';
+import { devNull, tmpdir } from 'os';
 import { join } from 'path';
+import { PassThrough } from 'stream';
 import { filesGlob, locate, run } from '../cli';
 import { PATTERN_TYPES } from '../classifier/regex/pack';
 
@@ -25,9 +27,22 @@ function capture(): { out: string[]; err: string[]; restore: () => void } {
   return { out, err, restore: () => { outSpy.mockRestore(); errSpy.mockRestore(); } };
 }
 
+const realFstatSync = fs.fstatSync;
+
+/** fstat of descriptor 0 returns the stats of `path` until the mocks are restored. */
+function stdinIs(path: string): void {
+  jest
+    .spyOn(fs, 'fstatSync')
+    .mockImplementation(((fd: number, options?: fs.StatOptions) =>
+      fd === 0 ? fs.statSync(path) : realFstatSync(fd, options)) as typeof fs.fstatSync);
+}
+
 let dir: string;
 beforeAll(() => { dir = mkdtempSync(join(tmpdir(), 'aicomply-cli-')); });
 afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
+// A scan of files named without `-` reads fstat of descriptor 0, so each test
+// starts with /dev/null there rather than the stdin the test runner was given.
+beforeEach(() => stdinIs(devNull));
 afterEach(() => jest.restoreAllMocks());
 
 function fixture(name: string, content: string): string {
@@ -452,6 +467,101 @@ describe('aicomply CLI', () => {
     cap.restore();
     expect(code).toBe(1);
     expect(cap.out.join('').trim()).toBe('VIOLATION');
+  });
+
+  // With files named and no `-` among them, stdin is not scanned. The CLI
+  // learns what stdin holds from fstat of descriptor 0, never by reading it,
+  // so each test reports a real path's stats for descriptor 0: a FIFO (a shell
+  // pipe), a socket (a Node child's pipe), /dev/null, or a regular file.
+  describe('stdin when files are named without -', () => {
+    const NOT_READ = 'aicomply: stdin not read because files were named; add - to scan it too\n';
+    // mkfifo and a Unix socket path are POSIX-only.
+    const posixIt = process.platform === 'win32' ? it.skip : it;
+    let fifo: string;
+    let socketPath: string;
+    let server: Server | undefined;
+
+    beforeAll(async () => {
+      if (process.platform === 'win32') return;
+      fifo = join(dir, 'stdin.fifo');
+      execFileSync('mkfifo', [fifo]);
+      socketPath = join(dir, 'stdin.sock');
+      const listening = createServer();
+      await new Promise<void>((resolve) => listening.listen(socketPath, resolve));
+      server = listening;
+    });
+    afterAll(async () => {
+      if (server) await new Promise<void>((resolve) => server?.close(() => resolve()));
+    });
+
+    posixIt.each([['human', []], ['--json', ['--json']], ['--quiet', ['--quiet']]])(
+      'does not open a pipe and says so in one stderr line (%s output)',
+      async (_mode, flags) => {
+        const clean = fixture('named-clean.txt', 'The weather is nice today.');
+        stdinIs(fifo);
+        const stdinGet = jest.spyOn(process, 'stdin', 'get');
+        const cap = capture();
+        const code = await run(['scan', clean, ...(flags as string[])]);
+        cap.restore();
+        expect(code).toBe(0);
+        expect(cap.err.join('')).toBe(NOT_READ);
+        expect(stdinGet).not.toHaveBeenCalled();
+      },
+    );
+
+    posixIt('keeps the exit code of the files with a socket on stdin', async () => {
+      const dirty = fixture('named-dirty.txt', 'SSN 078-05-1120\n');
+      stdinIs(socketPath);
+      const stdinGet = jest.spyOn(process, 'stdin', 'get');
+      const cap = capture();
+      const code = await run(['scan', dirty, '--quiet']);
+      cap.restore();
+      expect(code).toBe(1);
+      expect(cap.out.join('')).toBe('VIOLATION\n');
+      expect(cap.err.join('')).toBe(NOT_READ);
+      expect(stdinGet).not.toHaveBeenCalled();
+    });
+
+    it('refuses a file with content on stdin and names the combined form', async () => {
+      const clean = fixture('named-clean.txt', 'The weather is nice today.');
+      stdinIs(fixture('stdin-content.txt', 'SSN 078-05-1120\n'));
+      const stdinGet = jest.spyOn(process, 'stdin', 'get');
+      for (const flags of [[], ['--json'], ['--quiet']]) {
+        const cap = capture();
+        const code = await run(['scan', clean, ...flags]);
+        cap.restore();
+        expect({ flags, code, out: cap.out.join('') }).toEqual({ flags, code: 2, out: '' });
+        expect(cap.err.join('')).toContain('\n  aicomply scan - <files>\n');
+      }
+      expect(stdinGet).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['/dev/null', () => devNull],
+      ['an empty file', () => fixture('stdin-empty.txt', '')],
+    ])('prints nothing about stdin when it is %s', async (_name, path) => {
+      const clean = fixture('named-clean.txt', 'The weather is nice today.');
+      stdinIs(path());
+      const cap = capture();
+      const code = await run(['scan', clean]);
+      cap.restore();
+      expect(code).toBe(0);
+      expect(cap.err.join('')).toBe('');
+    });
+
+    it('reads stdin as before when - is among the files', async () => {
+      const clean = fixture('named-clean.txt', 'The weather is nice today.');
+      stdinIs(fixture('stdin-content.txt', 'SSN 078-05-1120\n'));
+      const piped = new PassThrough();
+      piped.end('SSN 078-05-1120\n');
+      jest.spyOn(process, 'stdin', 'get').mockReturnValue(piped as unknown as typeof process.stdin);
+      const cap = capture();
+      const code = await run(['scan', '-', clean, '--quiet']);
+      cap.restore();
+      expect(code).toBe(1);
+      expect(cap.out.join('')).toBe('VIOLATION\n');
+      expect(cap.err.join('')).toBe('');
+    });
   });
 
   // The value is masked, so a finding's location is the only thing a user can

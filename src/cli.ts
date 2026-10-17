@@ -19,7 +19,7 @@
  * small-library pattern. argv is parsed by hand.
  */
 
-import { readFileSync, statSync } from 'fs';
+import { fstatSync, readFileSync, statSync, type Stats } from 'fs';
 import { comply } from './index';
 import { DEFAULT_NANOMIND_DAEMON_URL } from './classifier/guard-client/nanomind-adapter';
 import { PATTERN_TYPES } from './classifier/regex/pack';
@@ -176,6 +176,36 @@ function readStdin(): Promise<string> {
   });
 }
 
+/** stdin is scanned when no file is named or `-` is among the files. */
+function stdinRequested(files: string[]): boolean {
+  return files.length === 0 || files.includes('-');
+}
+
+const STDIN_NOT_READ = 'stdin not read because files were named; add - to scan it too';
+
+/**
+ * What stdin holds when files are named without `-`, so it is not scanned.
+ * Decided from fstat alone, never by reading: reading a pipe to its end waits
+ * until its writer closes it, so a writer that holds it open and never writes
+ * would hold up the scan.
+ *
+ *   'content'  a regular file with bytes (`aicomply scan a.txt < b.txt`)
+ *   'stream'   a pipe or socket: what it carries is known only by reading it
+ *   undefined  anything else: a terminal or /dev/null (character devices),
+ *              an empty file, or no descriptor 0
+ */
+function unreadStdin(): 'content' | 'stream' | undefined {
+  let stats: Stats;
+  try {
+    stats = fstatSync(0);
+  } catch {
+    return undefined;
+  }
+  if (stats.isFile()) return stats.size > 0 ? 'content' : undefined;
+  if (stats.isFIFO() || stats.isSocket()) return 'stream';
+  return undefined;
+}
+
 interface Source {
   label: string;
   content: string;
@@ -204,7 +234,6 @@ export function filesGlob(dir: string): string {
 }
 
 async function collectSources(files: string[]): Promise<Source[]> {
-  const stdinRequested = files.length === 0 || files.includes('-');
   const realFiles = files.filter((f) => f !== '-');
   const sources: Source[] = [];
 
@@ -223,7 +252,7 @@ async function collectSources(files: string[]): Promise<Source[]> {
     }
   }
 
-  if (stdinRequested) {
+  if (stdinRequested(files)) {
     if (process.stdin.isTTY) {
       // No piped input and no files -- guide the user rather than hang.
       throw new UsageError(
@@ -438,6 +467,16 @@ async function runInner(argv: string[]): Promise<number> {
     return 2;
   }
 
+  // A file with content on stdin is a usage error before any scan; a pipe or
+  // socket gets one stderr line after the report.
+  const unread = stdinRequested(args.files) ? undefined : unreadStdin();
+  if (unread === 'content') {
+    throw new UsageError(
+      'stdin is a file with content and is not read because files were named; add - to scan it too:\n' +
+        '  aicomply scan - <files>',
+    );
+  }
+
   const sources = await collectSources(args.files);
   const results: ComplyResult[] = [];
   for (const src of sources) {
@@ -453,6 +492,8 @@ async function runInner(argv: string[]): Promise<number> {
         : 'CLEAN';
     process.stdout.write(`${worst}\n`);
   } else renderHuman(sources, results);
+
+  if (unread === 'stream') process.stderr.write(`aicomply: ${STDIN_NOT_READ}\n`);
 
   // Exit 1 if anything is not CLEAN, so the CLI works as a CI gate.
   return results.some((r) => r.verdict !== 'CLEAN') ? 1 : 0;
