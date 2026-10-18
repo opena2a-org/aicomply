@@ -20,8 +20,9 @@
  * fleet index does not load from it. lookup() reports supply-chain alerts
  * without the fleet index. The fleet request that names a package,
  *   GET /api/v1/registry/fleet/anomaly-signal?name=<name>&type=<type>
- * answers 200 with that package's signal; warm() sends it for each package in
- * the sourcePackages option.
+ * answers 200 with that package's signal; warm() sends it for each listed
+ * package: one in the sourcePackages option, or one added later with
+ * addSourcePackages(), which sends it when it lists the package.
  */
 
 import { showString } from '../show-string';
@@ -61,7 +62,12 @@ export class RegistryIntelligenceCache {
   private readonly baseUrl: string;
   private readonly cacheTtlMs: number;
   private readonly timeoutMs: number;
-  private readonly sourcePackages: readonly RegistrySourcePackage[];
+  /**
+   * The listed packages, whose fleet signal warm() requests: those in the
+   * sourcePackages option and those added with addSourcePackages(). Keyed by
+   * package name (lowercased), as lookup() matches names.
+   */
+  private readonly sourcePackages = new Map<string, RegistrySourcePackage>();
   private readonly cache = new Map<string, RegistryIntelligence>();
 
   /**
@@ -70,8 +76,10 @@ export class RegistryIntelligenceCache {
    */
   private fleetIndex: Map<string, FleetAnomalySignal> = new Map();
   private supplyChainIndex: Map<string, SupplyChainAlert[]> = new Map();
-  /** Answers to the fleet request for each package in sourcePackages. */
+  /** Answers to the fleet request for each listed package. */
   private packageFleet: Map<string, PackageFleetAnswer> = new Map();
+  /** Fleet requests for listed packages that have not settled, by key. */
+  private readonly packageRequests = new Map<string, Promise<void>>();
   private lastFleetFetch = 0;
   private lastSupplyChainFetch = 0;
   private fetchInProgress: Promise<void> | null = null;
@@ -80,12 +88,16 @@ export class RegistryIntelligenceCache {
     this.baseUrl = options.baseUrl ?? 'https://api.oa2a.org';
     this.cacheTtlMs = options.cacheTtlMs ?? 5 * 60 * 1000;
     this.timeoutMs = options.timeoutMs ?? 8_000;
-    this.sourcePackages = readSourcePackages(options.sourcePackages);
+    if (options.sourcePackages !== undefined) {
+      for (const pkg of readSourcePackages(options.sourcePackages)) {
+        this.sourcePackages.set(pkg.name.toLowerCase(), pkg);
+      }
+    }
   }
 
   /**
    * Warm the cache by fetching both endpoints, and the fleet signal of each
-   * package in sourcePackages.
+   * listed package.
    *
    * Call this once before entering the classification hot path (AC-005).
    * Resolves when every fetch completes (or fails gracefully).
@@ -98,6 +110,47 @@ export class RegistryIntelligenceCache {
       this.fetchInProgress = null;
     });
     return this.fetchInProgress;
+  }
+
+  /**
+   * List packages first seen after the cache was created, and request the
+   * fleet signal of each by name and type, as warm() does for the
+   * sourcePackages option; warm() requests them from then on. Resolves once
+   * each request has been answered or has failed, so lookup() then reports
+   * the packages as it reports those listed in the option.
+   *
+   * A package listed already, in the option or by an earlier call, is not
+   * requested again; if a request for it is in flight, the call waits for
+   * it. The list is checked as the option is, and a name listed already with
+   * another type is rejected too: with a TypeError, before any package of
+   * the call is listed or requested.
+   *
+   * Call it outside the classification hot path, as warm() (AC-005).
+   */
+  async addSourcePackages(sourcePackages: readonly RegistrySourcePackage[]): Promise<void> {
+    const packages = readSourcePackages(sourcePackages);
+    for (const [i, pkg] of packages.entries()) {
+      const listed = this.sourcePackages.get(pkg.name.toLowerCase());
+      if (listed !== undefined && listed.type !== pkg.type) {
+        throw new TypeError(
+          `sourcePackages[${i}] names ${showString(pkg.name, '"')} with type ${showString(pkg.type, '"')}, ` +
+            `which is listed already with type ${showString(listed.type, '"')}; ` +
+            'lookup() matches names without case, so list each package with one type',
+        );
+      }
+    }
+    const requests: Promise<void>[] = [];
+    for (const pkg of packages) {
+      const key = pkg.name.toLowerCase();
+      if (!this.sourcePackages.has(key)) {
+        this.sourcePackages.set(key, pkg);
+        requests.push(this.requestPackageFleet(key, pkg));
+        continue;
+      }
+      const inFlight = this.packageRequests.get(key);
+      if (inFlight !== undefined) requests.push(inFlight);
+    }
+    await Promise.allSettled(requests);
   }
 
   /**
@@ -175,7 +228,7 @@ export class RegistryIntelligenceCache {
 
   /**
    * Fleet index size: the number of packages the fleet request that names no
-   * package loaded. Answers for sourcePackages are not counted.
+   * package loaded. Answers for listed packages are not counted.
    */
   fleetIndexSize(): number {
     return this.fleetIndex.size;
@@ -197,17 +250,17 @@ export class RegistryIntelligenceCache {
 
   /**
    * When the fleet data last loaded: the fleet index, or while it has never
-   * loaded, the oldest answer for a package in sourcePackages (0 while one is
-   * missing). Against a Registry that refuses the fleet index request, the
-   * listed answers then set how often refreshIfStale() fetches again.
+   * loaded, the oldest answer for a listed package (0 while one is missing).
+   * Against a Registry that refuses the fleet index request, the listed
+   * answers then set how often refreshIfStale() fetches again.
    */
   private fleetFetchedAt(): number {
-    if (this.lastFleetFetch > 0 || this.sourcePackages.length === 0) {
+    if (this.lastFleetFetch > 0 || this.sourcePackages.size === 0) {
       return this.lastFleetFetch;
     }
     let oldest = Infinity;
-    for (const pkg of this.sourcePackages) {
-      const answer = this.packageFleet.get(pkg.name.toLowerCase());
+    for (const key of this.sourcePackages.keys()) {
+      const answer = this.packageFleet.get(key);
       if (answer === undefined) return 0;
       oldest = Math.min(oldest, answer.fetchedAt);
     }
@@ -218,10 +271,28 @@ export class RegistryIntelligenceCache {
     await Promise.allSettled([
       this._fetchFleet(),
       this._fetchSupplyChain(),
-      ...this.sourcePackages.map(pkg => this._fetchPackageFleet(pkg)),
+      ...Array.from(this.sourcePackages, ([key, pkg]) => this.requestPackageFleet(key, pkg)),
     ]);
     // Invalidate per-package cache entries so next lookup() rebuilds them
     this.cache.clear();
+  }
+
+  /**
+   * Request the fleet signal of a listed package, or join the request for it
+   * that is in flight. Once the request settles, the package's cached
+   * lookup() result is dropped, so the next lookup() rebuilds it from what
+   * loaded.
+   */
+  private requestPackageFleet(key: string, pkg: RegistrySourcePackage): Promise<void> {
+    let request = this.packageRequests.get(key);
+    if (request === undefined) {
+      request = this._fetchPackageFleet(pkg).finally(() => {
+        this.packageRequests.delete(key);
+        this.cache.delete(key);
+      });
+      this.packageRequests.set(key, request);
+    }
+    return request;
   }
 
   private async _fetchFleet(): Promise<void> {
@@ -331,12 +402,13 @@ function isFleetAnswerFor(body: unknown, key: string): body is FleetAnomalySigna
 }
 
 /**
- * Copy the sourcePackages option, rejecting a list warm() could not request
- * from: an entry without a non-empty name and type, or a name listed twice,
- * which lookup(), matching names without case, could not tell apart.
+ * Copy a sourcePackages list (the option, or the argument of
+ * addSourcePackages()), rejecting one warm() could not request from: a value
+ * that is not an array, an entry without a non-empty name and type, or a name
+ * listed twice, which lookup(), matching names without case, could not tell
+ * apart.
  */
 function readSourcePackages(list: unknown): RegistrySourcePackage[] {
-  if (list === undefined) return [];
   if (!Array.isArray(list)) {
     throw new TypeError(`sourcePackages must be an array (got ${list === null ? 'null' : typeof list})`);
   }

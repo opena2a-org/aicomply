@@ -9,6 +9,8 @@
  *   - Fleet anomaly > 0.30 => VIOLATION via comply()
  *   - Fleet anomaly > 0.30 => VIOLATION for a package in sourcePackages when the
  *     Registry answers the fleet request only per package
+ *   - The same for a package added with session.addSourcePackages() after
+ *     create(), with no Registry request made by comply()
  *   - Cache miss => signals present, verdict unchanged
  *   - Unreachable Registry and absent package => distinct registrySignals.status
  *   - onRegistryUnknown => miss / error becomes VIOLATION or DENY via comply()
@@ -406,6 +408,38 @@ describe('comply(): a package the Registry cannot vouch for', () => {
     expect(quiet.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN']);
     expect(unlisted.verdict).toBe('CLEAN');
     expect(unlisted.registrySignals?.status).toBe('error');
+  });
+
+  it('applies the fleet anomaly threshold to a package added with addSourcePackages() after create()', async () => {
+    registryAnswersFleetPerPackage();
+    const session = await ClassificationSession.create({ baseUrl: BASE_URL });
+    const before = await session.comply({ content: 'hello world', sourcePackage: 'suspicious-agent', useGuard: false });
+
+    await session.addSourcePackages([
+      { name: 'suspicious-agent', type: 'mcp_server' },
+      { name: 'quiet-agent', type: 'mcp_server' },
+    ]);
+    const calls = (globalThis.fetch as jest.Mock).mock.calls;
+    const fetched = calls.length;
+    const elevated = await session.comply({ content: 'hello world', sourcePackage: 'suspicious-agent', useGuard: false });
+    const quiet = await session.comply({
+      content: 'hello world',
+      sourcePackage: 'quiet-agent',
+      useGuard: false,
+      onRegistryUnknown: 'deny',
+    });
+
+    expect(before.verdict).toBe('CLEAN');
+    expect(before.registrySignals?.status).toBe('error');
+    expect(elevated.verdict).toBe('VIOLATION');
+    expect(elevated.registrySignals?.status).toBe('hit');
+    expect(elevated.registrySignals?.fleetAnomalyScore).toBe(0.55);
+    expect(elevated.violations.map(v => v.type)).toEqual(['FLEET_ANOMALY_ELEVATED']);
+    expect(quiet.verdict).toBe('DENY');
+    expect(quiet.registrySignals?.status).toBe('miss');
+    expect(quiet.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN']);
+    // addSourcePackages() sent the requests; comply() sent none (AC-005).
+    expect(calls).toHaveLength(fetched);
   });
 
   it('tells an unreachable Registry from a package absent from its index', async () => {

@@ -20,6 +20,7 @@ export type {
   PolicyRule,
   RegistryCacheOptions,
   RegistryLookupStatus,
+  RegistrySourcePackage,
   RegistryUnknownAction,
   NormalizationStep,
   NormalizationTransform,
@@ -87,6 +88,7 @@ import type {
   ComplyOptions,
   ComplyResult,
   RegistryCacheOptions,
+  RegistrySourcePackage,
 } from './types';
 
 export type { DualLayerOptions } from './classifier/dual-layer';
@@ -407,6 +409,24 @@ export class ClassificationSession {
       ...(guardOptions !== undefined && { guardOptions }),
     };
     return comply(optionsWithCache, dualLayerOptions);
+  }
+
+  /**
+   * List packages first seen after create() in the session's cache, and
+   * request the fleet anomaly signal of each by name and type, as create()
+   * does for `options.sourcePackages`; a refresh requests them from then on.
+   * Resolves once each request has been answered or has failed, so comply()
+   * calls made after it look the packages up as packages listed in
+   * `options.sourcePackages`. The requests are made here, not by comply()
+   * (AC-005). See RegistryIntelligenceCache.addSourcePackages() for the
+   * packages it does not request again and the lists it rejects.
+   *
+   * @example
+   * await session.addSourcePackages([{ name: 'other-agent', type: 'ai_tool' }]);
+   * const result = await session.comply({ content, sourcePackage: 'other-agent' });
+   */
+  addSourcePackages(sourcePackages: readonly RegistrySourcePackage[]): Promise<void> {
+    return this.cache.addSourcePackages(sourcePackages);
   }
 
   /**
