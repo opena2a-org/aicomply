@@ -386,8 +386,36 @@ def _in_input_order(
     return located
 
 
+class _Utf8Stdout:
+    """Writes text to stdout encoded as UTF-8, as the TS CLI does, not in the
+    encoding of ``sys.stdout``.
+
+    ``sys.stdout`` encodes in the locale's encoding or PYTHONIOENCODING's, and
+    ascii, latin-1, cp932 and KOI8-R have no code for the "•" of the masked
+    value: the write raised and the run exited 2. cp1252 has one, the byte
+    0x95, which is not UTF-8. So the text is encoded here, with the error
+    handler of ``sys.stdout``, and written to the byte stream under it, after
+    the text still pending in ``sys.stdout``. The bytes skip its newline
+    translation as well. A ``sys.stdout`` with no byte stream under it, such
+    as an ``io.StringIO`` a caller put there, is given the text.
+    """
+
+    def __init__(self) -> None:
+        self._stdout = sys.stdout
+        self._buffer = getattr(self._stdout, "buffer", None)
+        self._errors = getattr(self._stdout, "errors", None) or "strict"
+        if self._buffer is not None:
+            self._stdout.flush()
+
+    def write(self, text: str) -> None:
+        if self._buffer is None:
+            self._stdout.write(text)
+        else:
+            self._buffer.write(text.encode("utf-8", self._errors))
+
+
 def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
-    out = sys.stdout
+    out = _Utf8Stdout()
     any_guard = False
     total_findings = 0
     worst = "CLEAN"
@@ -497,8 +525,9 @@ def _render_json(sources: list[_Source], results: list[ComplyResult]) -> None:
         for src, res in zip(sources, results)
     ]
     # ensure_ascii=False prints "•••" as the TS CLI's JSON.stringify does, not
-    # as • escapes, so both CLIs print the same bytes.
-    sys.stdout.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    # as backslash-u escapes, and _Utf8Stdout encodes it as UTF-8, not in the
+    # locale's encoding, so both CLIs print the same bytes.
+    _Utf8Stdout().write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
 
 def run(argv: list[str]) -> int:
@@ -514,15 +543,15 @@ def _run_inner(argv: list[str]) -> int:
     args = _parse_args(argv)
 
     if args.version:
-        sys.stdout.write(f"{__version__}\n")
+        _Utf8Stdout().write(f"{__version__}\n")
         return 0
     # Scan-scoped help: `aicomply scan --help` documents the scan command and
     # its flags rather than falling through to the generic top-level banner.
     if args.command == "scan" and args.help:
-        sys.stdout.write(SCAN_HELP)
+        _Utf8Stdout().write(SCAN_HELP)
         return 0
     if args.help or args.command is None:
-        sys.stdout.write(HELP)
+        _Utf8Stdout().write(HELP)
         return 2 if (args.command is None and not args.help) else 0
     if args.command != "scan":
         sys.stderr.write(
@@ -558,7 +587,7 @@ def _run_inner(argv: list[str]) -> int:
             if any(r.verdict == "VIOLATION" for r in scanned)
             else "CLEAN"
         )
-        sys.stdout.write(f"{worst}\n")
+        _Utf8Stdout().write(f"{worst}\n")
     else:
         _render_human(sources, results)
 
