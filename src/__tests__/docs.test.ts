@@ -8,6 +8,8 @@
  * package version has not yet reached.
  * The tracked Markdown also points readers only at a change record the
  * repository has: a CHANGELOG mention needs a tracked CHANGELOG file.
+ * The 2.3.0 release notes lead with the exit-code change, repeat the README's
+ * staged-diff gate line, and end with the known issues.
  */
 
 import { execFileSync } from 'child_process';
@@ -293,5 +295,28 @@ describe('docs', () => {
       `git ls-files failed in ${ROOT}, so the docs test cannot list the Markdown git tracks (git: fatal: unable to read index). ` +
         `Run git ls-files in ${ROOT} to see the whole error, fix what it reports and run the test again.`,
     );
+  });
+});
+
+describe('2.3.0 release notes', () => {
+  const notes = () => readFileSync(join(ROOT, 'docs', 'releases', '2.3.0.md'), 'utf8');
+  const headings = () => notes().split('\n').filter((line) => line.startsWith('## '));
+
+  it('open with the change of exit code for no input', () => {
+    expect(headings()[0]).toBe('## Exit code change: no input exits 2');
+  });
+
+  it('show the staged-diff gate exactly as the README does', () => {
+    const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+    const gate = readme.split('\n').find((line) => line.startsWith('git diff --cached |'));
+    expect(gate).toBeDefined();
+    expect(notes().split('\n')).toContain(gate);
+  });
+
+  it('end with the known issues, naming the supply-chain lookup defect', () => {
+    expect(headings()[headings().length - 1]).toBe('## Known issues');
+    const known = notes().slice(notes().indexOf('## Known issues'));
+    expect(known).toContain('https://github.com/opena2a-org/aicomply/issues/205');
+    expect(known).toContain("onRegistryUnknown: 'deny'");
   });
 });
