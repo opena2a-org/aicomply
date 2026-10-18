@@ -88,10 +88,11 @@ USAGE
 OPTIONS
   --json        Machine-readable JSON output (verdict + findings)
   --quiet, -q   Print only the verdict line
-  --version,-V  Print version
+  --version, -V Print version
   --help, -h    This help
   --            Ends the options; each later argument is an input, so a file
                 name can start with - (aicomply scan -- -notes.txt)
+                A lone - is still stdin after --; name a file called - as ./-
 
 PATTERN CLASSES (regex layer)
   SSN         US Social Security numbers
@@ -124,8 +125,8 @@ const SCAN_HELP = `aicomply scan -- scan files or piped stdin for sensitive cont
 Runs the deterministic regex layer over each input, plus the optional semantic
 Guard layer when a local nanomind-daemon is reachable. Prints a verdict per
 input and an overall verdict. An input of 0 bytes is not classified: it is
-listed as "0 bytes, nothing to classify" (--json: "bytes": 0, "layers": []),
-and the inputs that were scanned decide the exit code.
+listed as "0 bytes, nothing to classify" (--json: "bytes": 0, "verdict": null,
+"layers": []), and the inputs that were scanned decide the exit code.
 
 The regex layer checks SSNs, card and bank account numbers, passport and
 medical record numbers, provider identifiers (NPI), credentials and CUI
@@ -146,6 +147,7 @@ OPTIONS
   --help, -h    This help
   --            Ends the options; each later argument is an input, so a file
                 name can start with - (aicomply scan -- -notes.txt)
+                A lone - is still stdin after --; name a file called - as ./-
 
 EXIT CODES
   0  CLEAN          no findings from the layers that ran
@@ -236,10 +238,10 @@ export function filesGlob(dir: string): string {
 }
 
 /**
- * The text of an input. Bytes that start with a UTF-32 or UTF-16 byte order
- * mark are decoded in that encoding, without the mark; other bytes are decoded
- * as UTF-8. A byte sequence the encoding cannot decode becomes U+FFFD and the
- * rest is scanned, as in the Python CLI.
+ * The text of an input. Bytes that start with a UTF-32, UTF-16 or UTF-8 byte
+ * order mark are decoded in that encoding, without the mark; other bytes are
+ * decoded as UTF-8. A byte sequence the encoding cannot decode becomes U+FFFD
+ * and the rest is scanned, as in the Python CLI.
  */
 export function decodeInput(data: Buffer): string {
   const [b0, b1, b2, b3] = data;
@@ -262,6 +264,11 @@ export function decodeInput(data: Buffer): string {
       le[i + 1] = hi;
     }
     return new TextDecoder('utf-16le', { ignoreBOM: true }).decode(le);
+  }
+  // Kept, the UTF-8 mark was column 1 of the first line, so each finding on
+  // that line was one column right of where an editor shows it.
+  if (data.length >= 3 && b0 === 0xef && b1 === 0xbb && b2 === 0xbf) {
+    return data.toString('utf8', 3);
   }
   return data.toString('utf8');
 }
@@ -428,11 +435,41 @@ function locateFinding(content: string, v: Violation): FindingLocation | undefin
   return v.view === undefined ? undefined : locate(content, v.originalStart);
 }
 
+interface LocatedFinding {
+  v: Violation;
+  loc: FindingLocation | undefined;
+}
+
+/**
+ * The findings of one input in the order they appear in it: by line, then by
+ * column. A finding without a location, such as a Guard finding, follows the
+ * located ones. Findings at the same place keep the order comply() gave them.
+ */
+function inInputOrder(content: string, violations: Violation[]): LocatedFinding[] {
+  return violations
+    .map((v) => ({ v, loc: locateFinding(content, v) }))
+    .sort((a, b) => {
+      if (a.loc === undefined || b.loc === undefined) {
+        return (a.loc === undefined ? 1 : 0) - (b.loc === undefined ? 1 : 0);
+      }
+      return a.loc.line - b.loc.line || a.loc.column - b.loc.column;
+    });
+}
+
 export function renderHuman(sources: Source[], results: ComplyResult[]): void {
   const out = process.stdout;
   let anyGuard = false;
   let totalFindings = 0;
   let worst: 'CLEAN' | 'VIOLATION' | 'DENY' = 'CLEAN';
+
+  // The type column is as wide as the longest type printed, and at least 12
+  // characters: a Guard class such as exfiltration_pattern (20 characters) is
+  // longer than any pattern class.
+  let typeWidth = 12;
+  for (let i = 0; i < sources.length; i++) {
+    if (sources[i].bytes === 0 || results[i].verdict === 'CLEAN') continue;
+    for (const v of results[i].violations) typeWidth = Math.max(typeWidth, v.type.length);
+  }
 
   out.write('\n');
   for (let i = 0; i < sources.length; i++) {
@@ -460,13 +497,12 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
       continue;
     }
     out.write(`   ${res.violations.length} finding${res.violations.length === 1 ? '' : 's'}\n`);
-    for (const v of res.violations as Violation[]) {
+    for (const { v, loc } of inInputOrder(src.content, res.violations)) {
       const layer = v.classifier;
       const view = v.view && v.view !== 'normalized' ? `  view ${v.view}` : '';
-      const loc = locateFinding(src.content, v);
       const where = loc ? `  line ${loc.line} col ${loc.column}` : '';
       out.write(
-        `    ${v.type.padEnd(12)} ${MASKED_VALUE.padEnd(18)} confidence ${v.confidence.toFixed(2)}  layer ${layer}${view}${where}\n`,
+        `    ${v.type.padEnd(typeWidth)} ${MASKED_VALUE.padEnd(18)} confidence ${v.confidence.toFixed(2)}  layer ${layer}${view}${where}\n`,
       );
     }
     out.write('\n');
@@ -510,9 +546,10 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
 export function renderJson(sources: Source[], results: ComplyResult[]): void {
   const payload = sources.map((src, i) => ({
     source: src.label,
-    // An input of 0 bytes was not classified; its `layers` is [].
+    // An input of 0 bytes was not classified: its `verdict` is null and its
+    // `layers` is [].
     bytes: src.bytes,
-    verdict: results[i].verdict,
+    verdict: src.bytes === 0 ? null : results[i].verdict,
     guardActive: guardActive(results[i]),
     layers: results[i].layers,
     findings: results[i].violations.map((v) => {

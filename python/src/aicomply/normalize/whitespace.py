@@ -8,7 +8,10 @@ characters that appear inside SSNs, PANs, IBANs, MRNs, NPIs, passport numbers.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+
+from .offset_map import OffsetMap, OffsetMapBuilder
 
 ASCII_WHITESPACE = frozenset({0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20})
 UNICODE_WHITESPACE = frozenset(
@@ -42,61 +45,54 @@ class CompactFormResult:
     removed_count: int
 
 
-def _is_whitespace(cp: int) -> bool:
-    return cp in ASCII_WHITESPACE or cp in UNICODE_WHITESPACE
+@dataclass
+class CompactStage:
+    """A CompactFormResult with the offset map as an ``OffsetMap`` (see ``.offset_map``)."""
+
+    compact: str
+    offset_map: OffsetMap
+    removed_count: int
 
 
-def _is_token_char(cp: int) -> bool:
-    if 0x30 <= cp <= 0x39:  # digits 0-9
-        return True
-    # separators inside SSN/PAN/IBAN/MRN/NPI/passport numbers: - _ / . :
-    return cp in (0x2D, 0x5F, 0x2F, 0x2E, 0x3A)
+# Characters that can sit on either side of a stripped whitespace run: the
+# digits 0-9 and the separators inside SSN/PAN/IBAN/MRN/NPI/passport numbers.
+_TOKEN = "[0-9" + re.escape("-_/.:") + "]"
+_WHITESPACE = (
+    "[" + "".join(re.escape(chr(cp)) for cp in sorted(ASCII_WHITESPACE | UNICODE_WHITESPACE)) + "]"
+)
+# A whitespace run (group 1) with a token character on each side. The run is
+# all the whitespace between them, as a token character is not whitespace.
+# The character after the run is only looked at, so it can also be the one
+# before the next run.
+_STRIPPED_RUN = re.compile(f"{_TOKEN}({_WHITESPACE}+)(?={_TOKEN})")
 
 
 def build_compact_form(text: str) -> CompactFormResult:
-    # (text, offset, cp) per code point. Offsets are code-point indices.
-    code_points = [(ch, i, ord(ch)) for i, ch in enumerate(text)]
-
-    parts: list[str] = []
-    offset_map: list[int] = []
-    removed = 0
-    last_emitted_cp: int | None = None
-
-    i = 0
-    n = len(code_points)
-    while i < n:
-        ch, off, cp = code_points[i]
-        if not _is_whitespace(cp):
-            parts.append(ch)
-            offset_map.append(off)
-            last_emitted_cp = cp
-            i += 1
-            continue
-
-        # Whitespace run: find the next non-whitespace code point.
-        j = i + 1
-        while j < n and _is_whitespace(code_points[j][2]):
-            j += 1
-        next_cp = code_points[j][2] if j < n else None
-
-        strip_run = (
-            last_emitted_cp is not None
-            and next_cp is not None
-            and _is_token_char(last_emitted_cp)
-            and _is_token_char(next_cp)
-        )
-
-        if strip_run:
-            removed += j - i
-            i = j
-        else:
-            for k in range(i, j):
-                wch, woff, _wcp = code_points[k]
-                parts.append(wch)
-                offset_map.append(woff)
-            last_emitted_cp = code_points[j - 1][2]
-            i = j
-
+    stage = compact_stage(text)
     return CompactFormResult(
-        compact="".join(parts), offset_map=offset_map, removed_count=removed
+        compact=stage.compact, offset_map=list(stage.offset_map), removed_count=stage.removed_count
     )
+
+
+def compact_stage(text: str) -> CompactStage:
+    """build_compact_form() with the map as an ``OffsetMap``.
+
+    Each run between two stripped whitespace runs goes to the output as one
+    slice of the input.
+    """
+    parts: list[str] = []
+    offsets = OffsetMapBuilder()
+    removed = 0
+    # text[copied:start] is a run that goes to the output as it is.
+    copied = 0
+    for run in _STRIPPED_RUN.finditer(text):
+        start, end = run.span(1)
+        parts.append(text[copied:start])
+        offsets.copy(copied, start - copied)
+        removed += end - start
+        copied = end
+    offsets.copy(copied, len(text) - copied)
+    if removed == 0:
+        return CompactStage(compact=text, offset_map=offsets.finish(), removed_count=0)
+    parts.append(text[copied:])
+    return CompactStage(compact="".join(parts), offset_map=offsets.finish(), removed_count=removed)

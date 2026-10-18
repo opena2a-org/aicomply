@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..normalize import NormalizationResult, normalize
+from ..normalize import NormalizationResult, ScanNormalization, normalize_for_scan
 from ..types import (
     ClassifierResult,
     ComplyLayer,
@@ -50,7 +50,7 @@ def _merge_verdicts(regex: ClassifierResult, guard: ClassifierResult | None) -> 
     return "CLEAN"
 
 
-def _scan_all_views(norm: NormalizationResult) -> ClassifierResult:
+def _scan_all_views(norm: NormalizationResult | ScanNormalization) -> ClassifierResult:
     """Run the regex classifier across every content view, deduping by origin range."""
     normalized_scan = classify_with_regex(
         norm.normalized_content,
@@ -104,7 +104,7 @@ def classify_dual_layer(
     # Pre-regex adversarial normalization (NFKC + zero-width strip produce the
     # normalized stream; compact form and any Base64/URL-decoded segments are
     # scanned in addition).
-    norm = normalize(content)
+    norm = normalize_for_scan(content)
     regex_result = _scan_all_views(norm)
 
     guard_result: ClassifierResult | None = None

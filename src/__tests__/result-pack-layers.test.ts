@@ -16,6 +16,7 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { comply, PACK_SHA256, PACK_VERSION } from '../index';
 import { classifyDualLayer } from '../classifier/dual-layer';
+import type { ComplyResult } from '../types';
 import {
   generateTestKeyPair,
   makeVerifyOptions,
@@ -105,6 +106,22 @@ describe('ComplyResult.pack', () => {
     expect(r.originalContent).toBeUndefined();
     expect(r.pack).toEqual({ version: FILE_VERSION, sha256: FILE_SHA256 });
     expect(r.layers).toEqual(['normalize', 'regex']);
+  });
+});
+
+// `pack` and `layers` were optional in the ComplyResult type though comply()
+// sets both on every result, so code compiled with strict null checks could
+// not read them without a check for undefined (TS18048). The test run
+// type-checks this file, so the reads below do not compile when they are
+// optional.
+describe('ComplyResult type', () => {
+  it('declares pack and layers on every result', async () => {
+    const results: ComplyResult[] = [await comply('SSN 516-81-3086'), await comply('')];
+    const read = results.map((r) => [r.pack.version, r.pack.sha256, r.layers.length]);
+    expect(read).toEqual([
+      [PACK_VERSION, PACK_SHA256, 2],
+      [PACK_VERSION, PACK_SHA256, 0],
+    ]);
   });
 });
 

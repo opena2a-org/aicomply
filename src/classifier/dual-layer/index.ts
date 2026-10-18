@@ -207,23 +207,29 @@ export function assertPolicyPack(value: unknown, name: string): asserts value is
  * Exported so comply() runs both steps on empty content, which it does not
  * classify: neither one depends on the content.
  */
-export function applyRegistryAndPolicy(
-  base: Omit<ComplyResult, 'registrySignals'>,
+export function applyRegistryAndPolicy<T extends ClassifiedResult>(
+  base: T,
   options?: DualLayerOptions,
-): ComplyResult {
+): T {
   const result = applyRegistry(base, options);
   return options?.policyPack ? applyPolicyPack(result, options.policyPack) : result;
 }
+
+/**
+ * A classified result before the Registry and policy steps, without the
+ * `pack` and `layers` that classifyDualLayer() and comply() add to it.
+ */
+export type ClassifiedResult = Omit<ComplyResult, 'registrySignals' | 'pack' | 'layers'>;
 
 /**
  * Apply the Registry L2 step to a classified result when the caller named a
  * source package and gave a cache to look it up in or an onRegistryUnknown
  * action.
  */
-function applyRegistry(
-  base: Omit<ComplyResult, 'registrySignals'>,
+function applyRegistry<T extends ClassifiedResult>(
+  base: T,
   options?: DualLayerOptions,
-): ComplyResult {
+): T {
   // A caller who set onRegistryUnknown gets it for a source package with no
   // cache to look it up in as well: that lookup is an error, not a skipped
   // check. The same holds for an empty name, which no Registry entry has.
@@ -284,7 +290,7 @@ export async function classifyDualLayer(
 
   // A supplied Guard result is verified, as comply() does for empty content;
   // with none supplied, the daemon is asked below.
-  let baseResult = await verifySuppliedGuard(content, regexResult, options);
+  let baseResult: ClassifiedResult | undefined = await verifySuppliedGuard(content, regexResult, options);
 
   if (baseResult === undefined) {
     // Attempt Guard classification via the nanomind-daemon adapter.
@@ -340,10 +346,7 @@ export async function classifyDualLayer(
   // a regex-only fallback or a rejected signature must not claim it ran.
   const layers: ComplyLayer[] = ['normalize', 'regex'];
   if (result.classifierResults.guard !== undefined) layers.push('guard');
-  result.pack = packIdentity();
-  result.layers = layers;
-
-  return result;
+  return { ...result, pack: packIdentity(), layers };
 }
 
 /**
@@ -362,7 +365,7 @@ export async function verifySuppliedGuard(
   content: string,
   regexResult: ClassifierResult,
   options?: DualLayerOptions,
-): Promise<Omit<ComplyResult, 'registrySignals'> | undefined> {
+): Promise<ClassifiedResult | undefined> {
   if (!options?.guardResult || !options?.guardVerifyOptions) return undefined;
 
   const verifyResult = await verifyClassification(
@@ -493,13 +496,13 @@ export function scanAllViews(norm: ScanNormalization): ClassifierResult {
  *     DENY, and either appends a REGISTRY_UNKNOWN violation. Without it, a
  *     subsequent warm() + re-classify is the correct path.
  */
-function applyRegistryL2(
-  base: Omit<ComplyResult, 'registrySignals'>,
+function applyRegistryL2<T extends ClassifiedResult>(
+  base: T,
   lookup: RegistryLookupResult,
   packageName: string,
   trustLevel?: number,
   onUnknown?: RegistryUnknownAction,
-): ComplyResult {
+): T {
   const mult = sensitivityMultiplier(trustLevel);
 
   if (lookup.status === 'error' || lookup.status === 'miss') {
@@ -620,7 +623,7 @@ function applyRegistryL2(
  * Policy is applied after Registry L2 so it sees the fully-resolved verdict and
  * violation set (including SUPPLY_CHAIN_ALERT and FLEET_ANOMALY_ELEVATED entries).
  */
-function applyPolicyPack(result: ComplyResult, pack: PolicyPack): ComplyResult {
+function applyPolicyPack<T extends ClassifiedResult>(result: T, pack: PolicyPack): T {
   const detectedTypes = new Set(result.violations.map(v => v.type));
 
   let verdict = result.verdict;

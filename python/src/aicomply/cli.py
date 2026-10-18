@@ -92,10 +92,11 @@ USAGE
 OPTIONS
   --json        Machine-readable JSON output (verdict + findings)
   --quiet, -q   Print only the verdict line
-  --version,-V  Print version
+  --version, -V Print version
   --help, -h    This help
   --            Ends the options; each later argument is an input, so a file
                 name can start with - (aicomply scan -- -notes.txt)
+                A lone - is still stdin after --; name a file called - as ./-
 
 PATTERN CLASSES (regex layer)
   SSN         US Social Security numbers
@@ -129,8 +130,8 @@ SCAN_HELP = """aicomply scan -- scan files or piped stdin for sensitive content
 Runs the deterministic regex layer over each input, plus the optional semantic
 Guard layer when a local nanomind-daemon is reachable. Prints a verdict per
 input and an overall verdict. An input of 0 bytes is not classified: it is
-listed as "0 bytes, nothing to classify" (--json: "bytes": 0, "layers": []),
-and the inputs that were scanned decide the exit code.
+listed as "0 bytes, nothing to classify" (--json: "bytes": 0, "verdict": null,
+"layers": []), and the inputs that were scanned decide the exit code.
 
 The regex layer checks SSNs, card and bank account numbers, passport and
 medical record numbers, provider identifiers (NPI), credentials and CUI
@@ -151,6 +152,7 @@ OPTIONS
   --help, -h    This help
   --            Ends the options; each later argument is an input, so a file
                 name can start with - (aicomply scan -- -notes.txt)
+                A lone - is still stdin after --; name a file called - as ./-
 
 EXIT CODES
   0  CLEAN          no findings from the layers that ran
@@ -173,22 +175,27 @@ _MASKED_VALUE = "•••"
 
 
 def _bom_encoding(data: bytes) -> str | None:
-    """``utf-32`` or ``utf-16`` when ``data`` starts with that encoding's byte
-    order mark, else None. Both codecs read the mark, pick the byte order from
-    it and drop it. FF FE 00 00 is checked first: it is the UTF-32LE mark.
+    """``utf-32``, ``utf-16`` or ``utf-8-sig`` when ``data`` starts with that
+    encoding's byte order mark, else None. Each codec reads the mark and drops
+    it; the first two pick the byte order from it. FF FE 00 00 is checked
+    first: it is the UTF-32LE mark. Kept, the UTF-8 mark was column 1 of the
+    first line, so each finding on that line was one column right of where an
+    editor shows it.
     """
     if data.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
         return "utf-32"
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
         return "utf-16"
+    if data.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-sig"
     return None
 
 
 def _read_stdin() -> tuple[str, int]:
     """The text on stdin and the number of bytes that delivered it.
 
-    Bytes that start with a UTF-32 or UTF-16 byte order mark are decoded in
-    that encoding, without the mark, as in the TS CLI. Other bytes are decoded
+    Bytes that start with a UTF-32, UTF-16 or UTF-8 byte order mark are decoded
+    in that encoding, without the mark, as in the TS CLI. Other bytes are decoded
     with the encoding of ``sys.stdin``, keeping line
     endings except on Windows, where they are translated as in universal-newlines
     mode. A byte sequence the encoding cannot decode becomes U+FFFD and the rest
@@ -283,9 +290,10 @@ def _collect_sources(files: list[str], pipe_unread: bool) -> list[_Source]:
             raise _UsageError(
                 f"cannot read '{f}' (check the path). Try 'aicomply --help'."
             ) from None
-        # UTF-32 or UTF-16 when the file starts with that byte order mark, else
-        # UTF-8, with universal newlines. A byte sequence the encoding cannot
-        # decode becomes U+FFFD and the rest is scanned, as in the TS CLI.
+        # UTF-32, UTF-16 or UTF-8 without the mark when the file starts with
+        # that byte order mark, else UTF-8, with universal newlines. A byte
+        # sequence the encoding cannot decode becomes U+FFFD and the rest is
+        # scanned, as in the TS CLI.
         content = io.TextIOWrapper(
             io.BytesIO(data), encoding=_bom_encoding(data) or "utf-8", errors="replace"
         ).read()
@@ -365,11 +373,37 @@ def _locate_finding(content: str, v: Violation) -> tuple[int, int] | None:
     return None if v.view is None else _locate(content, v.original_start)
 
 
+def _in_input_order(
+    content: str, violations: list[Violation]
+) -> list[tuple[Violation, tuple[int, int] | None]]:
+    """The findings of one input in the order they appear in it: by line, then
+    by column. A finding without a location, such as a Guard finding, follows
+    the located ones. ``list.sort`` is stable, so findings at the same place
+    keep the order comply() gave them.
+    """
+    located = [(v, _locate_finding(content, v)) for v in violations]
+    located.sort(key=lambda pair: (pair[1] is None, pair[1] or (0, 0)))
+    return located
+
+
 def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
     out = sys.stdout
     any_guard = False
     total_findings = 0
     worst = "CLEAN"
+
+    # The type column is as wide as the longest type printed, and at least 12
+    # characters: a Guard class such as exfiltration_pattern (20 characters) is
+    # longer than any pattern class.
+    type_width = max(
+        [12]
+        + [
+            len(v.type)
+            for src, res in zip(sources, results)
+            if src.byte_count > 0 and res.verdict != "CLEAN"
+            for v in res.violations
+        ]
+    )
 
     out.write("\n")
     for src, res in zip(sources, results):
@@ -399,12 +433,11 @@ def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
             continue
         n = len(res.violations)
         out.write(f"   {n} finding{'' if n == 1 else 's'}\n")
-        for v in res.violations:
+        for v, loc in _in_input_order(src.content, res.violations):
             view = f"  view {v.view}" if v.view and v.view != "normalized" else ""
-            loc = _locate_finding(src.content, v)
             where = f"  line {loc[0]} col {loc[1]}" if loc else ""
             out.write(
-                f"    {v.type:<12} {_MASKED_VALUE:<18} confidence {v.confidence:.2f}  "
+                f"    {v.type:<{type_width}} {_MASKED_VALUE:<18} confidence {v.confidence:.2f}  "
                 f"layer {v.classifier}{view}{where}\n"
             )
         out.write("\n")
@@ -453,9 +486,10 @@ def _render_json(sources: list[_Source], results: list[ComplyResult]) -> None:
     payload = [
         {
             "source": src.label,
-            # An input of 0 bytes was not classified; its "layers" is [].
+            # An input of 0 bytes was not classified: its "verdict" is null and
+            # its "layers" is [].
             "bytes": src.byte_count,
-            "verdict": res.verdict,
+            "verdict": None if src.byte_count == 0 else res.verdict,
             "guardActive": _guard_active(res),
             "layers": list(res.layers),
             "findings": [_json_finding(src.content, v) for v in res.violations],

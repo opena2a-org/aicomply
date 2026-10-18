@@ -7,6 +7,7 @@ each finding with its source view and best-effort original-content range.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from ...types import ClassifierResult, Violation, ViolationView
@@ -18,7 +19,9 @@ __all__ = ["classify_with_regex", "scan_patterns", "luhn_check", "PatternMatch"]
 @dataclass
 class ScanViewOptions:
     view: ViolationView = "normalized"
-    offset_map: list[int] | None = None
+    # A list, or an offset map of the normalization stages: an array('I'), or
+    # a range where the view's positions are those of the original content.
+    offset_map: Sequence[int] | None = None
     original_anchor: tuple[int, int] | None = None  # (start, end)
 
 
