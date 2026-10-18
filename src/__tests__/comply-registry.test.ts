@@ -5,6 +5,7 @@
  * Coverage:
  *   - comply() threads sourcePackage + registryCache through to classifyDualLayer
  *   - Supply-chain hard block => DENY via comply()
+ *   - Supply-chain hard block => DENY when the Registry refuses the fleet request
  *   - Fleet anomaly > 0.30 => VIOLATION via comply()
  *   - Cache miss => signals present, verdict unchanged
  *   - Unreachable Registry and absent package => distinct registrySignals.status
@@ -288,6 +289,53 @@ describe('comply(): a package the Registry cannot vouch for', () => {
       throw new TypeError('fetch failed');
     });
   }
+
+  /**
+   * Registry endpoints answer as production does: the fleet request, which
+   * names no package, is refused with 400, and the alert list loads with one
+   * alert for blocked-pkg. Every other URL refuses.
+   */
+  function registryRefusesFleetRequest(): void {
+    jest.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === `${BASE_URL}/api/v1/registry/fleet/anomaly-signal`) {
+        return new Response(JSON.stringify({ error: 'name and type query params are required' }), {
+          status: 400,
+        });
+      }
+      if (url === `${BASE_URL}/api/v1/intelligence/alerts?type=supply_chain`) {
+        const alert = {
+          id: 'sca-fleet-refused',
+          name: 'blocked-pkg',
+          type: 'mcp_server',
+          severity: 'critical',
+          reason: 'typosquatting',
+          publishedAt: '2026-10-18T00:00:00Z',
+        };
+        return new Response(JSON.stringify({ alerts: [alert], total: 1 }));
+      }
+      throw new TypeError('fetch failed');
+    });
+  }
+
+  it('blocks a package with a supply-chain alert when the Registry refuses the fleet request', async () => {
+    registryRefusesFleetRequest();
+    const session = await ClassificationSession.create({ baseUrl: BASE_URL });
+
+    const blocked = await session.comply({ content: 'hello world', sourcePackage: 'blocked-pkg', useGuard: false });
+    const other = await session.comply({ content: 'hello world', sourcePackage: 'any-package', useGuard: false });
+
+    expect(blocked.verdict).toBe('DENY');
+    expect(blocked.registrySignals?.status).toBe('hit');
+    expect(blocked.registrySignals?.supplyChainBlock).toBe(true);
+    expect(blocked.registrySignals?.fleetAnomalyScore).toBeNull();
+    expect(blocked.violations.map(v => v.type)).toEqual(['SUPPLY_CHAIN_ALERT']);
+    expect(blocked.violations[0].value).toBe('sca-fleet-refused');
+    // Without the fleet index, a package with no alert is still unknown.
+    expect(other.verdict).toBe('CLEAN');
+    expect(other.registrySignals?.status).toBe('error');
+    expect(other.registrySignals?.supplyChainBlock).toBe(false);
+  });
 
   it('tells an unreachable Registry from a package absent from its index', async () => {
     registryUnreachable();

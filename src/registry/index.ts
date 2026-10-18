@@ -14,6 +14,11 @@
  * Endpoints (production, verified live 2026-04-14):
  *   GET /api/v1/registry/fleet/anomaly-signal
  *   GET /api/v1/intelligence/alerts?type=supply_chain
+ *
+ * Checked 2026-10-18: production answers the fleet request above, which names
+ * no package, with 400 ("name and type query params are required"), so the
+ * fleet index does not load from it. lookup() reports supply-chain alerts
+ * without the fleet index.
  */
 
 import type {
@@ -94,15 +99,19 @@ export class RegistryIntelligenceCache {
       return { status: 'hit', intelligence: cached };
     }
 
-    // Check if fleet data is available but package is simply not in the index
-    const fleetDataLoaded = this.lastFleetFetch > 0;
-    if (!fleetDataLoaded) {
-      // Cache was never warmed - report as error so caller elevates risk
-      return { status: 'error', reason: 'registry cache not warmed' };
-    }
-
     const fleetSignal = this.fleetIndex.get(key) ?? null;
     const supplyAlerts = this.supplyChainIndex.get(key) ?? null;
+
+    // The supply-chain hard block needs only the alert list, so an alert for
+    // the package is a hit whether or not the fleet index loaded. Without the
+    // fleet index, a package with no alert is an error, not a miss, so the
+    // caller elevates risk (AC-002).
+    if (this.lastFleetFetch === 0 && supplyAlerts === null) {
+      return {
+        status: 'error',
+        reason: this.lastSupplyChainFetch > 0 ? 'fleet anomaly signal not loaded' : 'registry cache not warmed',
+      };
+    }
 
     if (fleetSignal === null && supplyAlerts === null) {
       // Package not found in either index => unknown (AC-002: elevate risk)

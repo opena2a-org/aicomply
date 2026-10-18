@@ -51,7 +51,8 @@ posture - not a complete control.
 - Registry intelligence cache integrity (a cache miss, or a fleet index that never
   loaded, is reported as `registrySignals.status` `miss` or `error`, never as a
   `hit`; it changes the verdict only when the caller sets `onRegistryUnknown` -
-  contract AC-002)
+  contract AC-002. A package with a supply-chain alert is a `hit` and is
+  blocked whether or not the fleet index loaded)
 
 ### Adversarial-mutation handling (covered in 1.0)
 
@@ -195,11 +196,18 @@ regex-only.
   content from a package the Registry has no data for is still `CLEAN`.
   `registrySignals.status` says which case it was: `miss` when the fleet
   index loaded and the package is in neither index, `error` when the
-  fleet index has never loaded (the cache was not warmed, or every fetch
-  so far failed). Pass `onRegistryUnknown: 'violation'` or `'deny'` to
-  `comply()` to fail closed on both. A failed supply-chain alert fetch
-  is not reported on its own: when the fleet index loaded, the status is
-  `hit` or `miss` from the data that did load.
+  fleet index has never loaded (the cache was not warmed, or every fleet
+  fetch so far failed) and the package has no supply-chain alert. Pass
+  `onRegistryUnknown: 'violation'` or `'deny'` to `comply()` to fail
+  closed on both. A failed supply-chain alert fetch is not reported on
+  its own: when the fleet index loaded, the status is `hit` or `miss`
+  from the data that did load. A failed fleet fetch does not stop the
+  hard block: a package with an alert in a loaded alert list is a `hit`
+  and the verdict is `DENY`. The production Registry answers the fleet
+  request this version sends, which names no package, with HTTP 400
+  (checked 2026-10-18), so the fleet index does not load from it, the
+  fleet anomaly threshold does not apply, and a package with no alert
+  is `error`.
 - **NanoMind-Guard semantic classifier.** The model has shipped
   (`nanomind-security-classifier` tme-v0.5.0, served by `@nanomind/daemon`
   over HTTP), but the Guard is a preview: the current model over-flags

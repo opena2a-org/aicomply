@@ -5,6 +5,7 @@
  *   - warm-start happy path (fleet + supply-chain)
  *   - AC-002: cache miss treated as unknown, not clean
  *   - AC-002: fetch error treated as unknown
+ *   - a refused fleet request: a loaded supply-chain alert is still a hit
  *   - AC-005: lookup() does no network I/O
  *   - cache TTL expiry
  *   - lookup before warm returns error
@@ -65,6 +66,29 @@ function mockFetchError(): void {
 
 function mockFetchNotOk(): void {
   global.fetch = jest.fn().mockResolvedValue({ ok: false }) as jest.Mock;
+}
+
+/**
+ * Answer as the production Registry does: the fleet request, which names no
+ * package, is refused with 400, and the supply-chain alert list loads.
+ */
+function mockFleetRefused(supplyAlerts: SupplyChainAlert[]): void {
+  global.fetch = jest.fn().mockImplementation((url: string) => {
+    if (url.includes('fleet/anomaly-signal')) {
+      return Promise.resolve({
+        ok: false,
+        status: 400,
+        json: () => Promise.resolve({ error: 'name and type query params are required' }),
+      });
+    }
+    if (url.includes('intelligence/alerts')) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ alerts: supplyAlerts, total: supplyAlerts.length }),
+      });
+    }
+    return Promise.resolve({ ok: false });
+  }) as jest.Mock;
 }
 
 afterEach(() => {
@@ -161,6 +185,34 @@ describe('RegistryIntelligenceCache', () => {
 
       const result = cache.lookup('example-agent');
       expect(result.status).toBe('error');
+    });
+  });
+
+  describe('fleet request refused, supply-chain alert list loaded', () => {
+    it('returns hit with the alerts for a package that has one', async () => {
+      mockFleetRefused([SUPPLY_ALERT]);
+      const cache = new RegistryIntelligenceCache();
+      await cache.warm();
+
+      const result = cache.lookup('Example-Agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.fleetAnomalySignal).toBeNull();
+        expect(result.intelligence.supplyChainAlerts?.map(a => a.id)).toEqual(['alert-001']);
+      }
+      expect(cache.fleetIndexSize()).toBe(0);
+    });
+
+    it('returns error naming the fleet signal for a package without one', async () => {
+      mockFleetRefused([SUPPLY_ALERT]);
+      const cache = new RegistryIntelligenceCache();
+      await cache.warm();
+
+      const result = cache.lookup('unknown-pkg');
+      expect(result.status).toBe('error');
+      if (result.status === 'error') {
+        expect(result.reason).toBe('fleet anomaly signal not loaded');
+      }
     });
   });
 

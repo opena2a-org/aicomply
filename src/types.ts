@@ -10,11 +10,12 @@ export type { RegistryCacheOptions };
 /**
  * What the Registry cache had for a source package. Derived structurally
  * from `RegistryLookupResult['status']` so the two cannot drift.
- *   - 'hit':   the package is in the fleet index or has supply-chain alerts.
+ *   - 'hit':   the package is in the fleet index or has supply-chain alerts,
+ *              whether or not the fleet index loaded.
  *   - 'miss':  the fleet index loaded and the package is in neither index.
  *   - 'error': the fleet index has never loaded (cache not warmed, or every
- *              fetch so far failed), or no cache was supplied to look the
- *              package up in.
+ *              fleet fetch so far failed) and the package has no supply-chain
+ *              alert, or no cache was supplied to look the package up in.
  */
 export type RegistryLookupStatus = RegistryLookupResult['status'];
 
