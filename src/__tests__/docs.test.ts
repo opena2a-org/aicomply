@@ -9,7 +9,9 @@
  * The tracked Markdown also points readers only at a change record the
  * repository has: a CHANGELOG mention needs a tracked CHANGELOG file.
  * The 2.3.0 release notes lead with the exit-code change, repeat the README's
- * staged-diff gate line, and end with the known issues.
+ * staged-diff gate line, and end with the known issues, whose fleet entry
+ * names the package that is not listed as the one without a fleet signal and
+ * does not say the threshold does not apply against the production Registry.
  */
 
 import { execFileSync } from 'child_process';
@@ -318,5 +320,17 @@ describe('2.3.0 release notes', () => {
     const known = notes().slice(notes().indexOf('## Known issues'));
     expect(known).toContain('https://github.com/opena2a-org/aicomply/issues/205');
     expect(known).toContain("onRegistryUnknown: 'deny'");
+  });
+
+  it('name the package the open part of #205 leaves without a fleet signal', () => {
+    const known = notes().slice(notes().indexOf('## Known issues'));
+    // The cache sends the fleet request with a name and type for each package
+    // listed in sourcePackages or passed to addSourcePackages(), so the entry
+    // names the package that is not listed as the one without a fleet signal,
+    // and does not say the threshold does not apply against the production
+    // Registry as a whole. The patterns allow a line wrap inside the phrase.
+    expect(known).toMatch(/package\s+that\s+is\s+not\s+listed/);
+    expect(known).toContain('`addSourcePackages()`');
+    expect(known).not.toMatch(/threshold\s+does\s+not\s+apply\s+against/i);
   });
 });
