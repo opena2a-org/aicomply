@@ -202,6 +202,53 @@ def test_json_bytes_match_the_ts_cli_on_a_file_with_a_finding(tmp_path):
     assert py.stdout == ts.stdout
 
 
+# The report was written as text to sys.stdout, which encodes in the locale's
+# encoding or PYTHONIOENCODING's. ascii, latin-1, cp932 and KOI8-R have no code
+# for the "•" of the masked value, so --json printed nothing and the run exited
+# 2; cp1252 wrote it as the byte 0x95. The TS CLI prints UTF-8 under a latin-1
+# locale as well, so each of these gets the bytes a UTF-8 stdout gets.
+_NOT_UTF8_STDOUT_ENCODINGS = ["ascii", "latin-1", "cp1252", "cp932", "koi8-r"]
+
+
+@pytest.mark.parametrize("flags", [["--json"], []], ids=["json", "human"])
+@pytest.mark.parametrize("encoding", _NOT_UTF8_STDOUT_ENCODINGS)
+def test_report_is_the_utf8_bytes_on_a_stdout_in_another_encoding(
+    tmp_path, capsys, encoding, flags
+):
+    f = tmp_path / "f.txt"
+    f.write_text("SSN 078-05-1120\n")
+    assert run(["scan", str(f), *flags]) == 1
+    utf8 = capsys.readouterr().out.encode("utf-8")
+    assert "•••".encode() in utf8
+    stdout = io.TextIOWrapper(io.BytesIO(), encoding=encoding)
+    with contextlib.redirect_stdout(stdout):
+        assert run(["scan", str(f), *flags]) == 1
+    stdout.flush()
+    assert stdout.buffer.getvalue() == utf8
+
+
+def test_json_under_pythonioencoding_ascii_or_latin1_prints_the_utf8_report(tmp_path):
+    (tmp_path / "f.txt").write_text("SSN 078-05-1120\n")
+
+    def scan(encoding: str) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [sys.executable, "-m", "aicomply", "scan", "--json", "f.txt"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            cwd=tmp_path,
+            env={**os.environ, "PYTHONPATH": _PACKAGE_PARENT, "PYTHONIOENCODING": encoding},
+            timeout=60,
+            check=False,
+        )
+
+    utf8 = scan("utf-8")
+    assert (utf8.returncode, utf8.stderr) == (1, b"")
+    assert b'"maskedValue": "\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2"' in utf8.stdout
+    for encoding in ("ascii", "latin-1"):
+        result = scan(encoding)
+        assert (result.returncode, result.stderr, result.stdout) == (1, b"", utf8.stdout)
+
+
 def test_json_prints_null_view_for_a_finding_without_one(capsys):
     # A Guard finding does not come from a content view; the JSON used to
     # default it to "normalized", claiming a canonicalization that never ran.
