@@ -116,15 +116,34 @@ describe('aicomply CLI', () => {
     expect(cap.out.join('')).toMatch(/^\d+\.\d+\.\d+/);
   });
 
-  // Drift guard: the hardcoded CLI VERSION must match package.json. A version
-  // bump that forgets the constant would otherwise ship a CLI reporting the
-  // wrong version (caught at release 2.2.1).
+  // Drift guard: --version must match package.json (a CLI reporting the wrong
+  // version was caught at release 2.2.1).
   it('--version matches package.json version', async () => {
     const pkg = require('../../package.json') as { version: string };
     const cap = capture();
     await run(['--version']);
     cap.restore();
     expect(cap.out.join('').trim()).toBe(pkg.version);
+  });
+
+  // package.json is the one version source: `npm version` bumps only that file,
+  // so --version must follow it rather than a literal in the CLI source.
+  it('--version reports the version package.json holds at run time', async () => {
+    const realRead = fs.readFileSync;
+    const readSpy = jest
+      .spyOn(fs, 'readFileSync')
+      .mockImplementation(((path: fs.PathOrFileDescriptor, options?: unknown) =>
+        typeof path === 'string' && path.endsWith('package.json')
+          ? JSON.stringify({ name: '@opena2a/aicomply', version: '9.8.7' })
+          : realRead(path, options as BufferEncoding)) as typeof fs.readFileSync);
+    const cap = capture();
+    try {
+      await run(['--version']);
+    } finally {
+      cap.restore();
+      readSpy.mockRestore();
+    }
+    expect(cap.out.join('').trim()).toBe('9.8.7');
   });
 
   it('--help exits 0 and documents the scan command', async () => {

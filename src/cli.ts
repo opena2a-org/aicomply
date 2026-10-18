@@ -24,9 +24,7 @@ import { comply } from './index';
 import { DEFAULT_NANOMIND_DAEMON_URL } from './classifier/guard-client/nanomind-adapter';
 import { PATTERN_TYPES } from './classifier/regex/pack';
 import type { ComplyResult, Violation } from './types';
-
-// Keep in sync with package.json version on every release bump.
-const VERSION = '2.2.3';
+import { packageVersion } from './version';
 
 /**
  * A recoverable usage error (exit code 2). Thrown rather than calling
@@ -553,7 +551,7 @@ async function runInner(argv: string[]): Promise<number> {
   const args = parseArgs(argv);
 
   if (args.version) {
-    process.stdout.write(`${VERSION}\n`);
+    process.stdout.write(`${packageVersion()}\n`);
     return 0;
   }
   // Scan-scoped help: `aicomply scan --help` documents the scan command and its
