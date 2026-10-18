@@ -7,6 +7,7 @@ import io
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -20,6 +21,8 @@ import aicomply
 from aicomply.classifier.regex.pack import PATTERN_TYPES
 from aicomply.cli import _files_glob, _locate, _render_human, _render_json, _Source, run
 from aicomply.types import ClassifierResult, ComplyResult, Violation
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _pipe_stdin(monkeypatch, data: bytes) -> None:
@@ -157,6 +160,46 @@ def test_scan_json_output(tmp_path, capsys):
     assert "maskedValue" in payload[0]["findings"][0]
     assert "4111111111111111" not in json.dumps(payload)
     assert payload[0]["findings"][0]["view"] == "normalized"
+
+
+# json.dumps escaped the masked value as "•••"; the TS CLI's
+# JSON.stringify prints the characters themselves.
+def test_json_prints_the_masked_value_unescaped(tmp_path, capsys):
+    f = tmp_path / "pii.txt"
+    f.write_text("SSN 078-05-1120\n")
+    assert run(["scan", str(f), "--json"]) == 1
+    out = capsys.readouterr().out
+    assert '"maskedValue": "•••"' in out
+    assert "\\u" not in out
+
+
+_TS_CLI = _REPO_ROOT / "dist" / "cli.js"
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None or not _TS_CLI.is_file(),
+    reason="needs node and the built TS CLI (npm run build)",
+)
+def test_json_bytes_match_the_ts_cli_on_a_file_with_a_finding(tmp_path):
+    (tmp_path / "f.txt").write_bytes("SSN 078-05-1120\né\n".encode())
+    ts = subprocess.run(
+        ["node", str(_TS_CLI), "scan", "--json", "f.txt"],
+        capture_output=True,
+        cwd=tmp_path,
+        timeout=60,
+        check=False,
+    )
+    py = subprocess.run(
+        [sys.executable, "-m", "aicomply", "scan", "--json", "f.txt"],
+        capture_output=True,
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": _PACKAGE_PARENT, "PYTHONIOENCODING": "utf-8"},
+        timeout=60,
+        check=False,
+    )
+    assert (ts.returncode, py.returncode) == (1, 1)
+    assert b'"maskedValue": "\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2"' in ts.stdout
+    assert py.stdout == ts.stdout
 
 
 def test_json_prints_null_view_for_a_finding_without_one(capsys):

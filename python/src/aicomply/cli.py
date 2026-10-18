@@ -496,7 +496,9 @@ def _render_json(sources: list[_Source], results: list[ComplyResult]) -> None:
         }
         for src, res in zip(sources, results)
     ]
-    sys.stdout.write(json.dumps(payload, indent=2) + "\n")
+    # ensure_ascii=False prints "•••" as the TS CLI's JSON.stringify does, not
+    # as • escapes, so both CLIs print the same bytes.
+    sys.stdout.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
 
 def run(argv: list[str]) -> int:
