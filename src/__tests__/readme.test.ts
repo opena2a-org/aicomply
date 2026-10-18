@@ -429,6 +429,20 @@ describe('README', () => {
     expect(sentence.search(/e-?mail address/i)).toBeLessThan(sentence.indexOf('a request phrased'));
   });
 
+  it('names passwords in connection strings in what it does not detect', () => {
+    // The pattern pack has no rule for a password in a connection-string URL,
+    // so a DATABASE_URL line that holds one is CLEAN; the list did not say so.
+    const heading = lineOf(/^## What this package does NOT detect$/, 1, DETECTION_LINES);
+    expect(heading).toBeGreaterThan(0);
+    const next = lineOf(/^#/, heading + 1, DETECTION_LINES);
+    const section = DETECTION_LINES.slice(heading, next === -1 ? undefined : next - 1);
+    const bullet = section.find((l) => l.startsWith('- **Passwords in connection strings.**')) ?? '';
+    expect(bullet).toContain('`DATABASE_URL=`');
+    expect(bullet).toContain('`CLEAN`');
+    // The bullet says the pack has no rule for such a password.
+    expect(readFileSync(join(ROOT, 'pack', 'patterns.json'), 'utf8')).not.toMatch(/password/i);
+  });
+
   it('names the one build the package ships', () => {
     // package.json has no ESM entry beside `main`; ESM reaches the CommonJS
     // build through Node's interop. Adding one means updating this README claim.

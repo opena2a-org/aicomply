@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import base64
+from array import array
 from urllib.parse import quote
 
-from aicomply.normalize import normalize
+from aicomply.normalize import normalize, normalize_for_scan
 from aicomply.normalize.encoded import extract_encoded
 from aicomply.normalize.nfkc import normalize_nfkc
 from aicomply.normalize.whitespace import build_compact_form
@@ -94,3 +95,35 @@ def test_normalize_full_pipeline_through_comply_views():
     # End-to-end: an SSN hidden behind zero-width chars is caught on normalized view.
     res = normalize("SSN 5​1​6-​8​1-​3​0​8​6")
     assert "516-81-3086" in res.normalized_content
+
+
+# Each stage copies the text it does not change as slices and holds its offset
+# map as an array('I'), allocated only once a character of its output comes
+# from another index of its input (mirror of the TS normalize tests).
+def test_offset_map_when_only_the_last_character_is_stripped():
+    # NFKC turns U+FB01 into "fi", both from index 0; the trailing U+200B goes.
+    r = normalize("\N{LATIN SMALL LIGATURE FI}le 078-05-1120\N{ZERO WIDTH SPACE}")
+    assert r.normalized_content == "file 078-05-1120"
+    assert r.offset_map == [0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+
+
+def test_normalize_for_scan_holds_no_offset_map_for_content_no_stage_changes():
+    content = "Customer SSN 078-05-1120 on file\n" * 1000
+    r = normalize_for_scan(content)
+    assert r.normalized_content is content
+    assert r.offset_map == range(len(content))
+    assert r.decoded_extractions == []
+
+
+def test_normalize_for_scan_holds_the_offset_maps_of_normalize_as_arrays():
+    text = "\N{FULLWIDTH DIGIT ONE} 2 3-45-6789 \N{LATIN SMALL LIGATURE FI}le\N{ZERO WIDTH SPACE}"
+    scan = normalize_for_scan(text)
+    full = normalize(text)
+    assert isinstance(scan.offset_map, array) and scan.offset_map.typecode == "I"
+    assert list(scan.offset_map) == full.offset_map
+    [compact] = [e for e in scan.decoded_extractions if e.source == "compact"]
+    [full_compact] = [e for e in full.decoded_extractions if e.source == "compact"]
+    assert isinstance(compact.offset_map, array) and compact.offset_map.typecode == "I"
+    assert list(compact.offset_map) == full_compact.offset_map
+    # normalize() returns lists, as before.
+    assert type(full.offset_map) is list and type(full_compact.offset_map) is list

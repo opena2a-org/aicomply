@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+from .offset_map import OffsetMap
+
 NormalizationTransform = Literal[
     "nfkc", "strip-zero-width", "compact-whitespace", "decode-base64", "decode-url"
 ]
@@ -42,3 +44,27 @@ class NormalizationResult:
     offset_map: list[int]
     steps: list[NormalizationStep] = field(default_factory=list)
     decoded_extractions: list[DecodedExtraction] = field(default_factory=list)
+
+
+@dataclass
+class ScanExtraction:
+    """A DecodedExtraction whose offset map is an ``OffsetMap`` (see ``.offset_map``)."""
+
+    decoded: str
+    original_start: int
+    original_end: int
+    source: DecodedSource
+    depth: int
+    offset_map: OffsetMap | None = None
+
+
+@dataclass
+class ScanNormalization:
+    """The views the regex layer scans: a NormalizationResult whose offset maps
+    are ``OffsetMap``s, a ``range`` where a map is the identity."""
+
+    original_content: str
+    normalized_content: str
+    offset_map: OffsetMap
+    steps: list[NormalizationStep] = field(default_factory=list)
+    decoded_extractions: list[ScanExtraction] = field(default_factory=list)

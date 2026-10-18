@@ -214,7 +214,7 @@ export interface ComplyResult {
    * The pattern pack the regex layer ran. Always set by comply(), including
    * on DENY and on the empty-content short-circuit.
    */
-  pack?: PackIdentity;
+  pack: PackIdentity;
   /**
    * The layers that ran on the content, in order. 'guard' is listed only
    * when a Guard classification was accepted into the result (the daemon
@@ -222,5 +222,5 @@ export interface ComplyResult {
    * a regex-only fallback or a rejected signature never claims it. Empty when
    * there was no content to classify. Always set by comply().
    */
-  layers?: ComplyLayer[];
+  layers: ComplyLayer[];
 }

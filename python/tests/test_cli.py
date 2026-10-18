@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
@@ -9,6 +10,7 @@ import re
 import socket
 import subprocess
 import sys
+import tracemalloc
 from pathlib import Path
 from typing import IO
 
@@ -16,7 +18,7 @@ import pytest
 
 import aicomply
 from aicomply.classifier.regex.pack import PATTERN_TYPES
-from aicomply.cli import _files_glob, _locate, _render_json, _Source, run
+from aicomply.cli import _files_glob, _locate, _render_human, _render_json, _Source, run
 from aicomply.types import ClassifierResult, ComplyResult, Violation
 
 
@@ -256,6 +258,90 @@ def test_column_counts_a_character_outside_the_bmp_once(tmp_path, capsys):
     assert finding_line.endswith("layer regex  line 1 col 8")
 
 
+# The human output printed the findings of an input in the order comply() gives
+# them, highest confidence first: lines 3, 2, 7, 4, 6, 5 and 1 of the file below.
+# A finding line also had room for a type of 12 characters, which a Guard class
+# such as exfiltration_pattern (20) overflowed (mirror of the TS CLI tests).
+def _finding_lines(out: str) -> list[str]:
+    return [line for line in out.split("\n") if re.match(r" {4}\S", line)]
+
+
+def test_human_output_prints_the_findings_of_an_input_by_line_then_column(tmp_path, capsys):
+    f = tmp_path / "seven.txt"
+    f.write_text(
+        "Record: Passport-SW232303697.\n"
+        "Record: SSN 078-05-1120.\n"
+        "Record: CUI//BASIC.\n"
+        "Record: MRN-L704K9.\n"
+        "Record: NPI: 6928576605.\n"
+        "Record: DE53083497798682044097.\n"
+        "Record: card 4111 1111 1111 1111, SSN 219-09-9999.\n"
+    )
+    assert run(["scan", str(f)]) == 1
+    printed = []
+    for line in _finding_lines(capsys.readouterr().out):
+        m = re.match(r" {4}(\S+) .* line (\d+) col (\d+)$", line)
+        assert m, line
+        printed.append((m.group(1), int(m.group(2)), int(m.group(3))))
+    assert printed == [
+        ("PASSPORT", 1, 9),
+        ("SSN", 2, 13),
+        ("CUI", 3, 9),
+        ("MRN", 4, 9),
+        ("NPI", 5, 9),
+        ("IBAN", 6, 9),
+        ("PAN", 7, 14),
+        ("SSN", 7, 39),
+    ]
+
+
+_ORDER_CONTENT = "line one\nSSN 078-05-1120\n"
+_ORDER_SSN = Violation(
+    type="SSN", value="078-...20", start=13, end=24, confidence=0.95, classifier="regex",
+    view="normalized", original_start=13, original_end=24,
+)
+
+
+def _guard_violation(attack_class: str) -> Violation:
+    return Violation(
+        type=attack_class, value=attack_class, start=0, end=len(_ORDER_CONTENT),
+        confidence=0.9, classifier="guard",
+    )
+
+
+def _render_violations(violations: list[Violation]) -> list[str]:
+    result = ComplyResult(
+        verdict="VIOLATION",
+        violations=violations,
+        classifier_results={
+            "regex": ClassifierResult(classifier="regex", verdict="VIOLATION"),
+            "guard": ClassifierResult(classifier="guard", verdict="VIOLATION"),
+        },
+    )
+    source = _Source(label="x.txt", content=_ORDER_CONTENT, byte_count=len(_ORDER_CONTENT))
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        _render_human([source], [result])
+    return _finding_lines(out.getvalue())
+
+
+def test_human_output_prints_a_finding_without_a_location_after_the_located_ones():
+    lines = _render_violations([_guard_violation("tool_misuse"), _ORDER_SSN])
+    assert [line.split()[0] for line in lines] == ["SSN", "tool_misuse"]
+    assert lines[0].endswith("layer regex  line 2 col 5")
+    assert lines[1].endswith("layer guard")
+
+
+def test_human_output_widens_the_type_column_to_the_longest_type_printed():
+    lines = _render_violations(
+        [_ORDER_SSN, _guard_violation("exfiltration_pattern"), _guard_violation("prompt_injection")]
+    )
+    assert len(lines) == 3
+    assert re.match(r" {4}SSN {18}••• ", lines[0])
+    assert re.match(r" {4}exfiltration_pattern ••• ", lines[1])
+    assert re.match(r" {4}prompt_injection {5}••• ", lines[2])
+
+
 def test_scan_quiet(tmp_path, capsys):
     f = tmp_path / "pii.txt"
     f.write_text("SSN 516-81-3086")
@@ -361,9 +447,12 @@ def test_file_that_is_not_utf8_is_scanned_with_replacement_characters(tmp_path, 
 
 # Text that starts with a UTF-32 or UTF-16 byte order mark is decoded in that
 # encoding without the mark. Decoded as UTF-8 it reached the patterns with NUL
-# characters between its letters and was reported CLEAN.
+# characters between its letters and was reported CLEAN. The UTF-8 mark is
+# dropped too: kept, it was column 1, so the SSN was at column 15 where an
+# editor shows 14. The TS CLI tests check the same inputs.
 _BOM_TEXT = "Customer SSN 078-05-1120 on file\n"
 _BOM_INPUTS = {
+    "utf-8": b"\xef\xbb\xbf" + _BOM_TEXT.encode("utf-8"),
     "utf-16-le": b"\xff\xfe" + _BOM_TEXT.encode("utf-16-le"),
     "utf-16-be": b"\xfe\xff" + _BOM_TEXT.encode("utf-16-be"),
     "utf-32-le": b"\xff\xfe\x00\x00" + _BOM_TEXT.encode("utf-32-le"),
@@ -380,9 +469,7 @@ def _assert_bom_entry_is_scanned(entry: dict, source: str, data: bytes) -> None:
 
 
 @pytest.mark.parametrize("encoding", sorted(_BOM_INPUTS))
-def test_file_with_a_utf16_or_utf32_byte_order_mark_is_decoded_in_that_encoding(
-    encoding, tmp_path, capsys
-):
+def test_file_with_a_byte_order_mark_is_decoded_in_that_encoding(encoding, tmp_path, capsys):
     data = _BOM_INPUTS[encoding]
     f = tmp_path / f"{encoding}.txt"
     f.write_bytes(data)
@@ -397,9 +484,7 @@ def test_file_with_a_utf16_or_utf32_byte_order_mark_is_decoded_in_that_encoding(
 
 
 @pytest.mark.parametrize("encoding", sorted(_BOM_INPUTS))
-def test_stdin_with_a_utf16_or_utf32_byte_order_mark_is_decoded_in_that_encoding(
-    encoding, monkeypatch, capsys
-):
+def test_stdin_with_a_byte_order_mark_is_decoded_in_that_encoding(encoding, monkeypatch, capsys):
     data = _BOM_INPUTS[encoding]
     _pipe_stdin(monkeypatch, data)
     assert run(["scan", "--json"]) == 1
@@ -457,6 +542,41 @@ def test_input_of_0_bytes_beside_others_is_reported_and_scanned_inputs_decide(tm
 
     assert run(["scan", str(empty), str(dirty), "--quiet"]) == 1
     assert capsys.readouterr().out == "VIOLATION\n"
+
+
+# The human output gives an input of 0 bytes no verdict; --json gave it "CLEAN",
+# a verdict no layer reached (mirror of the TS CLI tests).
+def test_json_gives_an_input_of_0_bytes_beside_others_a_null_verdict(tmp_path, capsys):
+    empty = tmp_path / "empty-json.txt"
+    dirty = tmp_path / "dirty-json.txt"
+    empty.write_bytes(b"")
+    dirty.write_bytes(b"SSN 078-05-1120\n")
+    assert run(["scan", "--json", str(empty), str(dirty)]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    empty_entry, dirty_entry = json.loads(captured.out)
+    assert empty_entry == {
+        "source": str(empty),
+        "bytes": 0,
+        "verdict": None,
+        "guardActive": False,
+        "layers": [],
+        "findings": [],
+    }
+    assert (dirty_entry["source"], dirty_entry["verdict"]) == (str(dirty), "VIOLATION")
+
+    run(["scan", "--help"])
+    assert '(--json: "bytes": 0, "verdict": null,\n"layers": [])' in capsys.readouterr().out
+
+
+def test_a_second_utf8_byte_order_mark_stays_in_the_text(tmp_path, capsys):
+    # Only the mark at the start is dropped: the next U+FEFF is a character of
+    # the text, so the SSN after it is at column 6.
+    f = tmp_path / "two-marks.txt"
+    f.write_bytes(b"\xef\xbb\xbf\xef\xbb\xbfSSN 078-05-1120\n")
+    assert run(["scan", str(f), "--json"]) == 1
+    [finding] = json.loads(capsys.readouterr().out)[0]["findings"]
+    assert (finding["type"], finding["line"], finding["column"]) == ("SSN", 1, 6)
 
 
 def test_help_gives_the_exit_code_for_no_input(capsys):
@@ -571,6 +691,46 @@ def test_help_documents_double_dash(capsys):
             "  --            Ends the options; each later argument is an input, so a file\n"
             "                name can start with - (aicomply scan -- -notes.txt)\n"
         ) in capsys.readouterr().out
+
+
+# A lone - after -- is stdin, as it is for cat and grep; the help said every
+# argument after -- is an input and did not say how to name a file called -
+# (mirror of the TS CLI tests).
+def test_lone_dash_after_double_dash_reads_stdin(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    _pipe_stdin(monkeypatch, b"SSN 078-05-1120\n")
+    assert run(["scan", "--json", "--", "-"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert [(p["source"], p["verdict"]) for p in payload] == [("(stdin)", "VIOLATION")]
+
+
+def test_file_called_dash_is_scanned_as_dot_slash_dash(tmp_path, monkeypatch, capsys):
+    (tmp_path / "-").write_text("SSN 078-05-1120\n")
+    monkeypatch.chdir(tmp_path)
+    assert run(["scan", "--json", "./-"]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert [(p["source"], p["verdict"]) for p in payload] == [("./-", "VIOLATION")]
+
+
+def test_help_says_a_lone_dash_after_double_dash_is_stdin(capsys):
+    for argv in (["--help"], ["scan", "--help"]):
+        run(argv)
+        assert (
+            "                name can start with - (aicomply scan -- -notes.txt)\n"
+            "                A lone - is still stdin after --; name a file called - as ./-\n"
+        ) in capsys.readouterr().out
+
+
+# --quiet, -q and --help, -h had a space after the comma; --version,-V did not.
+def test_help_puts_a_space_after_the_comma_of_each_short_form(capsys):
+    run(["--help"])
+    out = capsys.readouterr().out
+    assert "  --version, -V Print version\n" in out
+    assert ",-" not in out
 
 
 # With files named and no ``-`` among them, stdin is not scanned. These tests run
@@ -728,3 +888,30 @@ def test_scan_prints_no_characters_of_a_detected_value(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     masked = {x["type"]: x["maskedValue"] for x in payload[0]["findings"]}
     assert masked == {"PASSPORT": "•••", "MRN": "•••", "SSN": "•••"}
+
+
+# Normalization held a list entry and an int object for each character of each
+# view of the content: about 250 bytes of Python objects for each byte of these
+# lines, so 77,821 of them (18,988,324 bytes) reached a peak resident set of
+# 5.0 GB. The views now share the text they did not change, and a stage holds
+# an offset map, 4 bytes an entry, only once it moves a character.
+_MEMORY_LINE = (
+    "Customer SSN 078-05-1120 paid with 4111 1111 1111 1111 and asked for a receipt by"
+    " mail; the agent confirmed the order, noted the delivery window and closed the ticket"
+    " after the call ended without any further questions from the customer at all.\n"
+)
+
+
+def test_scan_holds_a_small_multiple_of_the_input_in_memory(tmp_path, capsys):
+    f = tmp_path / "large.txt"
+    f.write_text(_MEMORY_LINE * 2000)
+    size = f.stat().st_size
+    tracemalloc.start()
+    try:
+        code = run(["scan", "--json", str(f)])
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert code == 1
+    assert len(json.loads(capsys.readouterr().out)[0]["findings"]) == 4000
+    assert peak < 50 * size

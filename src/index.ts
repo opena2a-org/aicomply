@@ -80,7 +80,7 @@ import { packIdentity } from './classifier/regex/pack';
 import { RegistryIntelligenceCache } from './registry';
 import { builtInPolicyPackNames, isBuiltInPolicyPackName, loadPolicyPack } from './policy';
 import { showString } from './show-string';
-import type { DualLayerOptions } from './classifier/dual-layer';
+import type { ClassifiedResult, DualLayerOptions } from './classifier/dual-layer';
 import type { NanoMindAdapterOptions } from './classifier/guard-client/nanomind-adapter';
 import type {
   ClassificationSessionOptions,
@@ -199,12 +199,12 @@ export async function comply(
       verdict: 'CLEAN',
       violations: [],
     };
-    const classified = (await verifySuppliedGuard('', regex, mergedOptions)) ?? {
+    const classified: ClassifiedResult = (await verifySuppliedGuard('', regex, mergedOptions)) ?? {
       verdict: 'CLEAN',
       violations: [],
       classifierResults: { regex },
     };
-    const result = applyRegistryAndPolicy(
+    const result = applyRegistryAndPolicy<ComplyResult>(
       {
         ...classified,
         originalContent: opts.content ?? '',

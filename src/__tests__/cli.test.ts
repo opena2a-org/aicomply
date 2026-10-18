@@ -321,6 +321,49 @@ describe('aicomply CLI', () => {
         );
       }
     });
+
+    // A lone - after -- is stdin, as it is for cat and grep; the help said
+    // every argument after -- is an input and did not say how to name a file
+    // called -.
+    it('reads a lone - after -- as stdin', async () => {
+      pipeStdin('SSN 078-05-1120\n');
+      const cap = capture();
+      const code = await inDir(() => run(['scan', '--json', '--', '-']));
+      cap.restore();
+      expect({ code, err: cap.err.join('') }).toEqual({ code: 1, err: '' });
+      expect(JSON.parse(cap.out.join(''))).toMatchObject([{ source: '(stdin)', verdict: 'VIOLATION' }]);
+    });
+
+    it('scans a file called - named as ./-', async () => {
+      fixture('-', 'SSN 078-05-1120\n');
+      const cap = capture();
+      const code = await inDir(() => run(['scan', '--json', './-']));
+      cap.restore();
+      expect({ code, err: cap.err.join('') }).toEqual({ code: 1, err: '' });
+      expect(JSON.parse(cap.out.join(''))).toMatchObject([{ source: './-', verdict: 'VIOLATION' }]);
+    });
+
+    it('says in --help and scan --help that a lone - after -- is stdin', async () => {
+      for (const argv of [['--help'], ['scan', '--help']]) {
+        const cap = capture();
+        await run(argv);
+        cap.restore();
+        expect(cap.out.join('')).toContain(
+          '                name can start with - (aicomply scan -- -notes.txt)\n' +
+            '                A lone - is still stdin after --; name a file called - as ./-\n',
+        );
+      }
+    });
+  });
+
+  // --quiet, -q and --help, -h had a space after the comma; --version,-V did not.
+  it('puts a space after the comma of each option with a short form in --help', async () => {
+    const cap = capture();
+    await run(['--help']);
+    cap.restore();
+    const out = cap.out.join('');
+    expect(out).toContain('  --version, -V Print version\n');
+    expect(out).not.toContain(',-');
   });
 
   it('clean content exits 0', async () => {
@@ -736,6 +779,32 @@ describe('aicomply CLI', () => {
       expect(capQuiet.out.join('')).toBe('VIOLATION\n');
     });
 
+    // The human output gives an input of 0 bytes no verdict; --json gave it
+    // "CLEAN", a verdict no layer reached.
+    it('gives an input of 0 bytes beside others a null verdict in --json', async () => {
+      const empty = fixture('empty-json.txt', '');
+      const dirty = fixture('dirty-json.txt', 'SSN 078-05-1120\n');
+      const cap = capture();
+      const code = await run(['scan', '--json', empty, dirty]);
+      cap.restore();
+      expect({ code, err: cap.err.join('') }).toEqual({ code: 1, err: '' });
+      const [emptyEntry, dirtyEntry] = JSON.parse(cap.out.join(''));
+      expect(emptyEntry).toEqual({
+        source: empty,
+        bytes: 0,
+        verdict: null,
+        guardActive: false,
+        layers: [],
+        findings: [],
+      });
+      expect(dirtyEntry).toMatchObject({ source: dirty, verdict: 'VIOLATION' });
+
+      const capHelp = capture();
+      await run(['scan', '--help']);
+      capHelp.restore();
+      expect(capHelp.out.join('')).toContain('(--json: "bytes": 0, "verdict": null,\n"layers": [])');
+    });
+
     it('--help and scan --help give the exit code for no input', async () => {
       for (const argv of [['--help'], ['scan', '--help']]) {
         const cap = capture();
@@ -753,8 +822,10 @@ describe('aicomply CLI', () => {
   // positions in the original content of the input.
   // Text that starts with a UTF-32 or UTF-16 byte order mark is decoded in
   // that encoding without the mark. Decoded as UTF-8 it reached the patterns
-  // with NUL characters between its letters and was reported CLEAN.
-  describe('input with a UTF-16 or UTF-32 byte order mark', () => {
+  // with NUL characters between its letters and was reported CLEAN. The UTF-8
+  // mark is dropped too: kept, it was column 1, so the SSN was at column 15
+  // where an editor shows 14. The Python CLI tests check the same inputs.
+  describe('input with a byte order mark', () => {
     const text = 'Customer SSN 078-05-1120 on file\n';
     const utf16be = (s: string) => Buffer.from(s, 'utf16le').swap16();
     const utf32 = (s: string, le: boolean) => {
@@ -764,6 +835,7 @@ describe('aicomply CLI', () => {
       return b;
     };
     const INPUTS: Array<[string, Buffer]> = [
+      ['utf-8', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, 'utf8')])],
       ['utf-16-le', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')])],
       ['utf-16-be', Buffer.concat([Buffer.from([0xfe, 0xff]), utf16be(text)])],
       ['utf-32-le', Buffer.concat([Buffer.from([0xff, 0xfe, 0, 0]), utf32(text, true)])],
@@ -808,8 +880,11 @@ describe('aicomply CLI', () => {
       expect(decodeInput(u16)).toBe(`�${ssn}�`);
     });
 
-    it('keeps decoding other input as UTF-8, a UTF-8 mark included', () => {
-      expect(decodeInput(Buffer.from('\u{FEFF}SSN', 'utf8'))).toBe('\u{FEFF}SSN');
+    it('drops one UTF-8 mark at the start and keeps decoding other input as UTF-8', () => {
+      expect(decodeInput(Buffer.from('\u{FEFF}SSN', 'utf8'))).toBe('SSN');
+      expect(decodeInput(Buffer.from('\u{FEFF}\u{FEFF}SSN', 'utf8'))).toBe('\u{FEFF}SSN');
+      expect(decodeInput(Buffer.from('SSN\u{FEFF}', 'utf8'))).toBe('SSN\u{FEFF}');
+      expect(decodeInput(Buffer.from([0xef, 0xbb]))).toBe('�');
       expect(decodeInput(Buffer.from([0x62, 0xff, 0xfe]))).toBe('b��');
     });
   });
@@ -932,6 +1007,107 @@ describe('aicomply CLI', () => {
       const finding = JSON.parse(capJson.out.join(''))[0].findings[0];
       expect(finding).toHaveProperty('line', null);
       expect(finding).toHaveProperty('column', null);
+    });
+  });
+
+  // The human output printed the findings of an input in the order comply()
+  // gives them, highest confidence first: lines 3, 2, 7, 4, 6, 5 and 1 of the
+  // file below. A finding line also has room for a type of 12 characters,
+  // which a Guard class such as exfiltration_pattern (20) overflowed.
+  describe('finding order and the type column', () => {
+    const findingLines = (out: string) => out.split('\n').filter((l) => /^ {4}\S/.test(l));
+
+    it('prints the findings of an input by line, then by column', async () => {
+      const f = fixture(
+        'seven.txt',
+        [
+          'Record: Passport-SW232303697.',
+          'Record: SSN 078-05-1120.',
+          'Record: CUI//BASIC.',
+          'Record: MRN-L704K9.',
+          'Record: NPI: 6928576605.',
+          'Record: DE53083497798682044097.',
+          'Record: card 4111 1111 1111 1111, SSN 219-09-9999.',
+        ].join('\n') + '\n',
+      );
+      const cap = capture();
+      const code = await run(['scan', f]);
+      cap.restore();
+      expect(code).toBe(1);
+      const printed = findingLines(cap.out.join('')).map((l) => {
+        const [, type, line, col] = /^ {4}(\S+) .* line (\d+) col (\d+)$/.exec(l) ?? [];
+        return [type, Number(line), Number(col)];
+      });
+      expect(printed).toEqual([
+        ['PASSPORT', 1, 9],
+        ['SSN', 2, 13],
+        ['CUI', 3, 9],
+        ['MRN', 4, 9],
+        ['NPI', 5, 9],
+        ['IBAN', 6, 9],
+        ['PAN', 7, 14],
+        ['SSN', 7, 39],
+      ]);
+    });
+
+    function result(violations: Array<Record<string, unknown>>) {
+      return {
+        verdict: 'VIOLATION' as const,
+        violations,
+        classifierResults: { regex: { verdict: 'VIOLATION', violations: [] }, guard: { verdict: 'VIOLATION', violations: [] } },
+      } as unknown as import('../types').ComplyResult;
+    }
+    const content = 'line one\nSSN 078-05-1120\n';
+    const ssn = {
+      type: 'SSN',
+      value: '078-...20',
+      start: 13,
+      end: 24,
+      confidence: 0.95,
+      classifier: 'regex',
+      view: 'normalized',
+      originalStart: 13,
+      originalEnd: 24,
+    };
+    const guard = (type: string) => ({
+      type,
+      value: type,
+      start: 0,
+      end: content.length,
+      confidence: 0.9,
+      classifier: 'guard',
+    });
+
+    it('prints a finding without a location after the located ones', async () => {
+      const { renderHuman } = await import('../cli');
+      const cap = capture();
+      try {
+        renderHuman([{ label: 'x.txt', content, bytes: content.length }], [result([guard('tool_misuse'), ssn])]);
+      } finally {
+        cap.restore();
+      }
+      const lines = findingLines(cap.out.join(''));
+      expect(lines.map((l) => l.trim().split(' ')[0])).toEqual(['SSN', 'tool_misuse']);
+      expect(lines[0].endsWith('layer regex  line 2 col 5')).toBe(true);
+      expect(lines[1].endsWith('layer guard')).toBe(true);
+    });
+
+    it('widens the type column to the longest type printed', async () => {
+      const { renderHuman } = await import('../cli');
+      const cap = capture();
+      try {
+        renderHuman(
+          [{ label: 'x.txt', content, bytes: content.length }],
+          [result([ssn, guard('exfiltration_pattern'), guard('prompt_injection')])],
+        );
+      } finally {
+        cap.restore();
+      }
+      const lines = findingLines(cap.out.join(''));
+      expect(lines).toHaveLength(3);
+      expect(lines[0]).toMatch(/^ {4}SSN {18}••• /);
+      expect(lines[1]).toMatch(/^ {4}exfiltration_pattern ••• /);
+      expect(lines[2]).toMatch(/^ {4}prompt_injection {5}••• /);
     });
   });
 

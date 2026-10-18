@@ -8,74 +8,95 @@ payloads. The dual-layer classifier scans all of these views.
 from __future__ import annotations
 
 from .encoded import extract_encoded
-from .nfkc import normalize_nfkc
+from .nfkc import nfkc_stage
+from .offset_map import compose_offset_maps
 from .types import (
     DecodedExtraction,
     NormalizationResult,
     NormalizationStep,
+    ScanExtraction,
+    ScanNormalization,
 )
-from .whitespace import build_compact_form
-from .zero_width import strip_zero_width
+from .whitespace import compact_stage
+from .zero_width import zero_width_stage
 
 __all__ = [
     "normalize",
+    "normalize_for_scan",
     "NormalizationResult",
     "NormalizationStep",
     "DecodedExtraction",
+    "ScanExtraction",
+    "ScanNormalization",
 ]
 
 
-def _compose_offset_maps(outer: list[int], inner: list[int]) -> list[int]:
-    """Compose outer (stage-N -> stage-N-1) with inner (stage-N-1 -> original)."""
-    last = inner[-1] if inner else 0
-    return [inner[mid] if mid < len(inner) else last for mid in outer]
-
-
-def _identity_map(length: int) -> list[int]:
-    return list(range(length))
-
-
 def normalize(content: str) -> NormalizationResult:
+    scan = normalize_for_scan(content)
+    return NormalizationResult(
+        original_content=scan.original_content,
+        normalized_content=scan.normalized_content,
+        offset_map=list(scan.offset_map),
+        steps=scan.steps,
+        decoded_extractions=[
+            DecodedExtraction(
+                decoded=ext.decoded,
+                original_start=ext.original_start,
+                original_end=ext.original_end,
+                source=ext.source,
+                depth=ext.depth,
+                offset_map=None if ext.offset_map is None else list(ext.offset_map),
+            )
+            for ext in scan.decoded_extractions
+        ],
+    )
+
+
+def normalize_for_scan(content: str) -> ScanNormalization:
+    """The views normalize() returns, as the classifier scans them.
+
+    Each offset map is an ``array('I')``, or a ``range`` where it is the
+    identity: a stage allocates its map only once a character of its output
+    comes from another index of its input (see ``.offset_map``).
+    """
     steps: list[NormalizationStep] = []
 
     # Stage 1: NFKC normalization.
-    nfkc = normalize_nfkc(content)
+    nfkc = nfkc_stage(content)
     if nfkc.changed_count > 0:
         steps.append(NormalizationStep(transform="nfkc", count=nfkc.changed_count))
 
     # Stage 2: zero-width / bidi-control stripping.
-    zw = strip_zero_width(nfkc.output)
+    zw = zero_width_stage(nfkc.output)
     if zw.removed_count > 0:
         steps.append(
             NormalizationStep(transform="strip-zero-width", count=zw.removed_count)
         )
 
-    if nfkc.changed_count == 0 and zw.removed_count == 0:
-        normalized_to_original = _identity_map(len(content))
-    else:
-        normalized_to_original = _compose_offset_maps(zw.offset_map, nfkc.offset_map)
+    # zw maps into nfkc.output positions; nfkc maps into the original. When
+    # neither stage moved a character, the map is the identity.
+    normalized_to_original = compose_offset_maps(
+        zw.offset_map, nfkc.offset_map, len(zw.output)
+    )
 
     normalized_content = zw.output
-    decoded_extractions: list[DecodedExtraction] = []
+    decoded_extractions: list[ScanExtraction] = []
 
     # Compact form: whitespace-removed view of the normalized stream.
-    compact = build_compact_form(normalized_content)
+    compact = compact_stage(normalized_content)
     if compact.removed_count > 0 and len(compact.compact) > 0:
         steps.append(
             NormalizationStep(transform="compact-whitespace", count=compact.removed_count)
         )
-        compact_to_original = [
-            normalized_to_original[norm_idx]
-            if norm_idx < len(normalized_to_original)
-            else norm_idx
-            for norm_idx in compact.offset_map
-        ]
+        compact_to_original = compose_offset_maps(
+            compact.offset_map, normalized_to_original, len(compact.compact)
+        )
         compact_original_start = compact_to_original[0] if compact_to_original else 0
         compact_original_end = (
             compact_to_original[-1] if compact_to_original else len(content) - 1
         ) + 1
         decoded_extractions.append(
-            DecodedExtraction(
+            ScanExtraction(
                 decoded=compact.compact,
                 original_start=compact_original_start,
                 original_end=min(compact_original_end, len(content)),
@@ -90,7 +111,16 @@ def normalize(content: str) -> NormalizationResult:
     base64_count = 0
     url_count = 0
     for ext in encoded:
-        decoded_extractions.append(ext)
+        decoded_extractions.append(
+            ScanExtraction(
+                decoded=ext.decoded,
+                original_start=ext.original_start,
+                original_end=ext.original_end,
+                source=ext.source,
+                depth=ext.depth,
+                offset_map=ext.offset_map,
+            )
+        )
         if ext.source == "decoded-base64":
             base64_count += 1
         else:
@@ -100,7 +130,7 @@ def normalize(content: str) -> NormalizationResult:
     if url_count > 0:
         steps.append(NormalizationStep(transform="decode-url", count=url_count))
 
-    return NormalizationResult(
+    return ScanNormalization(
         original_content=content,
         normalized_content=normalized_content,
         offset_map=normalized_to_original,
