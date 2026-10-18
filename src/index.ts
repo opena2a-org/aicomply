@@ -360,7 +360,8 @@ export class ClassificationSession {
 
   /**
    * Create a session with a warmed registry cache.
-   * Resolves after warm() completes (both fleet and supply-chain endpoints fetched).
+   * Resolves after warm() completes (both fleet and supply-chain endpoints
+   * fetched, and the fleet signal of each package in `options.sourcePackages`).
    * `options.guardOptions` sets the Guard daemon address for every comply() call
    * that does not pass its own. A `guardOptions` that is not an object is
    * rejected here, before the Registry is fetched.

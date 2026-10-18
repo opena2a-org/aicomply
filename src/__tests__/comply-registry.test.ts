@@ -7,6 +7,8 @@
  *   - Supply-chain hard block => DENY via comply()
  *   - Supply-chain hard block => DENY when the Registry refuses the fleet request
  *   - Fleet anomaly > 0.30 => VIOLATION via comply()
+ *   - Fleet anomaly > 0.30 => VIOLATION for a package in sourcePackages when the
+ *     Registry answers the fleet request only per package
  *   - Cache miss => signals present, verdict unchanged
  *   - Unreachable Registry and absent package => distinct registrySignals.status
  *   - onRegistryUnknown => miss / error becomes VIOLATION or DENY via comply()
@@ -335,6 +337,75 @@ describe('comply(): a package the Registry cannot vouch for', () => {
     expect(other.verdict).toBe('CLEAN');
     expect(other.registrySignals?.status).toBe('error');
     expect(other.registrySignals?.supplyChainBlock).toBe(false);
+  });
+
+  /**
+   * Registry endpoints answer as production does: the fleet request that
+   * names no package is refused with 400, one that names a package and a
+   * type gets that package's record (no fleet events for any package but
+   * suspicious-agent), and the alert list loads empty. Every other URL
+   * refuses.
+   */
+  function registryAnswersFleetPerPackage(): void {
+    jest.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (`${url.origin}${url.pathname}` === `${BASE_URL}/api/v1/registry/fleet/anomaly-signal`) {
+        const name = url.searchParams.get('name');
+        const type = url.searchParams.get('type');
+        if (!name || !type) {
+          return new Response(JSON.stringify({ error: 'name and type query params are required' }), {
+            status: 400,
+          });
+        }
+        const events = name === 'suspicious-agent'
+          ? { anomalyScore: 0.55, eventCount: 12, lastSeenAt: '2026-10-18T00:00:00Z' }
+          : { anomalyScore: 0, eventCount: 0, lastSeenAt: null };
+        return new Response(JSON.stringify({
+          name,
+          type,
+          windowHours: 24,
+          formulaVersion: 'v1',
+          stale: false,
+          ...events,
+        }));
+      }
+      if (url.href === `${BASE_URL}/api/v1/intelligence/alerts?type=supply_chain`) {
+        return new Response(JSON.stringify({ alerts: [], total: 0 }));
+      }
+      throw new TypeError('fetch failed');
+    });
+  }
+
+  it('applies the fleet anomaly threshold to a package in sourcePackages when the Registry answers the fleet request only per package', async () => {
+    registryAnswersFleetPerPackage();
+    const session = await ClassificationSession.create({
+      baseUrl: BASE_URL,
+      sourcePackages: [
+        { name: 'suspicious-agent', type: 'mcp_server' },
+        { name: 'quiet-agent', type: 'mcp_server' },
+      ],
+    });
+
+    const elevated = await session.comply({ content: 'hello world', sourcePackage: 'suspicious-agent', useGuard: false });
+    const quiet = await session.comply({
+      content: 'hello world',
+      sourcePackage: 'quiet-agent',
+      useGuard: false,
+      onRegistryUnknown: 'deny',
+    });
+    const unlisted = await session.comply({ content: 'hello world', sourcePackage: 'any-package', useGuard: false });
+
+    expect(elevated.verdict).toBe('VIOLATION');
+    expect(elevated.registrySignals?.status).toBe('hit');
+    expect(elevated.registrySignals?.fleetAnomalyScore).toBe(0.55);
+    expect(elevated.violations.map(v => v.type)).toEqual(['FLEET_ANOMALY_ELEVATED']);
+    // No fleet events for the package is no fleet data: it stays unknown, so
+    // onRegistryUnknown: 'deny' still fails closed.
+    expect(quiet.verdict).toBe('DENY');
+    expect(quiet.registrySignals?.status).toBe('miss');
+    expect(quiet.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN']);
+    expect(unlisted.verdict).toBe('CLEAN');
+    expect(unlisted.registrySignals?.status).toBe('error');
   });
 
   it('tells an unreachable Registry from a package absent from its index', async () => {

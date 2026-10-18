@@ -105,6 +105,8 @@ export interface ComplyOptions {
   /**
    * Name of the source package/agent for Registry L2 lookup.
    * Required (along with registryCache) to activate L2 threshold/block logic.
+   * The production Registry gives a fleet anomaly signal only for a package
+   * the cache lists in its `sourcePackages` option.
    */
   sourcePackage?: string;
   /**

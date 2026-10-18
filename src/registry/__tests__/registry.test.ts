@@ -6,13 +6,16 @@
  *   - AC-002: cache miss treated as unknown, not clean
  *   - AC-002: fetch error treated as unknown
  *   - a refused fleet request: a loaded supply-chain alert is still a hit
+ *   - sourcePackages: the fleet signal requested per package by name and type,
+ *     a package the Registry has no fleet events for is a miss, and a list
+ *     warm() could not request is rejected
  *   - AC-005: lookup() does no network I/O
  *   - cache TTL expiry
  *   - lookup before warm returns error
  */
 
 import { RegistryIntelligenceCache } from '..';
-import type { FleetAnomalySignal, SupplyChainAlert } from '../types';
+import type { FleetAnomalySignal, RegistryCacheOptions, SupplyChainAlert } from '../types';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -82,6 +85,89 @@ function mockFleetRefused(supplyAlerts: SupplyChainAlert[]): void {
       });
     }
     if (url.includes('intelligence/alerts')) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ alerts: supplyAlerts, total: supplyAlerts.length }),
+      });
+    }
+    return Promise.resolve({ ok: false });
+  }) as jest.Mock;
+}
+
+/** A Registry answer to a fleet request: the HTTP status and the JSON body. */
+interface FleetAnswer {
+  status: number;
+  body: unknown;
+}
+
+/**
+ * The record the production Registry answers for a package it has no fleet
+ * events for (checked 2026-10-18), the same for a package it has no record of.
+ */
+function noEventsRecord(name: string, type: string): Record<string, unknown> {
+  return {
+    name,
+    type,
+    anomalyScore: 0,
+    windowHours: 24,
+    eventCount: 0,
+    lastSeenAt: null,
+    formulaVersion: 'v1',
+    stale: false,
+  };
+}
+
+/** A list of length 2 with no element at index 0. */
+function withHoleAtZero(): unknown[] {
+  const list: unknown[] = [];
+  list[1] = { name: 'example-agent', type: 'mcp_server' };
+  return list;
+}
+
+/** No fleet events for any package. */
+function noEventsAnswer(name: string, type: string): FleetAnswer {
+  return { status: 200, body: noEventsRecord(name, type) };
+}
+
+/** FLEET_SIGNAL for example-agent, and no fleet events for any other package. */
+function asProduction(name: string, type: string): FleetAnswer {
+  return {
+    status: 200,
+    body: name === FLEET_SIGNAL.name ? { ...FLEET_SIGNAL, windowHours: 24 } : noEventsRecord(name, type),
+  };
+}
+
+/**
+ * Answer as the production Registry does: a fleet request that names a
+ * package and a type gets `answer(name, type)`, and the supply-chain alert
+ * list loads. The fleet request that names no package is refused with 400,
+ * or, given `index`, answered with it as an older Registry did.
+ */
+function mockFleetPerPackage(
+  answer: (name: string, type: string) => FleetAnswer,
+  supplyAlerts: SupplyChainAlert[] = [],
+  index?: FleetAnomalySignal[],
+): void {
+  global.fetch = jest.fn().mockImplementation((url: string) => {
+    const { pathname, searchParams } = new URL(url);
+    if (pathname === '/api/v1/registry/fleet/anomaly-signal') {
+      const name = searchParams.get('name');
+      const type = searchParams.get('type');
+      let reply: FleetAnswer;
+      if (name && type) {
+        reply = answer(name, type);
+      } else if (index) {
+        reply = { status: 200, body: { agents: index } };
+      } else {
+        reply = { status: 400, body: { error: 'name and type query params are required' } };
+      }
+      return Promise.resolve({
+        ok: reply.status >= 200 && reply.status < 300,
+        status: reply.status,
+        json: () => Promise.resolve(reply.body),
+      });
+    }
+    if (pathname === '/api/v1/intelligence/alerts') {
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve({ alerts: supplyAlerts, total: supplyAlerts.length }),
@@ -213,6 +299,200 @@ describe('RegistryIntelligenceCache', () => {
       if (result.status === 'error') {
         expect(result.reason).toBe('fleet anomaly signal not loaded');
       }
+    });
+  });
+
+  describe('sourcePackages: fleet signal requested per package', () => {
+    const FLEET_URL = 'https://api.oa2a.org/api/v1/registry/fleet/anomaly-signal';
+
+    it('requests the fleet signal of each listed package with its name and type in the query', async () => {
+      mockFleetPerPackage(asProduction);
+      const cache = new RegistryIntelligenceCache({
+        sourcePackages: [
+          { name: 'example-agent', type: 'mcp_server' },
+          { name: '@scope/tool', type: 'ai_tool' },
+        ],
+      });
+      await cache.warm();
+
+      const urls = (global.fetch as jest.Mock).mock.calls.map(([url]) => url);
+      expect(urls).toHaveLength(4);
+      expect(urls).toEqual(expect.arrayContaining([
+        FLEET_URL,
+        `${FLEET_URL}?name=example-agent&type=mcp_server`,
+        `${FLEET_URL}?name=%40scope%2Ftool&type=ai_tool`,
+        'https://api.oa2a.org/api/v1/intelligence/alerts?type=supply_chain',
+      ]));
+    });
+
+    it('returns hit with the signal the Registry answered for a listed package', async () => {
+      mockFleetPerPackage(asProduction);
+      const cache = new RegistryIntelligenceCache({
+        sourcePackages: [{ name: 'example-agent', type: 'mcp_server' }],
+      });
+      await cache.warm();
+
+      const result = cache.lookup('Example-Agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.fleetAnomalySignal?.anomalyScore).toBe(0.42);
+        expect(result.intelligence.fleetAnomalySignal?.eventCount).toBe(7);
+        expect(result.intelligence.supplyChainAlerts).toEqual([]);
+      }
+    });
+
+    it('returns miss, not hit, for a listed package the Registry has no fleet events for', async () => {
+      mockFleetPerPackage(asProduction);
+      const cache = new RegistryIntelligenceCache({
+        sourcePackages: [{ name: 'quiet-agent', type: 'mcp_server' }],
+      });
+      await cache.warm();
+
+      expect(cache.lookup('quiet-agent')).toEqual({ status: 'miss' });
+    });
+
+    it('returns hit with the alerts for a listed package that has one and no fleet events', async () => {
+      const alert = { ...SUPPLY_ALERT, name: 'quiet-agent' };
+      mockFleetPerPackage(asProduction, [alert]);
+      const cache = new RegistryIntelligenceCache({
+        sourcePackages: [{ name: 'quiet-agent', type: 'mcp_server' }],
+      });
+      await cache.warm();
+
+      const result = cache.lookup('quiet-agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.fleetAnomalySignal).toBeNull();
+        expect(result.intelligence.supplyChainAlerts?.map(a => a.id)).toEqual(['alert-001']);
+      }
+    });
+
+    it('returns error for a package that is not listed', async () => {
+      mockFleetPerPackage(asProduction);
+      const cache = new RegistryIntelligenceCache({
+        sourcePackages: [{ name: 'example-agent', type: 'mcp_server' }],
+      });
+      await cache.warm();
+
+      expect(cache.lookup('unknown-pkg')).toEqual({ status: 'error', reason: 'fleet anomaly signal not loaded' });
+    });
+
+    it.each<[string, (name: string, type: string) => FleetAnswer]>([
+      ['refused with 429', () => ({ status: 429, body: { error: 'Rate limit exceeded' } })],
+      ['answered for another package', (_name, type) => ({ status: 200, body: { ...FLEET_SIGNAL, name: 'other-agent', type } })],
+      ['answered without a score or an event count', (name, type) => ({ status: 200, body: { name, type } })],
+      ['answered with a body that is not an object', () => ({ status: 200, body: null })],
+    ])('returns error for a listed package whose request is %s', async (_label, answer) => {
+      mockFleetPerPackage(answer);
+      const cache = new RegistryIntelligenceCache({
+        sourcePackages: [{ name: 'example-agent', type: 'mcp_server' }],
+      });
+      await cache.warm();
+
+      expect(cache.lookup('example-agent')).toEqual({ status: 'error', reason: 'fleet anomaly signal not loaded' });
+    });
+
+    it('returns error for a listed package whose request fails on the network', async () => {
+      mockFleetPerPackage(asProduction);
+      const answering = global.fetch as jest.Mock;
+      global.fetch = jest.fn().mockImplementation((url: string) =>
+        url.includes('?name=') ? Promise.reject(new TypeError('fetch failed')) : answering(url),
+      ) as jest.Mock;
+      const cache = new RegistryIntelligenceCache({
+        sourcePackages: [{ name: 'example-agent', type: 'mcp_server' }],
+      });
+      await cache.warm();
+
+      expect(cache.lookup('example-agent')).toEqual({ status: 'error', reason: 'fleet anomaly signal not loaded' });
+    });
+
+    it('keeps the last answer for a listed package when a later request fails, until clearCache()', async () => {
+      mockFleetPerPackage(asProduction);
+      const cache = new RegistryIntelligenceCache({
+        sourcePackages: [{ name: 'example-agent', type: 'mcp_server' }],
+      });
+      await cache.warm();
+      mockFleetPerPackage(() => ({ status: 429, body: { error: 'Rate limit exceeded' } }));
+      await cache.warm();
+
+      const result = cache.lookup('example-agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.fleetAnomalySignal?.anomalyScore).toBe(0.42);
+      }
+      cache.clearCache();
+      expect(cache.lookup('example-agent')).toEqual({ status: 'error', reason: 'registry cache not warmed' });
+    });
+
+    it('keeps the signal from the fleet index when the listed request reports no fleet events', async () => {
+      mockFleetPerPackage(noEventsAnswer, [], [FLEET_SIGNAL]);
+      const cache = new RegistryIntelligenceCache({
+        sourcePackages: [{ name: 'example-agent', type: 'mcp_server' }],
+      });
+      await cache.warm();
+
+      const result = cache.lookup('example-agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.fleetAnomalySignal?.anomalyScore).toBe(0.42);
+      }
+    });
+
+    it('does no network I/O in lookup() for a listed package (AC-005)', async () => {
+      mockFleetPerPackage(asProduction);
+      const cache = new RegistryIntelligenceCache({
+        cacheTtlMs: 0,
+        sourcePackages: [
+          { name: 'example-agent', type: 'mcp_server' },
+          { name: 'quiet-agent', type: 'mcp_server' },
+        ],
+      });
+      await cache.warm();
+      const fetched = (global.fetch as jest.Mock).mock.calls.length;
+
+      expect(cache.lookup('example-agent').status).toBe('hit');
+      expect(cache.lookup('quiet-agent').status).toBe('miss');
+      expect(cache.lookup('unknown-pkg').status).toBe('error');
+      expect((global.fetch as jest.Mock).mock.calls.length).toBe(fetched);
+    });
+
+    it('refreshIfStale() fetches again once a listed answer is past the TTL, not while it is within it', async () => {
+      mockFleetPerPackage(asProduction);
+      const cache = new RegistryIntelligenceCache({
+        cacheTtlMs: 60_000,
+        sourcePackages: [{ name: 'example-agent', type: 'mcp_server' }],
+      });
+      await cache.warm();
+      const calls = (global.fetch as jest.Mock).mock.calls;
+      const fetched = calls.length;
+
+      // The fleet index request was refused, but the listed answer is fresh.
+      cache.refreshIfStale();
+      expect(calls).toHaveLength(fetched);
+
+      jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_001);
+      cache.refreshIfStale();
+      expect(calls).toHaveLength(fetched * 2);
+      await cache.warm(); // waits for the refresh in flight; starts no other
+      expect(calls).toHaveLength(fetched * 2);
+    });
+
+    it.each<[string, unknown, RegExp]>([
+      ['a string', 'example-agent', /^sourcePackages must be an array \(got string\)$/],
+      ['null', null, /^sourcePackages must be an array \(got null\)$/],
+      ['an entry that is a string', ['example-agent'], /^sourcePackages\[0\] must be an object .* \(got string\)$/],
+      ['an array with a hole', withHoleAtZero(), /^sourcePackages\[0\] must be an object .* \(got undefined\)$/],
+      ['an entry without a type', [{ name: 'example-agent' }], /^sourcePackages\[0\]\.type must be a non-empty string \(got undefined\)$/],
+      ['an entry with an empty name', [{ name: '', type: 'mcp_server' }], /^sourcePackages\[0\]\.name must be a non-empty string \(got ""\)$/],
+      [
+        'a name listed twice',
+        [{ name: 'example-agent', type: 'mcp_server' }, { name: 'Example-Agent', type: 'library' }],
+        /^sourcePackages\[1\] names "Example-Agent", which sourcePackages\[0\] names already/,
+      ],
+    ])('rejects a sourcePackages value that is %s', (_label, sourcePackages, message) => {
+      const options = { sourcePackages } as unknown as RegistryCacheOptions;
+      expect(() => new RegistryIntelligenceCache(options)).toThrow(TypeError);
+      expect(() => new RegistryIntelligenceCache(options)).toThrow(message);
     });
   });
 
