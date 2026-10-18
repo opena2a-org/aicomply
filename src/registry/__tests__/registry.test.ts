@@ -9,13 +9,15 @@
  *   - sourcePackages: the fleet signal requested per package by name and type,
  *     a package the Registry has no fleet events for is a miss, and a list
  *     warm() could not request is rejected
+ *   - addSourcePackages(): a package first seen after the cache was created
+ *     is listed and requested as one in sourcePackages is
  *   - AC-005: lookup() does no network I/O
  *   - cache TTL expiry
  *   - lookup before warm returns error
  */
 
 import { RegistryIntelligenceCache } from '..';
-import type { FleetAnomalySignal, RegistryCacheOptions, SupplyChainAlert } from '../types';
+import type { FleetAnomalySignal, RegistryCacheOptions, RegistrySourcePackage, SupplyChainAlert } from '../types';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -493,6 +495,132 @@ describe('RegistryIntelligenceCache', () => {
       const options = { sourcePackages } as unknown as RegistryCacheOptions;
       expect(() => new RegistryIntelligenceCache(options)).toThrow(TypeError);
       expect(() => new RegistryIntelligenceCache(options)).toThrow(message);
+    });
+  });
+
+  describe('addSourcePackages(): a package first seen after the cache was created', () => {
+    const FLEET_URL = 'https://api.oa2a.org/api/v1/registry/fleet/anomaly-signal';
+
+    it('requests the fleet signal of each added package by name and type, and lookup() reports it as a listed one', async () => {
+      mockFleetPerPackage(asProduction);
+      const cache = new RegistryIntelligenceCache();
+      await cache.warm();
+      expect(cache.lookup('example-agent')).toEqual({ status: 'error', reason: 'fleet anomaly signal not loaded' });
+      const calls = (global.fetch as jest.Mock).mock.calls;
+      const fetched = calls.length;
+
+      await cache.addSourcePackages([
+        { name: 'example-agent', type: 'mcp_server' },
+        { name: 'quiet-agent', type: 'mcp_server' },
+      ]);
+
+      expect(calls.slice(fetched).map(([url]) => url)).toEqual([
+        `${FLEET_URL}?name=example-agent&type=mcp_server`,
+        `${FLEET_URL}?name=quiet-agent&type=mcp_server`,
+      ]);
+      const result = cache.lookup('Example-Agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.fleetAnomalySignal?.anomalyScore).toBe(0.42);
+      }
+      expect(cache.lookup('quiet-agent')).toEqual({ status: 'miss' });
+      // lookup() made no request (AC-005).
+      expect(calls).toHaveLength(fetched + 2);
+    });
+
+    it('requests an added package again when the cache warms later', async () => {
+      mockFleetPerPackage(asProduction);
+      const cache = new RegistryIntelligenceCache();
+      await cache.addSourcePackages([{ name: '@scope/tool', type: 'ai_tool' }]);
+      const calls = (global.fetch as jest.Mock).mock.calls;
+      expect(calls.map(([url]) => url)).toEqual([`${FLEET_URL}?name=%40scope%2Ftool&type=ai_tool`]);
+
+      await cache.warm();
+
+      expect(calls.slice(1).map(([url]) => url)).toEqual(expect.arrayContaining([
+        FLEET_URL,
+        `${FLEET_URL}?name=%40scope%2Ftool&type=ai_tool`,
+        'https://api.oa2a.org/api/v1/intelligence/alerts?type=supply_chain',
+      ]));
+      expect(calls).toHaveLength(4);
+    });
+
+    it('does not request a package listed already, and waits for a request for it that is in flight', async () => {
+      mockFleetPerPackage(asProduction);
+      const cache = new RegistryIntelligenceCache({
+        sourcePackages: [{ name: 'quiet-agent', type: 'mcp_server' }],
+      });
+      await cache.warm();
+      const calls = (global.fetch as jest.Mock).mock.calls;
+      const fetched = calls.length;
+
+      await cache.addSourcePackages([{ name: 'Quiet-Agent', type: 'mcp_server' }]);
+      expect(calls).toHaveLength(fetched);
+
+      const first = cache.addSourcePackages([{ name: 'example-agent', type: 'mcp_server' }]);
+      await cache.addSourcePackages([{ name: 'example-agent', type: 'mcp_server' }]);
+      // The second call resolved after the answer the first one requested.
+      expect(cache.lookup('example-agent').status).toBe('hit');
+      await first;
+      expect(calls).toHaveLength(fetched + 1);
+    });
+
+    it('resolves when the request for an added package fails, which lookup() reports as error', async () => {
+      mockFleetPerPackage(asProduction);
+      const answering = global.fetch as jest.Mock;
+      global.fetch = jest.fn().mockImplementation((url: string) =>
+        url.includes('?name=') ? Promise.reject(new TypeError('fetch failed')) : answering(url),
+      ) as jest.Mock;
+      const cache = new RegistryIntelligenceCache();
+      await cache.warm();
+
+      await expect(cache.addSourcePackages([{ name: 'example-agent', type: 'mcp_server' }])).resolves.toBeUndefined();
+
+      expect(cache.lookup('example-agent')).toEqual({ status: 'error', reason: 'fleet anomaly signal not loaded' });
+    });
+
+    it('sends one request for a package that warm() asks for while addSourcePackages() has one in flight', async () => {
+      mockFleetPerPackage(asProduction);
+      const cache = new RegistryIntelligenceCache();
+      const calls = (global.fetch as jest.Mock).mock.calls;
+
+      const adding = cache.addSourcePackages([{ name: 'example-agent', type: 'mcp_server' }]);
+      await cache.warm();
+      await adding;
+
+      const urls = calls.map(([url]) => url);
+      expect(urls.filter(url => url === `${FLEET_URL}?name=example-agent&type=mcp_server`)).toHaveLength(1);
+      expect(urls).toHaveLength(3);
+      expect(cache.lookup('example-agent').status).toBe('hit');
+    });
+
+    it.each<[string, unknown, RegExp]>([
+      ['undefined', undefined, /^sourcePackages must be an array \(got undefined\)$/],
+      ['an entry without a type', [{ name: 'new-agent' }], /^sourcePackages\[0\]\.type must be a non-empty string \(got undefined\)$/],
+      [
+        'a name given twice',
+        [{ name: 'new-agent', type: 'mcp_server' }, { name: 'NEW-AGENT', type: 'mcp_server' }],
+        /^sourcePackages\[1\] names "NEW-AGENT", which sourcePackages\[0\] names already/,
+      ],
+      [
+        'a name listed already with another type',
+        [{ name: 'new-agent', type: 'mcp_server' }, { name: 'Quiet-Agent', type: 'library' }],
+        /^sourcePackages\[1\] names "Quiet-Agent" with type "library", which is listed already with type "mcp_server"/,
+      ],
+    ])('rejects %s, and lists and requests no package of the call', async (_label, sourcePackages, message) => {
+      mockFleetPerPackage(asProduction);
+      const cache = new RegistryIntelligenceCache({
+        sourcePackages: [{ name: 'quiet-agent', type: 'mcp_server' }],
+      });
+      const packages = sourcePackages as RegistrySourcePackage[];
+
+      await expect(cache.addSourcePackages(packages)).rejects.toThrow(TypeError);
+      await expect(cache.addSourcePackages(packages)).rejects.toThrow(message);
+      expect(global.fetch).not.toHaveBeenCalled();
+
+      await cache.warm();
+      const urls = (global.fetch as jest.Mock).mock.calls.map(([url]) => String(url));
+      expect(urls.filter(url => url.includes('new-agent'))).toEqual([]);
     });
   });
 

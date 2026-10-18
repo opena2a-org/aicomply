@@ -53,9 +53,10 @@ posture - not a complete control.
   `hit`; it changes the verdict only when the caller sets `onRegistryUnknown` -
   contract AC-002. A package with a supply-chain alert is a `hit` and is
   blocked whether or not the fleet index loaded. A fleet answer that reports
-  no events for a package in `sourcePackages` counts as no fleet data, so
-  without an alert the package is a `miss`, not a `hit`: the Registry answers
-  a package it has no record of the same way)
+  no events for a listed package (one in `sourcePackages` or added with
+  `addSourcePackages()`) counts as no fleet data, so without an alert the
+  package is a `miss`, not a `hit`: the Registry answers a package it has no
+  record of the same way)
 
 ### Adversarial-mutation handling (covered in 1.0)
 
@@ -200,9 +201,10 @@ regex-only.
   `registrySignals.status` says which case it was: `miss` when the fleet
   index or the package's own fleet answer loaded and neither has a fleet
   signal or an alert for the package, `error` when neither has loaded (the
-  cache was not warmed, the package is not in `sourcePackages`, or every
-  fleet fetch for it so far failed) and the package has no supply-chain
-  alert. Pass `onRegistryUnknown: 'violation'` or `'deny'` to `comply()`
+  cache was not warmed, the package is not listed in `sourcePackages` or
+  through `addSourcePackages()`, or every fleet fetch for it so far
+  failed) and the package has no supply-chain alert. Pass
+  `onRegistryUnknown: 'violation'` or `'deny'` to `comply()`
   to fail closed on both. A failed supply-chain alert fetch is not
   reported on its own: when the fleet index or the package's fleet answer
   loaded, the status is `hit` or `miss` from the data that did load. A
@@ -211,11 +213,12 @@ regex-only.
   production Registry answers the fleet index request, which names no
   package, with HTTP 400 (checked 2026-10-18), so the fleet index does
   not load from it. It answers the fleet request that names a package and
-  its type, which the cache sends for each package in the `sourcePackages`
-  option when it warms. Against it, the fleet anomaly threshold applies
-  only to a listed package the Registry reports fleet events for, a listed
-  package it reports none for is `miss`, and a package with no alert that
-  is not listed is `error`.
+  its type, which the cache sends for each listed package when it warms,
+  and for a package passed to `addSourcePackages()` when that call lists
+  it. Against it, the fleet anomaly threshold applies only to a listed
+  package the Registry reports fleet events for, a listed package it
+  reports none for is `miss`, and a package with no alert that is not
+  listed is `error`.
 - **NanoMind-Guard semantic classifier.** The model has shipped
   (`nanomind-security-classifier` tme-v0.5.0, served by `@nanomind/daemon`
   over HTTP), but the Guard is a preview: the current model over-flags
@@ -272,7 +275,8 @@ regex-only.
    self-hosted Registry; otherwise traffic egresses to the OpenA2A backend.
 4. **Telemetry.** This package does not emit telemetry directly. The
    Registry cache *fetches* from the Registry - the Registry sees those
-   reads, which name each package in `sourcePackages` and its type.
+   reads, which name each listed package (in `sourcePackages` or passed to
+   `addSourcePackages()`) and its type.
    `comply()` sends no content to the Registry.
 5. **The Guard attempt posts the input to a loopback port.** For each
    non-empty input, `comply()` makes one request,

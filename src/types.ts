@@ -2,20 +2,33 @@
  * Core types for the AIComply compliance classifier.
  */
 
-import type { RegistryIntelligenceCache, RegistryCacheOptions, RegistryLookupResult } from './registry';
+import type {
+  RegistryIntelligenceCache,
+  RegistryCacheOptions,
+  RegistryLookupResult,
+  RegistrySourcePackage,
+} from './registry';
 import type { NormalizationStep } from './normalize/types';
 import type { NanoMindAdapterOptions } from './classifier/guard-client/nanomind-adapter';
-export type { RegistryCacheOptions };
+export type { RegistryCacheOptions, RegistrySourcePackage };
 
 /**
  * What the Registry cache had for a source package. Derived structurally
  * from `RegistryLookupResult['status']` so the two cannot drift.
- *   - 'hit':   the package is in the fleet index or has supply-chain alerts,
- *              whether or not the fleet index loaded.
- *   - 'miss':  the fleet index loaded and the package is in neither index.
- *   - 'error': the fleet index has never loaded (cache not warmed, or every
- *              fleet fetch so far failed) and the package has no supply-chain
- *              alert, or no cache was supplied to look the package up in.
+ *   - 'hit':   the package has a fleet signal, from the fleet index or from
+ *              the answer for it as a listed package, or has supply-chain
+ *              alerts, whether or not the fleet index loaded.
+ *   - 'miss':  the fleet index or the answer for the package as a listed
+ *              package loaded, and the package has neither a fleet signal
+ *              nor an alert. An answer that reports no fleet events is no
+ *              fleet signal.
+ *   - 'error': neither the fleet index nor an answer for the package has
+ *              loaded (cache not warmed, the package not listed, or every
+ *              fleet fetch for it so far failed) and the package has no
+ *              supply-chain alert, or no cache was supplied to look the
+ *              package up in.
+ * A listed package is one in the cache's `sourcePackages` option or added
+ * with `addSourcePackages()`.
  */
 export type RegistryLookupStatus = RegistryLookupResult['status'];
 
@@ -106,7 +119,8 @@ export interface ComplyOptions {
    * Name of the source package/agent for Registry L2 lookup.
    * Required (along with registryCache) to activate L2 threshold/block logic.
    * The production Registry gives a fleet anomaly signal only for a package
-   * the cache lists in its `sourcePackages` option.
+   * the cache lists: in its `sourcePackages` option, or added with
+   * `addSourcePackages()` before this call.
    */
   sourcePackage?: string;
   /**

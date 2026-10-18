@@ -44,7 +44,10 @@ export interface RegistryIntelligence {
   fetchedAt: number;        // epoch ms
 }
 
-/** A package whose fleet anomaly signal warm() requests by name and type. */
+/**
+ * A package whose fleet anomaly signal warm() requests by name and type, as
+ * listed in the sourcePackages option or passed to addSourcePackages().
+ */
 export interface RegistrySourcePackage {
   /** The name comply() is given as `sourcePackage`. */
   name: string;
@@ -60,7 +63,8 @@ export interface RegistryCacheOptions {
    * Packages to request the fleet anomaly signal for, one request each with
    * the name and type in the query, every time the cache warms. The
    * production Registry refuses the fleet request that names no package, so
-   * against it only a package listed here gets a fleet signal. A listed
+   * against it only a listed package gets a fleet signal: one listed here, or
+   * one first seen later and added with addSourcePackages(). A listed
    * package the Registry reports no fleet events for is a miss, not a hit
    * (AC-002). Each name may be listed once, compared without case, as
    * lookup() compares it.
