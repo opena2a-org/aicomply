@@ -14,6 +14,7 @@ shared pattern pack, compiled once by ``.pack``; named validators live in
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass
 
 from .pack import PACK, PatternDefinition, PatternType
@@ -24,6 +25,7 @@ __all__ = [
     "PatternDefinition",
     "PatternMatch",
     "PatternType",
+    "drop_overlapping_repeats",
     "is_env_var_reference",
     "luhn_check",
     "scan_patterns",
@@ -85,11 +87,61 @@ def scan_patterns(content: str) -> list[PatternMatch]:
     # Deduplicate overlapping matches: higher confidence wins. Stable sort to
     # mirror V8's stable Array.sort for equal-confidence ties.
     matches.sort(key=lambda pm: -pm.confidence)
-    deduped: list[PatternMatch] = []
-    for pm in matches:
-        overlaps = any(
-            pm.start < d.end and pm.end > d.start and pm.value == d.value for d in deduped
-        )
-        if not overlaps:
-            deduped.append(pm)
-    return deduped
+    return drop_overlapping_repeats(matches)
+
+
+def drop_overlapping_repeats(matches: list[PatternMatch]) -> list[PatternMatch]:
+    """``matches`` in their order, without each match whose range overlaps the
+    range of an earlier kept match with the same value.
+
+    ``scan_patterns`` passes its matches highest confidence first, pack order
+    breaking a tie, so of two matches of one value at overlapping ranges the
+    first in that order is kept.
+
+    The kept matches of one value do not overlap one another, so ordered by
+    start, then end, each ends at or before the start of the next. Of those that
+    start before a match ends, the last in that order ends last, and the match
+    overlaps one of them only if it overlaps that one. Each match is compared
+    with that one kept match, found by binary search and a Fenwick tree, not
+    with every kept match: that took time that grew with the square of the
+    number of findings.
+    """
+    # The indices of the matches of each value, in match order.
+    by_value: dict[str, list[int]] = {}
+    for i, pm in enumerate(matches):
+        by_value.setdefault(pm.value, []).append(i)
+
+    kept = [False] * len(matches)
+    # The place of a match among the matches of its value ordered by start, then end.
+    place = [0] * len(matches)
+    for indices in by_value.values():
+        if len(indices) == 1:
+            kept[indices[0]] = True
+            continue
+        ordered = sorted(indices, key=lambda i: (matches[i].start, matches[i].end))
+        for p, index in enumerate(ordered):
+            place[index] = p
+        starts = [matches[index].start for index in ordered]
+        # Fenwick tree over places: last_kept[k] is the last place of a kept match
+        # among places k - (k & -k) to k - 1, or -1 when none of them is kept.
+        last_kept = [-1] * (len(ordered) + 1)
+        for index in indices:
+            start, end = matches[index].start, matches[index].end
+            # The matches at places 0 to starts_before - 1 start before this one ends.
+            starts_before = bisect_left(starts, end)
+            last = -1
+            k = starts_before
+            while k > 0:
+                if last_kept[k] > last:
+                    last = last_kept[k]
+                k -= k & -k
+            if last != -1 and matches[ordered[last]].end > start:
+                continue
+            kept[index] = True
+            p = place[index]
+            k = p + 1
+            while k <= len(ordered):
+                if last_kept[k] < p:
+                    last_kept[k] = p
+                k += k & -k
+    return [pm for pm, keep in zip(matches, kept) if keep]

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import random
+import time
+
 import pytest
 
 from aicomply.classifier.regex import classify_with_regex, scan_patterns
-from aicomply.classifier.regex.patterns import luhn_check
+from aicomply.classifier.regex.patterns import PatternMatch, drop_overlapping_repeats, luhn_check
 
 
 def _types(text: str) -> set[str]:
@@ -138,3 +141,71 @@ def test_clean_content_returns_clean():
 )
 def test_known_negatives(text):
     assert _types(text) == set()
+
+
+def _match(value: str, start: int, end: int) -> PatternMatch:
+    return PatternMatch(type="SSN", value=value, start=start, end=end, confidence=0.95)
+
+
+def _kept_comparing_each_pair(matches: list[PatternMatch]) -> list[PatternMatch]:
+    """The matches kept when each match is compared with every match kept before it."""
+    kept: list[PatternMatch] = []
+    for m in matches:
+        if not any(m.start < d.end and m.end > d.start and m.value == d.value for d in kept):
+            kept.append(m)
+    return kept
+
+
+def _indices(kept: list[PatternMatch], matches: list[PatternMatch]) -> list[int]:
+    """The index of each kept match in ``matches``, found by identity: two matches
+    can hold the same value and range."""
+    index = {id(m): i for i, m in enumerate(matches)}
+    return [index[id(m)] for m in kept]
+
+
+def test_keeps_the_first_of_two_matches_of_one_value_whose_ranges_overlap():
+    first = _match("078-05-1120", 4, 15)
+    second = _match("078-05-1120", 0, 15)
+    assert drop_overlapping_repeats([first, second]) == [first]
+
+
+def test_keeps_matches_of_one_value_at_separate_ranges_and_of_two_values_at_one_range():
+    matches = [_match("a", 5, 10), _match("a", 0, 5), _match("b", 0, 5)]
+    assert drop_overlapping_repeats(matches) == matches
+
+
+def test_keeps_a_match_whose_range_overlaps_only_that_of_a_match_it_drops():
+    matches = [_match("a", 0, 4), _match("a", 3, 8), _match("a", 6, 10)]
+    assert drop_overlapping_repeats(matches) == [matches[0], matches[2]]
+
+
+def test_keeps_what_comparing_each_match_with_every_kept_match_keeps_on_2000_random_lists():
+    # Seeded, so a failing list can be reproduced.
+    rng = random.Random(203)
+    dropped = 0
+    for _ in range(2000):
+        span = 1 + int(rng.random() * 40)
+        longest = int(rng.random() * 10)
+        values = ["a", "b", "c"][: 1 + int(rng.random() * 3)]
+        matches: list[PatternMatch] = []
+        for _ in range(int(rng.random() * 30)):
+            start = int(rng.random() * span)
+            end = start + int(rng.random() * (longest + 1))
+            matches.append(_match(values[int(rng.random() * len(values))], start, end))
+        expected = _kept_comparing_each_pair(matches)
+        assert _indices(drop_overlapping_repeats(matches), matches) == _indices(expected, matches)
+        dropped += len(matches) - len(expected)
+    # The lists hold overlapping matches of one value, not only separate ones.
+    assert dropped > 0
+
+
+def test_scans_40000_findings_of_one_ssn_and_one_card_number_in_under_3_seconds_of_cpu_time():
+    # Each match was compared with every match kept before it, so the time grew
+    # with the square of the number of findings: this input took about 20 seconds
+    # of CPU time.
+    content = "Customer SSN 078-05-1120 paid with 4111 1111 1111 1111\n" * 20_000
+    before = time.process_time()
+    matches = scan_patterns(content)
+    used = time.process_time() - before
+    assert len(matches) == 40_000
+    assert used < 3
