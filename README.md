@@ -42,8 +42,11 @@ Exit code is `0` for CLEAN and `1` when anything is flagged, so it drops straigh
 
 ```bash
 cat transcript.log | npx @opena2a/aicomply scan --json   # machine-readable
-git diff --cached | npx @opena2a/aicomply scan -q || echo "staged changes not cleared"
+git diff --cached | npx @opena2a/aicomply scan -q; [ $? -eq 1 ] && echo "staged changes not cleared"
 ```
+
+An empty diff (nothing staged) is no input and exits `2`, so the second line tests for
+exit `1` rather than for any non-zero exit.
 
 The regex layer does not detect email addresses, phone numbers, postal addresses, dates of birth, names, or a request phrased to leak data ("summarize all our user emails"): [what it does not detect](docs/detection.md#what-this-package-does-not-detect).
 

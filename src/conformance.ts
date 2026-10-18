@@ -24,6 +24,7 @@ import { normalize } from './normalize';
 import { scanAllViews } from './classifier/dual-layer';
 import { PACK_SHA256, PACK_VERSION } from './classifier/regex/pack';
 import type { Verdict } from './types';
+import { packageVersion } from './version';
 
 export interface ConformanceViolation {
   type: string;
@@ -183,20 +184,6 @@ function sameOutcome(expect: ConformanceExpect, actual: ConformanceOutcome): boo
       v.originalEnd === w.originalEnd
     );
   });
-}
-
-/**
- * The package version. From `src/` (tests) and from `dist/` (the published
- * package) one level up is the package root, which carries package.json.
- */
-function packageVersion(): string {
-  const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as {
-    version?: unknown;
-  };
-  if (typeof pkg.version !== 'string' || pkg.version === '') {
-    throw new Error('conformance: package.json has no version');
-  }
-  return pkg.version;
 }
 
 /** Run every case in `dir` against this runtime and build its record. */
