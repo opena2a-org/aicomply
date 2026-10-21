@@ -453,6 +453,20 @@ describe('classifyWithRegex', () => {
     expect(result.violations[0].value).toContain('...');
   });
 
+  it.each([
+    ['Passport: A123456', 'PASSPORT', '*******'],
+    ['Patient MRN: 12345678', 'MRN', '********'],
+    ['Patient MRN: 123456789', 'MRN', '...89'],
+    ['SSN: 123-45-6789', 'SSN', '...89'],
+    ['Patient MRN: 123456789012', 'MRN', '...12'],
+    ['Card 4222222222222 on file', 'PAN', '...2222'],
+    ['Card 4111 1111 1111 1111 on file', 'PAN', '...1111'],
+  ])('masks %j with no leading characters and at most the last 4', (content, type, masked) => {
+    // 8 characters or fewer reveal nothing, 9 to 12 the last 2, 13 or more the last 4.
+    const result = classifyWithRegex(content);
+    expect(result.violations.map((v) => [v.type, v.value])).toEqual([[type, masked]]);
+  });
+
   it('detects multiple violation types', () => {
     const content = 'SSN: 123-45-6789, Key: AKIAIOSFODNN7EXAMPLE';
     const result = classifyWithRegex(content);

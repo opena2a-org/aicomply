@@ -73,16 +73,15 @@ export function classifyWithRegex(
 }
 
 /**
- * Redact matched value for safe logging - show first 4 and last 2 chars
- * when the value is long enough that the prefix/suffix don't reveal the
- * full secret. Threshold of 6 chars (down from 8) ensures shorter MRNs
- * (typically 6-12 chars) get the same partial-redaction treatment as
- * longer credentials, so downstream audit dashboards see a consistent
- * shape across detection classes. Values of 6 chars or fewer (rare in
- * the regex set) fall back to a length-preserving full-mask so the
- * shape is still visible without leaking the bytes.
+ * Redact matched value for safe logging. No prefix is ever revealed, and
+ * the revealed suffix depends on the value's length: 8 characters or fewer
+ * reveal nothing and are fully starred, length-preserving ('*' per
+ * character); 9 to 12 characters give '...' plus the last 2; 13 or more
+ * give '...' plus the last 4. So `123-45-6789` gives `...89`, and a
+ * 7-character passport or record number shows none of its characters.
  */
 function redact(value: string): string {
-  if (value.length <= 6) return '*'.repeat(value.length);
-  return value.slice(0, 4) + '...' + value.slice(-2);
+  if (value.length <= 8) return '*'.repeat(value.length);
+  if (value.length <= 12) return '...' + value.slice(-2);
+  return '...' + value.slice(-4);
 }

@@ -78,7 +78,7 @@ const result = await comply({
 });
 
 console.log(result.verdict);     // 'VIOLATION'
-console.log(result.violations);  // [{ type: 'SSN', confidence: 0.95, value: '123-...89', ... }]
+console.log(result.violations);  // [{ type: 'SSN', confidence: 0.95, value: '...89', ... }]
 ```
 
 The package is a CommonJS build; ES modules import it as shown above.

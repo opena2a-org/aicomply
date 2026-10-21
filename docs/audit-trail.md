@@ -16,5 +16,7 @@ result.violations[0].view;  // 'normalized'
 > Do not pass them to an audit log, trace, or error reporter unmasked. Log
 > `verdict` and the masked `violations` instead, or redact the raw fields before
 > persisting them. `violations[i].value` is already masked: a regex finding
-> keeps its first 4 and last 2 characters (`123-...89`), or is fully starred at
-> 6 characters or fewer, and a Guard finding reads `***GUARD***`.
+> keeps none of its leading characters. At 8 characters or fewer it is fully
+> starred, at 9 to 12 it reads `...` and its last 2 characters (`...89` for
+> `123-45-6789`), and at 13 or more `...` and its last 4. A Guard finding reads
+> `***GUARD***`.
