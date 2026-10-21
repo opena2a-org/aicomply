@@ -123,7 +123,25 @@ def test_value_is_redacted_not_raw():
     res = classify_with_regex("key AKIA7IEO7LTOBPA48822 leaked")
     akia = next(v for v in res.violations if v.type == "CREDENTIAL")
     assert "AKIA7IEO7LTOBPA48822" not in akia.value  # never the raw secret
-    assert akia.value.startswith("AKIA") and akia.value.endswith("22")
+    assert akia.value == "...8822"  # no leading characters, the last 4 of 20
+
+
+@pytest.mark.parametrize(
+    ("content", "type_", "masked"),
+    [
+        ("Passport: A123456", "PASSPORT", "*******"),
+        ("Patient MRN: 12345678", "MRN", "********"),
+        ("Patient MRN: 123456789", "MRN", "...89"),
+        ("SSN: 123-45-6789", "SSN", "...89"),
+        ("Patient MRN: 123456789012", "MRN", "...12"),
+        ("Card 4222222222222 on file", "PAN", "...2222"),
+        ("Card 4111 1111 1111 1111 on file", "PAN", "...1111"),
+    ],
+)
+def test_value_masks_no_leading_characters(content: str, type_: str, masked: str) -> None:
+    # 8 characters or fewer reveal nothing, 9 to 12 the last 2, 13 or more the last 4.
+    res = classify_with_regex(content)
+    assert [(v.type, v.value) for v in res.violations] == [(type_, masked)]
 
 
 def test_clean_content_returns_clean():

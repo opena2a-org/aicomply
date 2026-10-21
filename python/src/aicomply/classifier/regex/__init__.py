@@ -27,9 +27,11 @@ class ScanViewOptions:
 
 def _redact(value: str) -> str:
     """Partial-redact a matched value for safe logging (port of redact())."""
-    if len(value) <= 6:
+    if len(value) <= 8:
         return "*" * len(value)
-    return value[:4] + "..." + value[-2:]
+    if len(value) <= 12:
+        return "..." + value[-2:]
+    return "..." + value[-4:]
 
 
 def classify_with_regex(

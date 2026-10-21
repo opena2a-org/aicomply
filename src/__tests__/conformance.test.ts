@@ -9,6 +9,8 @@ import {
   type ConformanceRecord,
 } from '../conformance';
 import { PACK_SHA256, PACK_VERSION } from '../classifier/regex/pack';
+import { scanPatterns } from '../classifier/regex/patterns';
+import { normalize } from '../normalize';
 
 const ROOT = join(__dirname, '..', '..');
 const CASES_DIR = join(ROOT, 'pack', 'conformance');
@@ -72,6 +74,45 @@ function seedDrift(root: string): string[] {
  * name rules refuse on sight whatever the file holds. Checked over every case
  * file, not only the corpus-seeded ones `seedDrift` reads.
  */
+/**
+ * The masking rule, written here apart from the library's: 8 characters or
+ * fewer are fully starred, 9 to 12 read `...` and the last 2, 13 or more `...`
+ * and the last 4. No prefix is ever kept.
+ */
+function maskedValue(raw: string): string {
+  if (raw.length <= 8) return '*'.repeat(raw.length);
+  return '...' + raw.slice(raw.length <= 12 ? -2 : -4);
+}
+
+/**
+ * Every stored violation whose `value` is not `maskedValue()` of the value the
+ * pattern captured in its case's `start`..`end` slice. The slice is taken from
+ * the view the violation names: the normalized input, or a compact or decoded
+ * view of it. The capture is read with the unmasked `scanPatterns()`, so the
+ * expected value comes from the input and never from the pack itself.
+ */
+function maskDrift(cases: ConformanceCase[]): string[] {
+  const drift: string[] = [];
+  for (const c of cases) {
+    const norm = normalize(c.input);
+    (c.expect.violations ?? []).forEach((v, i) => {
+      const texts =
+        v.view === 'normalized'
+          ? [norm.normalizedContent]
+          : norm.decodedExtractions.filter((e) => e.source === v.view).map((e) => e.decoded);
+      const wanted = new Set<string>();
+      for (const text of texts) {
+        const slice = text.slice(v.start, v.end);
+        for (const m of scanPatterns(slice)) {
+          if (m.type === v.type && m.start === 0 && m.end === slice.length) wanted.add(maskedValue(m.value));
+        }
+      }
+      if (!wanted.has(v.value)) drift.push(`${c.id}[${i}]: ${v.value} not in ${JSON.stringify([...wanted])}`);
+    });
+  }
+  return drift;
+}
+
 function storeNamedCaseFiles(casesDir: string): string[] {
   return readdirSync(casesDir)
     .filter((f) => f.endsWith('.jsonl'))
@@ -130,6 +171,13 @@ describe('pattern pack conformance suite', () => {
       .map((f) => f.replace(/\.jsonl$/, ''));
     const caseFiles = readdirSync(CASES_DIR);
     expect(corpusClasses.filter((k) => !caseFiles.includes(`${k}-cases.jsonl`))).toEqual([]);
+  });
+
+  it('stores each value masked from its own slice of the input, with no leading characters', () => {
+    const cases = loadConformanceCases(CASES_DIR);
+    const violations = cases.flatMap((c) => c.expect.violations ?? []);
+    expect(violations).toHaveLength(1627);
+    expect(maskDrift(cases)).toEqual([]);
   });
 
   it('names no case file like a credential store', () => {
