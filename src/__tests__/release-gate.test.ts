@@ -854,8 +854,9 @@ describe('npm publish lifecycle', () => {
    * end no command, and on every flag a `\` stands before anywhere on the
    * line, as the shell escapes the character after it, YAML decodes it in a
    * double-quoted value and a `\` that ends a line joins the next line onto
-   * its word. A quote left open on an earlier line is not seen. Each command
-   * is read once, so a long line takes time in proportion to its length.
+   * its word when that line keeps no indentation (see `workflowLines`). A
+   * quote left open on an earlier line is not seen. Each command is read
+   * once, so a long line takes time in proportion to its length.
    */
   function withoutInstallFlags(line: string): string {
     const parts = line.split(/([;&|()`])/);
@@ -1066,6 +1067,13 @@ describe('npm publish lifecycle', () => {
     ['an empty word handed to a publish in a double-quoted value', ['      - run: "npm publish \\"\\""'], null],
     ['an empty word handed to a publish in a single-quoted value', ["      - run: 'npm publish '''''"], null],
     ['a word lines of two backslashes and of one carry onto the publish in a double-quoted value', ['      - run: "npm publish\\', '\\\\', '\\', '        x"'], null],
+    ['a tarball handed to a publish two spaces after npm', ['      - run: npm  publish ./x.tgz'], null],
+    ['a tarball handed to a publish a tab after npm', ['      - run: npm\tpublish ./x.tgz'], null],
+    ['a tarball after npm, a space and a backslash, and a publish on the next line of a | block', ['      - run: |', '          npm \\', '          publish ./x.tgz'], null],
+    ['the flag on an npm run after a backslash-escaped ; and an install', ['      - run: npm run release \\; npm ci --ignore-scripts'], null],
+    ['the flag in a tagged and anchored literal scalar', ['      - run: !!str &a |', '          npm ci', '          npm publish --ignore-scripts'], null],
+    ['a tarball on a continued line of a tagged and anchored double-quoted value indented no deeper than its key', ['      - run: !!str &a "npm publish --provenance --access \\', '        public ./x.tgz"'], null],
+    ['the flag on an npm run after an install that only names the input <& reads', ['      - run: npm run release <& npm ci --ignore-scripts'], null],
   ])('refuses a publish with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
   });
