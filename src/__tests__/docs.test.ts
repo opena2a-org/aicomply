@@ -18,6 +18,7 @@ import { execFileSync } from 'child_process';
 import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join } from 'path';
+import { ClassificationSession } from '..';
 
 const ROOT = join(__dirname, '..', '..');
 const WHY_THIS_EXISTS = /\bwhy\s+this\s+exists\b/gi;
@@ -303,6 +304,22 @@ describe('docs', () => {
 describe('2.3.0 release notes', () => {
   const notes = () => readFileSync(join(ROOT, 'docs', 'releases', '2.3.0.md'), 'utf8');
   const headings = () => notes().split('\n').filter((line) => line.startsWith('## '));
+
+  it('list the TypeError a session now throws for a number, with its message', async () => {
+    // The Registry address refuses connections, so warming the cache stays local.
+    const session = await ClassificationSession.create({ baseUrl: 'http://127.0.0.1:1' });
+    const error = await session.comply(123 as unknown as string).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(TypeError);
+    const start = notes().indexOf('## Library calls that now throw a TypeError');
+    expect(start).toBeGreaterThan(-1);
+    const end = notes().indexOf('\n## ', start + 1);
+    const section = notes().slice(start, end === -1 ? undefined : end);
+    expect(section).toContain('`session.comply(123)`');
+    expect(section).toContain((error as TypeError).message);
+  });
 
   it('open with the change of exit code for no input', () => {
     expect(headings()[0]).toBe('## Exit code change: no input exits 2');
