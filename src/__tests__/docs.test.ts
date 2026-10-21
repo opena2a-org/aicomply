@@ -12,6 +12,8 @@
  * staged-diff gate line, and end with the known issues, whose fleet entry
  * names the package that is not listed as the one without a fleet signal and
  * does not say the threshold does not apply against the production Registry.
+ * Their list of the policy packs 2.3.0 rejects holds the message comply()
+ * gives for one of them.
  */
 
 import { execFileSync } from 'child_process';
@@ -19,6 +21,8 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join } from 'path';
 import { ClassificationSession } from '..';
+import { comply } from '../index';
+import type { PolicyPack } from '../types';
 
 const ROOT = join(__dirname, '..', '..');
 const WHY_THIS_EXISTS = /\bwhy\s+this\s+exists\b/gi;
@@ -349,5 +353,24 @@ describe('2.3.0 release notes', () => {
     expect(known).toMatch(/package\s+that\s+is\s+not\s+listed/);
     expect(known).toContain('`addSourcePackages()`');
     expect(known).not.toMatch(/threshold\s+does\s+not\s+apply\s+against/i);
+  });
+
+  it('list a policy pack that comply() rejects with the message comply() gives for it', async () => {
+    // A rule id that is a number, which 2.2.3 applied as POLICY_DENY:5.
+    const policyPack = {
+      name: 'p',
+      version: '1',
+      rules: [{ id: 5, name: 'R', action: 'DENY', patterns: ['SSN'] }],
+    } as unknown as PolicyPack;
+    const error = await comply({ content: 'My SSN is 123-45-6789.', useGuard: false }, { policyPack }).then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(TypeError);
+    const text = notes();
+    const start = text.indexOf('\n## Policy packs that 2.3.0 rejects\n');
+    expect(start).not.toBe(-1);
+    const end = text.indexOf('\n## ', start + 1);
+    expect(text.slice(start, end === -1 ? undefined : end)).toContain((error as TypeError).message);
   });
 });
