@@ -14,17 +14,22 @@ import { decodeInput, filesGlob, locate, run } from '../cli';
 import { classifyWithRegex } from '../classifier/regex';
 import { PATTERN_TYPES } from '../classifier/regex/pack';
 
+/**
+ * Records what is written to stdout and stderr. A write's callback is called
+ * on the next tick, as a stream calls it once the chunk has been handled: the
+ * CLI waits for one on stdout before it writes its stderr notes.
+ */
 function capture(): { out: string[]; err: string[]; restore: () => void } {
   const out: string[] = [];
   const err: string[] = [];
-  const outSpy = jest.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
-    out.push(String(c));
+  const record = (chunks: string[]) => (c: unknown, ...rest: unknown[]) => {
+    chunks.push(String(c));
+    const done = rest.find((r): r is () => void => typeof r === 'function');
+    if (done) process.nextTick(done);
     return true;
-  });
-  const errSpy = jest.spyOn(process.stderr, 'write').mockImplementation((c: unknown) => {
-    err.push(String(c));
-    return true;
-  });
+  };
+  const outSpy = jest.spyOn(process.stdout, 'write').mockImplementation(record(out));
+  const errSpy = jest.spyOn(process.stderr, 'write').mockImplementation(record(err));
   return { out, err, restore: () => { outSpy.mockRestore(); errSpy.mockRestore(); } };
 }
 
@@ -1312,6 +1317,19 @@ require.extensions['.ts'] = (module, filename) => {
       });
     }
 
+    /**
+     * Starts the CLI as `: | aicomply <args> 2>&1` does: its stdout and stderr
+     * are one pipe, and its stdin is a pipe that carries no bytes, so a scan
+     * of named files adds the "stdin not read" note. The child's stderr pipe
+     * gets only what the shell itself writes.
+     */
+    function startOnOnePipe(args: string[]) {
+      return spawn('/bin/sh', ['-c', ': | exec "$@" 2>&1', 'sh', process.execPath, '-r', hook, CLI, ...args], {
+        env: ENV,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    }
+
     /** The child's exit code and stderr, once it has exited and its pipes have closed. */
     function finished(child: ReturnType<typeof start>): Promise<{ code: number | null; stderr: string }> {
       let stderr = '';
@@ -1347,13 +1365,14 @@ require.extensions['.ts'] = (module, filename) => {
      * Runs the CLI with stdout as a pipe that is left unread until the child
      * exits or `holdMs` passes, whichever comes first. A CLI that exits with
      * output still queued loses what the pipe did not hold, however small each
-     * of its writes is.
+     * of its writes is. `launch` starts the child, start() unless given.
      */
     async function cliIntoHeldPipe(
       args: string[],
       holdMs: number,
+      launch: typeof start = start,
     ): Promise<{ code: number | null; stderr: string; stdout: Buffer }> {
-      const child = start(args);
+      const child = launch(args);
       const done = finished(child);
       const chunks: Buffer[] = [];
       let reading = false;
@@ -1401,6 +1420,44 @@ require.extensions['.ts'] = (module, filename) => {
       child.stdout.once('data', () => child.stdout.destroy());
       expect(await done).toEqual({ code: 1, stderr: '' });
     }, 60_000);
+
+    describe('stderr notes when stdout and stderr share the pipe', () => {
+      const QUIET_NOTE = 'aicomply: --json takes precedence over --quiet; drop --json to print only the verdict line\n';
+      const NOT_READ_NOTE = 'aicomply: stdin not read because files were named; add - to scan it too\n';
+      // The shell's `2>&1` and `: |` are POSIX.
+      const posixIt = process.platform === 'win32' ? it.skip : it;
+
+      // `: | aicomply scan --json -q many.log 2>&1 | (sleep 2; cat)`: both
+      // notes were written while most of the report was still queued for the
+      // pipe, and landed inside it, in the middle of the JSON.
+      posixIt('follow the whole --json report when the reader lags behind', async () => {
+        const report = outputToFile(['scan', '--json', log]).toString('utf8');
+        const piped = await cliIntoHeldPipe(['scan', '--json', '-q', log], 2000, startOnOnePipe);
+        const out = piped.stdout.toString('utf8');
+        expect({ code: piped.code, stderr: piped.stderr }).toEqual({ code: 1, stderr: '' });
+        expect(out.slice(report.length)).toBe(QUIET_NOTE + NOT_READ_NOTE);
+        expect(out.slice(0, report.length) === report).toBe(true);
+      }, 60_000);
+
+      posixIt('follow the whole human-readable report when the reader lags behind', async () => {
+        const report = outputToFile(['scan', ...logs]).toString('utf8');
+        const piped = await cliIntoHeldPipe(['scan', ...logs], 2000, startOnOnePipe);
+        const out = piped.stdout.toString('utf8');
+        expect({ code: piped.code, stderr: piped.stderr }).toEqual({ code: 1, stderr: '' });
+        expect(out.slice(report.length)).toBe(NOT_READ_NOTE);
+        expect(out.slice(0, report.length) === report).toBe(true);
+      }, 60_000);
+
+      // The CLI waits for the report to be written before the note, and a
+      // write to a pipe whose reader has gone fails with EPIPE.
+      it('are written and the verdict code kept when the reader closes the stdout pipe early', async () => {
+        // Like `aicomply scan many.log --json -q | head -c 1`.
+        const child = start(['scan', log, '--json', '-q']);
+        const done = finished(child);
+        child.stdout.once('data', () => child.stdout.destroy());
+        expect(await done).toEqual({ code: 1, stderr: QUIET_NOTE });
+      }, 60_000);
+    });
   });
 
   describe('input of many megabytes', () => {

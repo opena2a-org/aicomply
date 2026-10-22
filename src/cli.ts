@@ -694,37 +694,50 @@ async function runInner(argv: string[]): Promise<number> {
     process.stdout.write(`${worst}\n`);
   } else renderHuman(sources, results);
 
-  if (args.json && args.quiet) process.stderr.write(`aicomply: ${QUIET_WITH_JSON}\n`);
-  if (unread === 'stream') process.stderr.write(`aicomply: ${STDIN_NOT_READ}\n`);
+  const notes = args.json && args.quiet ? [QUIET_WITH_JSON] : [];
+  if (unread === 'stream') notes.push(STDIN_NOT_READ);
+  if (notes.length > 0) {
+    // Most of a large report can still be queued for a piped stdout. Writing
+    // the notes once it is flushed keeps them after the report where both
+    // streams go to one pipe.
+    await flushed(process.stdout);
+    process.stderr.write(notes.map((note) => `aicomply: ${note}\n`).join(''));
+  }
 
   // Exit 1 if anything is not CLEAN, so the CLI works as a CI gate.
   return scanned.some((r) => r.verdict !== 'CLEAN') ? 1 : 0;
 }
 
 /**
- * Exits with `code` once stdout and stderr have handed everything written to
- * them to the operating system. When stdout is a pipe, write() can return
- * while most of the output is still queued, and process.exit() discards that
- * queue: a --json report piped to another command arrived cut off. A write's
- * callback runs after every earlier write to the same stream has finished, so
- * an empty write marks the end of the queue. The callback also runs when the
- * write fails, as it does with EPIPE once the reader has closed the pipe
- * (`| head`); the 'error' listener keeps that failure from being thrown as an
- * unhandled 'error' event.
+ * Resolves once `stream` has handed everything written to it so far to the
+ * operating system. When the stream is a pipe, write() can return while most
+ * of the output is still queued. A write's callback runs after every earlier
+ * write to the same stream has finished, so an empty write marks the end of
+ * the queue. The callback also runs when the write fails, as it does with
+ * EPIPE once the reader has closed the pipe (`| head`).
+ */
+function flushed(stream: NodeJS.WriteStream): Promise<void> {
+  return new Promise((resolve) => {
+    stream.write('', () => resolve());
+  });
+}
+
+/**
+ * Exits with `code` once stdout and stderr are flushed. process.exit()
+ * discards what is still queued: a --json report piped to another command
+ * arrived cut off.
  */
 function exitWhenFlushed(code: number): void {
-  const streams = [process.stdout, process.stderr];
-  let pending = streams.length;
-  for (const stream of streams) {
-    stream.on('error', () => {});
-    stream.write('', () => {
-      if (--pending === 0) process.exit(code);
-    });
-  }
+  Promise.all([flushed(process.stdout), flushed(process.stderr)]).then(() => process.exit(code));
 }
 
 // Only run when invoked as a binary, not when imported by tests.
 if (require.main === module) {
+  // A write that fails, as one does with EPIPE once the reader has closed the
+  // pipe, would be thrown as an unhandled 'error' event. The listeners go on
+  // before run(), as run() waits for stdout to be flushed before it writes
+  // its stderr notes.
+  for (const stream of [process.stdout, process.stderr]) stream.on('error', () => {});
   run(process.argv.slice(2))
     .then((code) => exitWhenFlushed(code))
     .catch((err) => {
