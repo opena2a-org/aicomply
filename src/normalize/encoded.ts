@@ -26,8 +26,12 @@ const MIN_CANDIDATE_LENGTH = 24;
 const MAX_DEPTH = 2;
 const PRINTABLE_MIN_RATIO = 0.9;
 
-// Base64 character set, valid padding, length multiple of 4.
-const BASE64_PATTERN = /[A-Za-z0-9+/]{20,}={0,2}/g;
+// A run of 20 or more Base64 characters, then up to two `=`. It is written as
+// 20 characters and then `*`, not as `{20,}`: on Node 26.12, exec of
+// /[A-Za-z0-9+/]{20,}={0,2}/g threw "Maximum call stack size exceeded" on a run
+// of 5592394 copies of the letter a, and this pattern matched a run of
+// 157286399 of them.
+const BASE64_PATTERN = /[A-Za-z0-9+/]{20}[A-Za-z0-9+/]*={0,2}/g;
 
 // URL-encoded candidate: a contiguous run of URL-safe chars that includes
 // at least one percent-escape. We further gate to ≥ 2 escapes after match.
