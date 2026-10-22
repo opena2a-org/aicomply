@@ -307,6 +307,23 @@ function decodeUtf32(data: Buffer, littleEndian: boolean): string {
 }
 
 /**
+ * decodeInput for an input that `name` names in a message: a quoted file
+ * name, or (stdin). A decode that throws is a usage error that gives the
+ * input's size in bytes.
+ */
+function decodeNamed(data: Buffer, name: string): string {
+  try {
+    return decodeInput(data);
+  } catch {
+    // Each decoder writes U+FFFD for bytes it cannot decode and goes on, so
+    // what fails here is the length. On Node 26.12, toString throws
+    // ERR_STRING_TOO_LONG past the longest string, and the UTF-16 TextDecoder
+    // throws ERR_ENCODING_INVALID_ENCODED_DATA from 268435456 bytes on.
+    throw new UsageError(`cannot scan ${name}: at ${data.length} bytes it is too large to decode as one input`);
+  }
+}
+
+/**
  * Reads each named file, then stdin when it is requested. `pipeUnread` is true
  * when stdin is a pipe or socket that is not read because files were named.
  */
@@ -345,17 +362,7 @@ async function collectSources(files: string[], pipeUnread: boolean): Promise<Sou
       }
       throw new UsageError(`cannot read '${file}' (check the path). Try 'aicomply --help'.`);
     }
-    let content: string;
-    try {
-      content = decodeInput(data);
-    } catch {
-      // Each decoder writes U+FFFD for bytes it cannot decode and goes on, so
-      // what fails here is the length. On Node 26.12, toString throws
-      // ERR_STRING_TOO_LONG past the longest string, and the UTF-16 TextDecoder
-      // throws ERR_ENCODING_INVALID_ENCODED_DATA from 268435456 bytes on.
-      throw new UsageError(`cannot scan '${file}': at ${data.length} bytes it is too large to decode as one input`);
-    }
-    sources.push({ label: file, content, bytes: data.length });
+    sources.push({ label: file, content: decodeNamed(data, `'${file}'`), bytes: data.length });
   }
 
   if (stdinRequested(files)) {
@@ -368,7 +375,7 @@ async function collectSources(files: string[], pipeUnread: boolean): Promise<Sou
       );
     }
     const data = await readStdin();
-    sources.push({ label: '(stdin)', content: decodeInput(data), bytes: data.length });
+    sources.push({ label: '(stdin)', content: decodeNamed(data, '(stdin)'), bytes: data.length });
   }
 
   // comply() runs no layer on empty content and returns CLEAN, so a run in
