@@ -14,14 +14,21 @@ listed as `0 bytes, nothing to classify` (`--json`: `"bytes": 0`, `"verdict": nu
 
 Each named file is read before any input is scanned, and one that cannot be read
 ends the run: the CLI prints why on stderr, prints nothing on stdout, with `--json`
-too, and exits `2`. This holds for a path that does not exist, for a directory and
-for a file without read permission. Here `card.txt` holds a card number and is not
-reported:
+too, and exits `2`. This holds for a path that does not exist, for a directory, for
+a file without read permission and for a file too large to scan as one input. Here
+`card.txt` holds a card number and is not reported:
 
 ```
 $ aicomply scan clean.txt /nonexistent.txt card.txt --json
 aicomply: cannot read '/nonexistent.txt' (check the path). Try 'aicomply --help'.
 ```
+
+A file of 2 GiB or more gets
+`cannot read '<file>': it is 2 GiB or larger, and this CLI reads files under 2 GiB`.
+A smaller file whose text does not decode into one string gets
+`cannot scan '<file>': at <n> bytes it is too large to decode as one input`; on
+Node 26.12 that was a file of 629145600 bytes decoded as UTF-8 and a UTF-16 file
+of 300000000 bytes.
 
 A gate over the files of a diff can leave out the deleted ones:
 `git diff --cached --name-only --diff-filter=d` lists the staged files without them.

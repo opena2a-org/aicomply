@@ -4,6 +4,7 @@
  * shape. Detection accuracy itself is covered by the regex/dual-layer suites.
  */
 
+import { constants as bufferConstants } from 'buffer';
 import { execFileSync, spawn, spawnSync } from 'child_process';
 import fs, { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { createServer, type Server } from 'net';
@@ -223,6 +224,51 @@ describe('aicomply CLI', () => {
       });
     } finally {
       chmodSync(f, 0o644);
+    }
+  });
+
+  // A file too large to read or to decode got the missing-file message, "check
+  // the path", though the path exists. The files are extended with
+  // truncateSync, not written.
+  it('says a file of 2 GiB or more is larger than the CLI reads', async () => {
+    for (const size of [2 ** 31, 3 * 2 ** 30]) {
+      const f = join(dir, `large-${size}.bin`);
+      writeFileSync(f, '');
+      fs.truncateSync(f, size);
+      try {
+        const cap = capture();
+        const code = await run(['scan', f]);
+        cap.restore();
+        expect({ size, code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({
+          size,
+          code: 2,
+          out: '',
+          err: `aicomply: cannot read '${f}': it is 2 GiB or larger, and this CLI reads files under 2 GiB\n`,
+        });
+      } finally {
+        rmSync(f, { force: true });
+      }
+    }
+  });
+
+  it('says a file whose text is longer than the longest string is too large to decode', async () => {
+    // Zero bytes carry no byte order mark, so the file is decoded as UTF-8,
+    // one character for each byte.
+    const size = bufferConstants.MAX_STRING_LENGTH + 1;
+    const f = join(dir, 'longer-than-a-string.bin');
+    writeFileSync(f, '');
+    fs.truncateSync(f, size);
+    try {
+      const cap = capture();
+      const code = await run(['scan', f]);
+      cap.restore();
+      expect({ code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({
+        code: 2,
+        out: '',
+        err: `aicomply: cannot scan '${f}': at ${size} bytes it is too large to decode as one input\n`,
+      });
+    } finally {
+      rmSync(f, { force: true });
     }
   });
 
