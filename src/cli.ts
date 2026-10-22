@@ -315,9 +315,9 @@ async function collectSources(files: string[], pipeUnread: boolean): Promise<Sou
   const sources: Source[] = [];
 
   for (const file of realFiles) {
+    let data: Buffer;
     try {
-      const data = readFileSync(file);
-      sources.push({ label: file, content: decodeInput(data), bytes: data.length });
+      data = readFileSync(file);
     } catch (err) {
       // The path exists, so "check the path" would send the user the wrong way.
       if (isDirectory(file)) {
@@ -330,6 +330,11 @@ async function collectSources(files: string[], pipeUnread: boolean): Promise<Sou
       if (code === 'EACCES' || code === 'EPERM') {
         throw new UsageError(`cannot read '${file}': permission denied`);
       }
+      // On Node 26.12, readFileSync reads a file of 2147483647 bytes and
+      // refuses one of 2147483648 (2 GiB) or more.
+      if (code === 'ERR_FS_FILE_TOO_LARGE') {
+        throw new UsageError(`cannot read '${file}': it is 2 GiB or larger, and this CLI reads files under 2 GiB`);
+      }
       // The help's example `aicomply scan src/*.txt -q` puts the option after
       // the files, so it gets written after -- as well (`aicomply scan --
       // -notes.txt -q`), where it is an input.
@@ -340,6 +345,17 @@ async function collectSources(files: string[], pipeUnread: boolean): Promise<Sou
       }
       throw new UsageError(`cannot read '${file}' (check the path). Try 'aicomply --help'.`);
     }
+    let content: string;
+    try {
+      content = decodeInput(data);
+    } catch {
+      // Each decoder writes U+FFFD for bytes it cannot decode and goes on, so
+      // what fails here is the length. On Node 26.12, toString throws
+      // ERR_STRING_TOO_LONG past the longest string, and the UTF-16 TextDecoder
+      // throws ERR_ENCODING_INVALID_ENCODED_DATA from 268435456 bytes on.
+      throw new UsageError(`cannot scan '${file}': at ${data.length} bytes it is too large to decode as one input`);
+    }
+    sources.push({ label: file, content, bytes: data.length });
   }
 
   if (stdinRequested(files)) {
