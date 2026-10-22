@@ -433,11 +433,119 @@ def test_human_output_widens_the_type_column_to_the_longest_type_printed():
     assert re.match(r" {4}prompt_injection {5}••• ", lines[2])
 
 
+# A file of 50,000 SSN lines printed 50,010 lines: one per finding (mirror of
+# the TS CLI tests).
+_SSN_LINE = "My SSN is 123-45-6789\n"
+_CARD_LINE = "card 4111111111111111\n"
+
+
+def _type_and_line(line: str) -> tuple[str, str] | None:
+    m = re.match(r" {4}(\S+) .* line (\d+) col \d+$", line)
+    return (m.group(1), m.group(2)) if m else None
+
+
+def test_human_output_lists_the_first_50_findings_and_counts_the_rest_by_type(tmp_path, capsys):
+    # After the first 50 come 2 SSNs, then 3 card numbers.
+    f = tmp_path / "fifty-five.txt"
+    f.write_text(_SSN_LINE * 52 + _CARD_LINE * 3)
+    assert run(["scan", str(f)]) == 1
+    out = capsys.readouterr().out
+    assert f"  VIOLATION  {f}   55 findings\n" in out
+    lines = _finding_lines(out)
+    assert len(lines) == 51
+    assert [_type_and_line(line) for line in lines[:50]] == [("SSN", str(i)) for i in range(1, 51)]
+    assert lines[50] == "    ... 5 more (PAN 3, SSN 2); use --json for all"
+    assert re.match(
+        r"Verdict: VIOLATION {2}· {2}55 findings across 1 input\. ", out.rstrip().split("\n")[-1]
+    )
+
+    assert run(["scan", str(f), "--json"]) == 1
+    assert len(json.loads(capsys.readouterr().out)[0]["findings"]) == 55
+
+
+def test_human_output_names_types_of_equal_count_in_the_order_they_first_appear(tmp_path, capsys):
+    f = tmp_path / "fifty-four.txt"
+    f.write_text(_SSN_LINE * 52 + _CARD_LINE * 2)
+    assert run(["scan", str(f)]) == 1
+    lines = _finding_lines(capsys.readouterr().out)
+    assert lines[-1] == "    ... 4 more (SSN 2, PAN 2); use --json for all"
+
+
+def test_human_output_lists_all_of_50_findings_and_the_first_50_of_each_input(tmp_path, capsys):
+    fifty = tmp_path / "fifty.txt"
+    fifty.write_text(_SSN_LINE * 50)
+    more = tmp_path / "fifty-one.txt"
+    more.write_text(_SSN_LINE * 51)
+    assert run(["scan", str(fifty), str(more)]) == 1
+    lines = _finding_lines(capsys.readouterr().out)
+    assert len(lines) == 101
+    first_50 = [("SSN", str(i)) for i in range(1, 51)]
+    assert [_type_and_line(line) for line in lines[:50]] == first_50
+    assert [_type_and_line(line) for line in lines[50:100]] == first_50
+    assert lines[100] == "    ... 1 more (SSN 1); use --json for all"
+
+
+def test_scan_help_says_how_many_findings_of_an_input_the_report_lists(capsys):
+    assert run(["scan", "--help"]) == 0
+    assert (
+        "The report lists the first 50 findings of each input and counts the rest by\n"
+        "type; --json lists every finding.\n"
+    ) in capsys.readouterr().out
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None or not _TS_CLI.is_file(),
+    reason="needs node and the built TS CLI (npm run build)",
+)
+def test_human_output_lists_the_findings_the_ts_cli_lists_on_a_file_of_55(tmp_path):
+    (tmp_path / "f.txt").write_text(_SSN_LINE * 52 + _CARD_LINE * 3)
+    ts = subprocess.run(
+        ["node", str(_TS_CLI), "scan", "f.txt"],
+        capture_output=True,
+        cwd=tmp_path,
+        timeout=60,
+        check=False,
+    )
+    py = subprocess.run(
+        [sys.executable, "-m", "aicomply", "scan", "f.txt"],
+        capture_output=True,
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": _PACKAGE_PARENT, "PYTHONIOENCODING": "utf-8"},
+        timeout=60,
+        check=False,
+    )
+    assert (ts.returncode, py.returncode) == (1, 1)
+    ts_lines = _finding_lines(ts.stdout.decode())
+    assert len(ts_lines) == 51
+    assert _finding_lines(py.stdout.decode()) == ts_lines
+
+
 def test_scan_quiet(tmp_path, capsys):
     f = tmp_path / "pii.txt"
     f.write_text("SSN 516-81-3086")
     assert run(["scan", str(f), "--quiet"]) == 1
     assert capsys.readouterr().out.strip() == "VIOLATION"
+
+
+# --json printed its report and dropped --quiet without a word.
+@pytest.mark.parametrize("flags", [["--json", "--quiet"], ["-q", "--json"]])
+def test_json_with_quiet_prints_the_json_and_says_json_takes_precedence(tmp_path, capsys, flags):
+    f = tmp_path / "pii.txt"
+    f.write_text("SSN 078-05-1120\n")
+    assert run(["scan", str(f), *flags]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "aicomply: --json takes precedence over --quiet;"
+        " drop --json to print only the verdict line\n"
+    )
+    payload = json.loads(captured.out)
+    assert [(p["source"], p["verdict"]) for p in payload] == [(str(f), "VIOLATION")]
+
+    assert run(["scan", "--help"]) == 0
+    assert (
+        "  --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY);\n"
+        "                --json takes precedence when both are given\n"
+    ) in capsys.readouterr().out
 
 
 # comply() runs no layer on empty content and returns CLEAN, so a stdin that was
@@ -684,6 +792,28 @@ def test_missing_file_exit_2(capsys):
     assert "cannot read" in capsys.readouterr().err
 
 
+# A file the user may not read got the missing-file message, "check the path",
+# though the path exists. Mode 000 does not stop root from reading it, and on
+# Windows chmod sets only the read-only flag.
+@pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="mode 000 does not stop this user reading the file",
+)
+def test_file_it_may_not_read_says_permission_denied(tmp_path, capsys):
+    f = tmp_path / "no-read.txt"
+    f.write_text("SSN 078-05-1120\n")
+    f.chmod(0o000)
+    try:
+        assert run(["scan", str(f)]) == 2
+    finally:
+        f.chmod(0o644)
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == (
+        "",
+        f"aicomply: cannot read '{f}': permission denied\n",
+    )
+
+
 def _sh(script: str) -> str:
     return subprocess.run(
         ["/bin/sh", "-c", script], capture_output=True, text=True, check=True
@@ -765,6 +895,24 @@ def test_second_double_dash_is_a_file_name(tmp_path, monkeypatch, capsys):
     assert run(["scan", "--", "--"]) == 2
     assert capsys.readouterr().err == (
         "aicomply: cannot read '--' (check the path). Try 'aicomply --help'.\n"
+    )
+
+
+# The help's example ``aicomply scan src/*.txt -q`` puts the option last, so
+# ``aicomply scan -- -notes.txt -q`` is a first try; it said "check the path"
+# about -q.
+@pytest.mark.parametrize("option", ["-q", "--quiet", "--json", "-h", "--help", "-V", "--version"])
+def test_option_name_after_double_dash_is_an_input_and_the_error_says_to_move_it(
+    tmp_path, monkeypatch, capsys, option
+):
+    (tmp_path / "-notes.txt").write_text("SSN 078-05-1120\n")
+    monkeypatch.chdir(tmp_path)
+    assert run(["scan", "--", "-notes.txt", option]) == 2
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == (
+        "",
+        f"aicomply: cannot read '{option}': after -- every argument is an input;"
+        f" put {option} before --\n",
     )
 
 

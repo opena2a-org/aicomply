@@ -5,7 +5,7 @@
  */
 
 import { execFileSync, spawn, spawnSync } from 'child_process';
-import fs, { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync, rmSync } from 'fs';
+import fs, { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { createServer, type Server } from 'net';
 import { devNull, tmpdir } from 'os';
 import { join } from 'path';
@@ -200,6 +200,27 @@ describe('aicomply CLI', () => {
     expect(code).toBe(2);
   });
 
+  // A file the user may not read got the missing-file message, "check the
+  // path", though the path exists. Mode 000 does not stop root from reading
+  // it, and on Windows chmod changes only the write permission.
+  const unreadableIt = process.platform === 'win32' || process.getuid?.() === 0 ? it.skip : it;
+  unreadableIt('says permission denied for a file it may not read', async () => {
+    const f = fixture('no-read.txt', 'SSN 078-05-1120\n');
+    chmodSync(f, 0o000);
+    try {
+      const cap = capture();
+      const code = await run(['scan', f]);
+      cap.restore();
+      expect({ code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({
+        code: 2,
+        out: '',
+        err: `aicomply: cannot read '${f}': permission denied\n`,
+      });
+    } finally {
+      chmodSync(f, 0o644);
+    }
+  });
+
   // A directory used to get the missing-file message, "check the path",
   // though the path exists.
   it('says a directory argument is a directory and prints the glob for the files in it', async () => {
@@ -301,6 +322,32 @@ describe('aicomply CLI', () => {
         code: 2,
         err: "aicomply: cannot read '--' (check the path). Try 'aicomply --help'.\n",
       });
+    });
+
+    // The help's example `aicomply scan src/*.txt -q` puts the option last, so
+    // `aicomply scan -- -notes.txt -q` is a first try; it said "check the path"
+    // about -q.
+    it('says an option name after -- is an input and to put it before --', async () => {
+      // Not `dir`: a test above leaves a file called --json in it.
+      const sub = mkdtempSync(join(dir, 'options-after-dashes-'));
+      writeFileSync(join(sub, '-notes.txt'), 'SSN 078-05-1120\n', 'utf8');
+      const cwd = process.cwd();
+      process.chdir(sub);
+      try {
+        for (const option of ['-q', '--quiet', '--json', '-h', '--help', '-V', '--version']) {
+          const cap = capture();
+          const code = await run(['scan', '--', '-notes.txt', option]);
+          cap.restore();
+          expect({ option, code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({
+            option,
+            code: 2,
+            out: '',
+            err: `aicomply: cannot read '${option}': after -- every argument is an input; put ${option} before --\n`,
+          });
+        }
+      } finally {
+        process.chdir(cwd);
+      }
     });
 
     it('without --, still reads an argument that starts with - as an option', async () => {
@@ -546,6 +593,30 @@ describe('aicomply CLI', () => {
     cap.restore();
     expect(code).toBe(1);
     expect(cap.out.join('').trim()).toBe('VIOLATION');
+  });
+
+  // --json printed its report and dropped --quiet without a word.
+  it('prints the --json report with --quiet, and a stderr line says --json takes precedence', async () => {
+    const f = fixture('json-quiet.txt', 'SSN 078-05-1120\n');
+    for (const flags of [['--json', '--quiet'], ['-q', '--json']]) {
+      const cap = capture();
+      const code = await run(['scan', f, ...flags]);
+      cap.restore();
+      expect({ flags, code, err: cap.err.join('') }).toEqual({
+        flags,
+        code: 1,
+        err: 'aicomply: --json takes precedence over --quiet; drop --json to print only the verdict line\n',
+      });
+      expect(JSON.parse(cap.out.join(''))).toMatchObject([{ source: f, verdict: 'VIOLATION' }]);
+    }
+
+    const help = capture();
+    await run(['scan', '--help']);
+    help.restore();
+    expect(help.out.join('')).toContain(
+      '  --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY);\n' +
+        '                --json takes precedence when both are given\n',
+    );
   });
 
   it('multi-file scan surfaces the worst verdict and exits 1 if any input is dirty', async () => {
@@ -1130,6 +1201,68 @@ describe('aicomply CLI', () => {
       expect(lines[1]).toMatch(/^ {4}exfiltration_pattern ••• /);
       expect(lines[2]).toMatch(/^ {4}prompt_injection {5}••• /);
     });
+
+    // A file of 50,000 SSN lines printed 50,009 lines: one per finding.
+    const ssnLines = (n: number) => 'My SSN is 123-45-6789\n'.repeat(n);
+    const typeAndLine = (l: string) => /^ {4}(\S+) .* line (\d+) col \d+$/.exec(l)?.slice(1);
+
+    it('lists the first 50 findings of an input and counts the rest by type, most first', async () => {
+      // After the first 50 come 2 SSNs, then 3 card numbers.
+      const f = fixture('fifty-five.txt', ssnLines(52) + 'card 4111111111111111\n'.repeat(3));
+      const cap = capture();
+      const code = await run(['scan', f]);
+      cap.restore();
+      expect(code).toBe(1);
+      const out = cap.out.join('');
+      expect(out).toContain(`  VIOLATION  ${f}   55 findings\n`);
+      const lines = findingLines(out);
+      expect(lines).toHaveLength(51);
+      expect(lines.slice(0, 50).map(typeAndLine)).toEqual(
+        Array.from({ length: 50 }, (_, i) => ['SSN', String(i + 1)]),
+      );
+      expect(lines[50]).toBe('    ... 5 more (PAN 3, SSN 2); use --json for all');
+      expect(out.trimEnd().split('\n').pop()).toMatch(/^Verdict: VIOLATION {2}· {2}55 findings across 1 input\. /);
+
+      const capJson = capture();
+      await run(['scan', f, '--json']);
+      capJson.restore();
+      expect(JSON.parse(capJson.out.join(''))[0].findings).toHaveLength(55);
+    });
+
+    it('names the types of equal count in the order they first appear after the first 50', async () => {
+      const f = fixture('fifty-four.txt', ssnLines(52) + 'card 4111111111111111\n'.repeat(2));
+      const cap = capture();
+      await run(['scan', f]);
+      cap.restore();
+      expect(findingLines(cap.out.join('')).pop()).toBe('    ... 4 more (SSN 2, PAN 2); use --json for all');
+    });
+
+    it('lists all findings of an input of 50, and the first 50 of each input of several', async () => {
+      const fifty = fixture('fifty.txt', ssnLines(50));
+      const more = fixture('fifty-one.txt', ssnLines(51));
+      const cap = capture();
+      await run(['scan', fifty, more]);
+      cap.restore();
+      const lines = findingLines(cap.out.join(''));
+      expect(lines).toHaveLength(101);
+      expect(lines.slice(0, 50).map(typeAndLine)).toEqual(
+        Array.from({ length: 50 }, (_, i) => ['SSN', String(i + 1)]),
+      );
+      expect(lines.slice(50, 100).map(typeAndLine)).toEqual(
+        Array.from({ length: 50 }, (_, i) => ['SSN', String(i + 1)]),
+      );
+      expect(lines[100]).toBe('    ... 1 more (SSN 1); use --json for all');
+    });
+
+    it('says in scan --help how many findings of an input the report lists', async () => {
+      const cap = capture();
+      await run(['scan', '--help']);
+      cap.restore();
+      expect(cap.out.join('')).toContain(
+        'The report lists the first 50 findings of each input and counts the rest by\n' +
+          'type; --json lists every finding.\n',
+      );
+    });
   });
 
   // The bin wrapper exits the process, so it runs only when cli.ts is the main
@@ -1155,17 +1288,21 @@ require.extensions['.ts'] = (module, filename) => {
   const ENV = { ...process.env, NODE_NO_WARNINGS: '1' };
 
   describe('output through a pipe', () => {
-    // 3,000 findings take both output formats far past a 64 KiB pipe buffer.
-    const content = Array.from(
-      { length: 3000 },
-      (_, i) => `ticket ${i + 1}: SSN 078-05-1120 on file\n`,
-    ).join('');
+    // 3,000 findings take --json far past a 64 KiB pipe buffer. The report
+    // lists at most 50 findings of an input, so for the report the same lines
+    // are split into 60 files of 50.
+    const tickets = Array.from({ length: 3000 }, (_, i) => `ticket ${i + 1}: SSN 078-05-1120 on file\n`);
+    const content = tickets.join('');
     let hook: string;
     let log: string;
+    let logs: string[];
 
     beforeAll(() => {
       hook = fixture('transpile-hook.js', HOOK);
       log = fixture('many.log', content);
+      logs = Array.from({ length: 60 }, (_, k) =>
+        fixture(`many-${k + 1}.log`, tickets.slice(k * 50, (k + 1) * 50).join('')),
+      );
     });
 
     function start(args: string[]) {
@@ -1246,13 +1383,14 @@ require.extensions['.ts'] = (module, filename) => {
     }, 60_000);
 
     it('human-readable output to a pipe keeps its last lines when the reader lags behind', async () => {
-      const expected = outputToFile(['scan', log]);
-      const piped = await cliIntoHeldPipe(['scan', log], 2000);
+      const expected = outputToFile(['scan', ...logs]);
+      expect(expected.length).toBeGreaterThan(64 * 1024);
+      const piped = await cliIntoHeldPipe(['scan', ...logs], 2000);
       expect({ code: piped.code, stderr: piped.stderr }).toEqual({ code: 1, stderr: '' });
       expect(piped.stdout.length).toBe(expected.length);
       expect(piped.stdout.equals(expected)).toBe(true);
       expect(piped.stdout.toString('utf8').trimEnd().split('\n').pop()).toMatch(
-        /^Verdict: VIOLATION {2}· {2}3000 findings across 1 input\. /,
+        /^Verdict: VIOLATION {2}· {2}3000 findings across 60 inputs\. /,
       );
     }, 60_000);
 

@@ -40,6 +40,13 @@ no input (stdin is a terminal, or every input is 0 bytes). An input of 0 bytes b
 others is not classified: it is listed as `0 bytes, nothing to classify` (`--json`:
 `"bytes": 0`, `"verdict": null`, `"layers": []`) and does not decide the exit code.
 
+On three files of 20 MiB, this CLI took 6.1 to 7.0 times as long as the TypeScript CLI.
+On one machine, under Python 3.14.3 and Node.js v26.12.0, `aicomply scan -q` took 3.90 s
+on one English sentence repeated, 7.18 s on generated log lines and 11.55 s on random
+bytes, where the TypeScript CLI built from the same source tree took 0.64, 1.02 and
+1.74 s (the median of three runs each). For a file of that size,
+`npx @opena2a/aicomply scan <file>` is the faster choice.
+
 ## Library API
 
 ```python

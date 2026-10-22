@@ -71,6 +71,18 @@ function parseArgs(argv: string[]): ParsedArgs {
   return parsed;
 }
 
+/**
+ * The option spellings parseArgs reads. Before `--` each of them is an
+ * option, so an input with one of these names was named after `--`.
+ */
+const OPTION_NAMES = new Set(['--json', '--quiet', '-q', '--help', '-h', '--version', '-V']);
+
+/**
+ * The report lists at most this many findings of an input, then one line that
+ * counts the rest by type; --json lists every finding.
+ */
+const MAX_FINDING_LINES = 50;
+
 const HELP = `aicomply -- inline content classifier for AI agent I/O
 
 Detects SSNs, card and bank account numbers, passport and medical record
@@ -127,6 +139,8 @@ Guard layer when a local nanomind-daemon is reachable. Prints a verdict per
 input and an overall verdict. An input of 0 bytes is not classified: it is
 listed as "0 bytes, nothing to classify" (--json: "bytes": 0, "verdict": null,
 "layers": []), and the inputs that were scanned decide the exit code.
+The report lists the first ${MAX_FINDING_LINES} findings of each input and counts the rest by
+type; --json lists every finding.
 
 The regex layer checks SSNs, card and bank account numbers, passport and
 medical record numbers, provider identifiers (NPI), credentials and CUI
@@ -143,7 +157,8 @@ OPTIONS
   --json        Machine-readable JSON output (verdict + findings, values masked;
                 each finding carries its line and column in the input, and each
                 input its size in bytes and the layers that ran)
-  --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY)
+  --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY);
+                --json takes precedence when both are given
   --help, -h    This help
   --            Ends the options; each later argument is an input, so a file
                 name can start with - (aicomply scan -- -notes.txt)
@@ -184,6 +199,8 @@ function stdinRequested(files: string[]): boolean {
 }
 
 const STDIN_NOT_READ = 'stdin not read because files were named; add - to scan it too';
+
+const QUIET_WITH_JSON = '--json takes precedence over --quiet; drop --json to print only the verdict line';
 
 /**
  * What stdin holds when files are named without `-`, so it is not scanned.
@@ -301,12 +318,24 @@ async function collectSources(files: string[], pipeUnread: boolean): Promise<Sou
     try {
       const data = readFileSync(file);
       sources.push({ label: file, content: decodeInput(data), bytes: data.length });
-    } catch {
+    } catch (err) {
       // The path exists, so "check the path" would send the user the wrong way.
       if (isDirectory(file)) {
         throw new UsageError(
           `'${file}' is a directory, and directories are not scanned. Name the files in it:\n` +
             `  aicomply scan ${filesGlob(file)}`,
+        );
+      }
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EACCES' || code === 'EPERM') {
+        throw new UsageError(`cannot read '${file}': permission denied`);
+      }
+      // The help's example `aicomply scan src/*.txt -q` puts the option after
+      // the files, so it gets written after -- as well (`aicomply scan --
+      // -notes.txt -q`), where it is an input.
+      if (OPTION_NAMES.has(file)) {
+        throw new UsageError(
+          `cannot read '${file}': after -- every argument is an input; put ${file} before --`,
         );
       }
       throw new UsageError(`cannot read '${file}' (check the path). Try 'aicomply --help'.`);
@@ -456,19 +485,44 @@ function inInputOrder(content: string, violations: Violation[]): LocatedFinding[
     });
 }
 
+/**
+ * The line after the first MAX_FINDING_LINES findings of an input: how many
+ * `rest` holds and how many of them are of each type, the most frequent type
+ * first and, at equal counts, in the order the types first appear in `rest`.
+ */
+function notListedLine(rest: LocatedFinding[]): string {
+  const byType = new Map<string, number>();
+  for (const { v } of rest) byType.set(v.type, (byType.get(v.type) ?? 0) + 1);
+  // Array.prototype.sort is stable, so equal counts keep the Map's order.
+  const counts = [...byType]
+    .sort((a, b) => b[1] - a[1])
+    .map(([type, n]) => `${type} ${n}`)
+    .join(', ');
+  return `... ${rest.length} more (${counts}); use --json for all`;
+}
+
 export function renderHuman(sources: Source[], results: ComplyResult[]): void {
   const out = process.stdout;
   let anyGuard = false;
   let totalFindings = 0;
   let worst: 'CLEAN' | 'VIOLATION' | 'DENY' = 'CLEAN';
 
+  // The findings of each flagged input in input order; an empty or CLEAN
+  // input lists none. Each input lists its first MAX_FINDING_LINES.
+  const ordered = sources.map((src, i) =>
+    src.bytes === 0 || results[i].verdict === 'CLEAN'
+      ? []
+      : inInputOrder(src.content, results[i].violations),
+  );
+
   // The type column is as wide as the longest type printed, and at least 12
   // characters: a Guard class such as exfiltration_pattern (20 characters) is
   // longer than any pattern class.
   let typeWidth = 12;
-  for (let i = 0; i < sources.length; i++) {
-    if (sources[i].bytes === 0 || results[i].verdict === 'CLEAN') continue;
-    for (const v of results[i].violations) typeWidth = Math.max(typeWidth, v.type.length);
+  for (const findings of ordered) {
+    for (const { v } of findings.slice(0, MAX_FINDING_LINES)) {
+      typeWidth = Math.max(typeWidth, v.type.length);
+    }
   }
 
   out.write('\n');
@@ -497,13 +551,17 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
       continue;
     }
     out.write(`   ${res.violations.length} finding${res.violations.length === 1 ? '' : 's'}\n`);
-    for (const { v, loc } of inInputOrder(src.content, res.violations)) {
+    const findings = ordered[i];
+    for (const { v, loc } of findings.slice(0, MAX_FINDING_LINES)) {
       const layer = v.classifier;
       const view = v.view && v.view !== 'normalized' ? `  view ${v.view}` : '';
       const where = loc ? `  line ${loc.line} col ${loc.column}` : '';
       out.write(
         `    ${v.type.padEnd(typeWidth)} ${MASKED_VALUE.padEnd(18)} confidence ${v.confidence.toFixed(2)}  layer ${layer}${view}${where}\n`,
       );
+    }
+    if (findings.length > MAX_FINDING_LINES) {
+      out.write(`    ${notListedLine(findings.slice(MAX_FINDING_LINES))}\n`);
     }
     out.write('\n');
   }
@@ -636,6 +694,7 @@ async function runInner(argv: string[]): Promise<number> {
     process.stdout.write(`${worst}\n`);
   } else renderHuman(sources, results);
 
+  if (args.json && args.quiet) process.stderr.write(`aicomply: ${QUIET_WITH_JSON}\n`);
   if (unread === 'stream') process.stderr.write(`aicomply: ${STDIN_NOT_READ}\n`);
 
   // Exit 1 if anything is not CLEAN, so the CLI works as a CI gate.
