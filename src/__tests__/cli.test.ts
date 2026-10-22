@@ -1670,5 +1670,20 @@ require.extensions['.ts'] = (module, filename) => {
         stderr: child.stderr.toString(),
       }).toEqual({ status: 1, stdout: 'VIOLATION\n', stderr: '' });
     }, 60_000);
+
+    // On Node 26.12 the search for Base64 candidates threw "Maximum call stack
+    // size exceeded" on a run of 5592394 copies of the letter a, so this input
+    // ended with that message, nothing on stdout and exit code 2.
+    it('scans 157286399 bytes of the letter a from stdin', async () => {
+      pipeRepeated(Buffer.alloc(0), Buffer.alloc(2 ** 20, 'a'), 157286399);
+      const cap = capture();
+      const code = await run(['scan', '--quiet']);
+      cap.restore();
+      expect({ code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({
+        code: 0,
+        out: 'CLEAN\n',
+        err: '',
+      });
+    }, 60_000);
   });
 });

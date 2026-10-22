@@ -174,6 +174,33 @@ describe('Base64 / URL decode extraction', () => {
     expect(exts[0]?.originalStart).toBe(prefix.length);
     expect(exts[0]?.originalEnd).toBe(prefix.length + b64.length);
   });
+
+  // On Node 26.12 the search for candidates threw "Maximum call stack size
+  // exceeded" on a run of 5592394 copies of the letter a. The runs below are
+  // longer.
+  it('searches a run of 16777216 copies of the letter a without a stack overflow', () => {
+    // "aaaa" decodes to bytes that are not ASCII-printable, and the run holds
+    // no percent-escape, so nothing is extracted.
+    expect(extractEncoded('a'.repeat(2 ** 24))).toEqual([]);
+  });
+
+  it('decodes a Base64 token of 16000024 characters', () => {
+    const payload = `${'x'.repeat(12_000_000)} SSN 078-05-1120`;
+    const b64 = Buffer.from(payload).toString('base64');
+    expect(b64.length).toBe(16_000_024);
+    const prefix = 'data: ';
+    const exts = extractEncoded(`${prefix}${b64} end`);
+    // Compared as a boolean: a failing toEqual would print the decoded text.
+    expect(exts.map((e) => ({ ...e, decoded: e.decoded === payload }))).toEqual([
+      {
+        decoded: true,
+        originalStart: prefix.length,
+        originalEnd: prefix.length + b64.length,
+        source: 'decoded-base64',
+        depth: 1,
+      },
+    ]);
+  });
 });
 
 describe('normalize() pipeline end-to-end', () => {
