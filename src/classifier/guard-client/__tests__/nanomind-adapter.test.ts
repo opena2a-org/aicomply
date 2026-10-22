@@ -21,8 +21,11 @@ import { createServer, Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 import {
   classifyWithNanoMindDaemon,
+  INFER_INPUT_SLICE_LENGTH,
+  inferRequestJson,
   isNanoMindDaemonAvailable,
   mapInferResponseToClassifierResult,
+  NANOMIND_DEFAULT_INTENT,
   NANOMIND_INFER_ENDPOINT,
 } from '../nanomind-adapter';
 import type {
@@ -287,6 +290,18 @@ describe('classifyWithNanoMindDaemon', () => {
     }
   });
 
+  it('sends an input longer than one slice verbatim', async () => {
+    const input = `a${'\u{1F600}'.repeat(INFER_INPUT_SLICE_LENGTH)}"\\`;
+    const m = await startMockDaemon((_, respond) => respond(200, makeValidResponse()));
+    try {
+      await classifyWithNanoMindDaemon(input, { baseUrl: m.baseUrl });
+      const body = m.receivedRequests[0]?.body as { input: string };
+      expect(body.input === input).toBe(true);
+    } finally {
+      await m.close();
+    }
+  });
+
   it('does NOT echo response.evidence or response.remediation into the violation', async () => {
     // Adversarial bytes — ensure they never reach Violation.value.
     const m = await startMockDaemon((_, respond) =>
@@ -307,6 +322,31 @@ describe('classifyWithNanoMindDaemon', () => {
       expect(JSON.stringify(v)).not.toContain('rm -rf');
     } finally {
       await m.close();
+    }
+  });
+});
+
+describe('inferRequestJson', () => {
+  const L = INFER_INPUT_SLICE_LENGTH;
+  // The first slice is the code units at index 0 to L - 1.
+  const inputs: [string, string][] = [
+    ['a pair across the end of a slice', `${'a'.repeat(L - 1)}\u{1F600}b`],
+    ['a pair across the end of each of two slices', `${'a'.repeat(L - 1)}\u{1F600}${'a'.repeat(L - 3)}\u{1F600}b`],
+    ['a lone high surrogate at the end of a slice', `${'a'.repeat(L - 1)}\uD83Db`],
+    ['a lone low surrogate after the end of a slice', `${'a'.repeat(L)}\uDE00b`],
+    ['quotes, backslashes and control characters', '"\\\n\u0000\u001F'.repeat(L / 2)],
+    ['one code unit more than a slice', 'a'.repeat(L + 1)],
+    ['one slice', 'a'.repeat(L)],
+  ];
+
+  it.each(inputs)('writes the request as JSON.stringify does: %s', (_, input) => {
+    const requests = [
+      { intent: NANOMIND_DEFAULT_INTENT, input },
+      { intent: NANOMIND_DEFAULT_INTENT, input, context: { agentId: '"input":""' } },
+    ];
+    for (const request of requests) {
+      // Compared as a boolean: a failing toBe would print both strings.
+      expect(inferRequestJson(request) === JSON.stringify(request)).toBe(true);
     }
   });
 });

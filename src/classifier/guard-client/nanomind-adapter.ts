@@ -62,6 +62,41 @@ export const DEFAULT_NANOMIND_TIMEOUT_MS = 5000;
 export const NANOMIND_INFER_ENDPOINT = '/v1/infer';
 export const NANOMIND_DEFAULT_INTENT = 'INTENT_CHECK';
 
+/**
+ * The most code units of the input that one JSON.stringify call serializes.
+ * On Node 26.12, JSON.stringify of a request whose input was 134217728 code
+ * units of U+1F600 decoded from UTF-8 aborted the process with "FATAL ERROR:
+ * Zone Allocation failed - process out of memory" and exit code 134, which no
+ * catch handles; with 100663296 code units it returned.
+ */
+export const INFER_INPUT_SLICE_LENGTH = 1 << 20;
+
+/**
+ * JSON.stringify(request), with an input longer than INFER_INPUT_SLICE_LENGTH
+ * code units serialized one slice at a time. A slice does not end with the
+ * first code unit of a surrogate pair, so the pair is written as it is, as
+ * JSON.stringify writes it, and not as two escaped code units.
+ */
+export function inferRequestJson(request: NanoMindInferRequest): string {
+  const { input } = request;
+  if (input.length <= INFER_INPUT_SLICE_LENGTH) return JSON.stringify(request);
+  const slices: string[] = [];
+  for (let start = 0; start < input.length; ) {
+    let end = Math.min(start + INFER_INPUT_SLICE_LENGTH, input.length);
+    const last = input.charCodeAt(end - 1);
+    if (end < input.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
+    slices.push(JSON.stringify(input.slice(start, end)).slice(1, -1));
+    start = end;
+  }
+  // The request with an empty input, its keys in the same order, and the
+  // slices written between the two quotes of that empty value. No key of the
+  // request holds a quote, so "input":"" is written only for a key named
+  // input whose value is empty, and the request has one such key.
+  const empty = JSON.stringify({ ...request, input: '' });
+  const at = empty.indexOf('"input":""') + '"input":"'.length;
+  return empty.slice(0, at) + slices.join('') + empty.slice(at);
+}
+
 export interface NanoMindAdapterOptions {
   /**
    * Base URL the daemon is reachable at. Defaults to
@@ -186,7 +221,7 @@ export async function classifyWithNanoMindDaemon(
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(requestBody),
+      body: inferRequestJson(requestBody),
       signal: controller.signal,
     });
 

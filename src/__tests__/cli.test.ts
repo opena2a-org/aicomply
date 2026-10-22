@@ -1685,5 +1685,24 @@ require.extensions['.ts'] = (module, filename) => {
         err: '',
       });
     }, 60_000);
+
+    // The NFKC stage of the normalizer held two array entries for each of
+    // these code points and threw "Invalid array length", so the scan exited 2
+    // with that message. Past that stage, JSON.stringify of the Guard request
+    // aborted the process with exit code 134.
+    it('scans a stdin of 157286399 copies of U+1F600', () => {
+      const count = 157286399;
+      const input = Buffer.alloc(4 * count, Buffer.from('\u{1F600}', 'utf8'));
+      const child = spawnSync(process.execPath, ['-r', hook, CLI, 'scan', '--quiet'], {
+        env: ENV,
+        input,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      expect({
+        status: child.status,
+        stdout: child.stdout.toString(),
+        stderr: child.stderr.toString(),
+      }).toEqual({ status: 0, stdout: 'CLEAN\n', stderr: '' });
+    }, 120_000);
   });
 });
