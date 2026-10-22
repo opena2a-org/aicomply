@@ -1121,13 +1121,14 @@ describe('aicomply CLI', () => {
     // byte for each character, and other text as UTF-16LE. v8.serialize tags
     // a string held in one byte for each character 0x22 and one held in two
     // bytes 0x63, after its 2-byte header and any 0x00 padding.
+    const held = (s: string): number => {
+      const bytes = serialize(s);
+      let i = 2;
+      while (bytes[i] === 0) i += 1;
+      return bytes[i];
+    };
+
     it('decodes code points on each side of U+00FF and U+FFFF to the text, held as UTF-8 input of it is', () => {
-      const held = (s: string): number => {
-        const bytes = serialize(s);
-        let i = 2;
-        while (bytes[i] === 0) i += 1;
-        return bytes[i];
-      };
       const texts = ['SSN \u{0}\u{7f}\u{80}\u{ff}', 'SSN \u{ff}\u{100}', 'SSN \u{d7ff}\u{e000}\u{ffff}\u{10000}\u{1f600}\u{10ffff}'];
       const utf8 = texts.map((t) => held(decodeInput(Buffer.from(t, 'utf8'))));
       expect(utf8).toEqual([0x22, 0x63, 0x63]);
@@ -1138,6 +1139,22 @@ describe('aicomply CLI', () => {
           expect({ t, le, text, held: held(text) }).toEqual({ t, le, text: t, held: utf8[n] });
         }
       });
+    });
+
+    // Read back as UTF-16LE, 1031912 of these characters are held in one
+    // byte for each, as the latin1 readback holds them, and 1031913 or
+    // 2000000 in two bytes for each, on Node 26.12 and 24.17. Decoded from
+    // UTF-8, the 2000000 are held in two bytes for each too, so the tag is
+    // checked, not compared with the UTF-8 input's.
+    it('decodes 2000000 UTF-32 characters, each at most U+00FF, to a string held in one byte for each', () => {
+      const t = 'SSN \u{0}\u{7f}\u{80}\u{ff}'.repeat(250000);
+      for (const le of [true, false]) {
+        const mark = Buffer.from(le ? [0xff, 0xfe, 0, 0] : [0, 0, 0xfe, 0xff]);
+        const text = decodeInput(Buffer.concat([mark, utf32(t, le)]));
+        // Compared, not printed: the text is 2000000 characters.
+        expect({ le, length: text.length, same: text === t, held: held(text) })
+          .toEqual({ le, length: t.length, same: true, held: 0x22 });
+      }
     });
 
     it('drops one UTF-8 mark at the start and keeps decoding other input as UTF-8', () => {
