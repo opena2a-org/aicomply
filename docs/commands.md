@@ -30,6 +30,12 @@ A smaller file whose text does not decode into one string gets
 Node 26.12 that was a file of 629145600 bytes decoded as UTF-8 and a UTF-16 file
 of 300000000 bytes.
 
+When stdin is scanned, it is read after the named files, and stdin whose text does
+not decode into one string ends the run the same way, with
+`cannot scan (stdin): at <n> bytes it is too large to decode as one input`; on
+Node 26.12 that was 629145600 bytes decoded as UTF-8
+(`head -c 629145600 /dev/zero | aicomply scan`) and UTF-16 input of 300000000 bytes.
+
 A gate over the files of a diff can leave out the deleted ones:
 `git diff --cached --name-only --diff-filter=d` lists the staged files without them.
 

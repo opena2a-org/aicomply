@@ -64,6 +64,23 @@ function pipeStdin(data: string | Buffer): void {
   jest.spyOn(process, 'stdin', 'get').mockReturnValue(stream as unknown as typeof process.stdin);
 }
 
+/**
+ * Serve `size` bytes as stdin: `head`, then `fill` again and again, the last
+ * copy cut to fit. The same `fill` buffer is served each time, so the test
+ * holds the bytes once, in the buffer the CLI joins the chunks into;
+ * afterEach restores stdin.
+ */
+function pipeRepeated(head: Buffer, fill: Buffer, size: number): void {
+  function* chunks(): Generator<Buffer> {
+    if (head.length > 0) yield head;
+    for (let left = size - head.length; left > 0; left -= fill.length) {
+      yield left >= fill.length ? fill : fill.subarray(0, left);
+    }
+  }
+  const stream = Readable.from(chunks());
+  jest.spyOn(process, 'stdin', 'get').mockReturnValue(stream as unknown as typeof process.stdin);
+}
+
 describe('aicomply CLI', () => {
   // The Guard preview caveat used to print ONLY when the Guard was inactive,
   // so it was shown when it was harmless and hidden the moment the Guard
@@ -270,6 +287,40 @@ describe('aicomply CLI', () => {
     } finally {
       rmSync(f, { force: true });
     }
+  });
+
+  // stdin had no catch around its decode, so the runtime's error reached the
+  // bin wrapper: "Cannot create a string longer than 0x1fffffe8 characters".
+  it('says a stdin whose text is longer than the longest string is too large to decode', async () => {
+    // Zero bytes carry no byte order mark, so stdin is decoded as UTF-8, one
+    // character for each byte.
+    const size = bufferConstants.MAX_STRING_LENGTH + 1;
+    pipeRepeated(Buffer.alloc(0), Buffer.alloc(2 ** 20), size);
+    const cap = capture();
+    const code = await run(['scan']);
+    cap.restore();
+    expect({ code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({
+      code: 2,
+      out: '',
+      err: `aicomply: cannot scan (stdin): at ${size} bytes it is too large to decode as one input\n`,
+    });
+  });
+
+  it('says a UTF-16 stdin longer than the decoder takes is too large to decode, with nothing on stdout for --json', async () => {
+    // On Node 26.12 the UTF-16 TextDecoder throws from 268435456 bytes on,
+    // counted after the byte order mark. The bytes after the mark spell "a"
+    // (61 00): FF FE followed by 00 00 would be the UTF-32LE mark.
+    const mark = Buffer.from([0xff, 0xfe]);
+    const size = mark.length + 268435456;
+    pipeRepeated(mark, Buffer.from('a'.repeat(2 ** 19), 'utf16le'), size);
+    const cap = capture();
+    const code = await run(['scan', '--json']);
+    cap.restore();
+    expect({ code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({
+      code: 2,
+      out: '',
+      err: `aicomply: cannot scan (stdin): at ${size} bytes it is too large to decode as one input\n`,
+    });
   });
 
   // A directory used to get the missing-file message, "check the path",
