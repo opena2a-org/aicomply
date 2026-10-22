@@ -973,9 +973,10 @@ describe('aicomply CLI', () => {
       expect(capQuiet.out.join('')).toBe('VIOLATION\n');
     });
 
-    // The human output gives an input of 0 bytes no verdict; --json gave it
-    // "CLEAN", a verdict no layer reached.
-    it('gives an input of 0 bytes beside others a null verdict in --json', async () => {
+    // The report lists an input of 0 bytes as EMPTY, and --json gives it the
+    // same word. --json gave it "CLEAN", a verdict no layer reached, and then
+    // null.
+    it('gives an input of 0 bytes beside others the verdict EMPTY in --json, the word the report prints', async () => {
       const empty = fixture('empty-json.txt', '');
       const dirty = fixture('dirty-json.txt', 'SSN 078-05-1120\n');
       const cap = capture();
@@ -986,17 +987,26 @@ describe('aicomply CLI', () => {
       expect(emptyEntry).toEqual({
         source: empty,
         bytes: 0,
-        verdict: null,
+        verdict: 'EMPTY',
         guardActive: false,
         layers: [],
         findings: [],
       });
       expect(dirtyEntry).toMatchObject({ source: dirty, verdict: 'VIOLATION' });
 
+      const capText = capture();
+      const textCode = await run(['scan', empty, dirty]);
+      capText.restore();
+      expect(textCode).toBe(1);
+      const emptyLine = capText.out.join('').split('\n').find((line) => line.includes(empty));
+      expect(emptyLine?.trim().split(' ')[0]).toBe(emptyEntry.verdict);
+
       const capHelp = capture();
       await run(['scan', '--help']);
       capHelp.restore();
-      expect(capHelp.out.join('')).toContain('(--json: "bytes": 0, "verdict": null,\n"layers": [])');
+      expect(capHelp.out.join('')).toContain(
+        'listed as EMPTY, "0 bytes, nothing to classify" (--json: "bytes": 0,\n"verdict": "EMPTY", "layers": [])',
+      );
     });
 
     it('--help and scan --help give the exit code for no input', async () => {

@@ -37,8 +37,10 @@ cat transcript.log | aicomply scan --json
 
 Exit codes make it a drop-in CI gate: `0` CLEAN, `1` findings present, `2` usage error or
 no input (stdin is a terminal, or every input is 0 bytes). An input of 0 bytes beside
-others is not classified: it is listed as `0 bytes, nothing to classify` (`--json`:
-`"bytes": 0`, `"verdict": null`, `"layers": []`) and does not decide the exit code.
+others is not classified and does not decide the overall verdict or the exit code. The
+report and `--json` give it the same verdict, `EMPTY`. The report lists it as
+`EMPTY      empty.txt   0 bytes, nothing to classify`, and `--json` as
+`"bytes": 0`, `"verdict": "EMPTY"`, `"layers": []`.
 
 On three files of 20 MiB, this CLI took 6.1 to 7.0 times as long as the TypeScript CLI.
 On one machine, under Python 3.14.3 and Node.js v26.12.0, `aicomply scan -q` took 3.90 s
