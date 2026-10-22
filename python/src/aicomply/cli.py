@@ -75,6 +75,15 @@ def _parse_args(argv: list[str]) -> _ParsedArgs:
     return parsed
 
 
+# The option spellings _parse_args reads. Before ``--`` each of them is an
+# option, so an input with one of these names was named after ``--``.
+_OPTION_NAMES = frozenset({"--json", "--quiet", "-q", "--help", "-h", "--version", "-V"})
+
+# The report lists at most this many findings of an input, then one line that
+# counts the rest by type; --json lists every finding.
+_MAX_FINDING_LINES = 50
+
+
 HELP = """aicomply -- inline content classifier for AI agent I/O
 
 Detects SSNs, card and bank account numbers, passport and medical record
@@ -125,13 +134,15 @@ The library API is the production surface: https://github.com/opena2a-org/aicomp
 """
 
 
-SCAN_HELP = """aicomply scan -- scan files or piped stdin for sensitive content
+SCAN_HELP = f"""aicomply scan -- scan files or piped stdin for sensitive content
 
 Runs the deterministic regex layer over each input, plus the optional semantic
 Guard layer when a local nanomind-daemon is reachable. Prints a verdict per
 input and an overall verdict. An input of 0 bytes is not classified: it is
 listed as "0 bytes, nothing to classify" (--json: "bytes": 0, "verdict": null,
 "layers": []), and the inputs that were scanned decide the exit code.
+The report lists the first {_MAX_FINDING_LINES} findings of each input and counts the rest by
+type; --json lists every finding.
 
 The regex layer checks SSNs, card and bank account numbers, passport and
 medical record numbers, provider identifiers (NPI), credentials and CUI
@@ -148,7 +159,8 @@ OPTIONS
   --json        Machine-readable JSON output (verdict + findings, values masked;
                 each finding carries its line and column in the input, and each
                 input its size in bytes and the layers that ran)
-  --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY)
+  --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY);
+                --json takes precedence when both are given
   --help, -h    This help
   --            Ends the options; each later argument is an input, so a file
                 name can start with - (aicomply scan -- -notes.txt)
@@ -222,6 +234,10 @@ def _stdin_requested(files: list[str]) -> bool:
 
 _STDIN_NOT_READ = "stdin not read because files were named; add - to scan it too"
 
+_QUIET_WITH_JSON = (
+    "--json takes precedence over --quiet; drop --json to print only the verdict line"
+)
+
 
 def _unread_stdin() -> Literal["content", "stream"] | None:
     """What stdin holds when files are named without ``-``, so it is not scanned.
@@ -280,12 +296,22 @@ def _collect_sources(files: list[str], pipe_unread: bool) -> list[_Source]:
         try:
             with open(f, "rb") as fh:
                 data = fh.read()
-        except OSError:
+        except OSError as err:
             # The path exists, so "check the path" would send the user the wrong way.
             if os.path.isdir(f):
                 raise _UsageError(
                     f"'{f}' is a directory, and directories are not scanned."
                     f" Name the files in it:\n  aicomply scan {_files_glob(f)}"
+                ) from None
+            # PermissionError covers EACCES and EPERM, the two codes the TS CLI checks.
+            if isinstance(err, PermissionError):
+                raise _UsageError(f"cannot read '{f}': permission denied") from None
+            # The help's example ``aicomply scan src/*.txt -q`` puts the option
+            # after the files, so it gets written after -- as well (``aicomply
+            # scan -- -notes.txt -q``), where it is an input.
+            if f in _OPTION_NAMES:
+                raise _UsageError(
+                    f"cannot read '{f}': after -- every argument is an input; put {f} before --"
                 ) from None
             raise _UsageError(
                 f"cannot read '{f}' (check the path). Try 'aicomply --help'."
@@ -414,27 +440,47 @@ class _Utf8Stdout:
             self._buffer.write(text.encode("utf-8", self._errors))
 
 
+def _not_listed_line(rest: list[tuple[Violation, tuple[int, int] | None]]) -> str:
+    """The line after the first _MAX_FINDING_LINES findings of an input: how
+    many ``rest`` holds and how many of them are of each type, the most frequent
+    type first and, at equal counts, in the order the types first appear in
+    ``rest``, as in the TS CLI.
+    """
+    by_type: dict[str, int] = {}
+    for v, _ in rest:
+        by_type[v.type] = by_type.get(v.type, 0) + 1
+    # sorted() is stable, so equal counts keep the dict's insertion order.
+    counts = ", ".join(
+        f"{t} {n}" for t, n in sorted(by_type.items(), key=lambda item: -item[1])
+    )
+    return f"... {len(rest)} more ({counts}); use --json for all"
+
+
 def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
     out = _Utf8Stdout()
     any_guard = False
     total_findings = 0
     worst = "CLEAN"
 
+    # The findings of each flagged input in input order; an empty or CLEAN
+    # input lists none. Each input lists its first _MAX_FINDING_LINES.
+    ordered = [
+        []
+        if src.byte_count == 0 or res.verdict == "CLEAN"
+        else _in_input_order(src.content, res.violations)
+        for src, res in zip(sources, results)
+    ]
+
     # The type column is as wide as the longest type printed, and at least 12
     # characters: a Guard class such as exfiltration_pattern (20 characters) is
     # longer than any pattern class.
     type_width = max(
         [12]
-        + [
-            len(v.type)
-            for src, res in zip(sources, results)
-            if src.byte_count > 0 and res.verdict != "CLEAN"
-            for v in res.violations
-        ]
+        + [len(v.type) for findings in ordered for v, _ in findings[:_MAX_FINDING_LINES]]
     )
 
     out.write("\n")
-    for src, res in zip(sources, results):
+    for src, res, findings in zip(sources, results, ordered):
         if src.byte_count == 0:
             # No layer ran on it, so it gets no verdict and adds none to the total.
             out.write(f"  EMPTY      {src.label}   0 bytes, nothing to classify\n\n")
@@ -461,13 +507,15 @@ def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
             continue
         n = len(res.violations)
         out.write(f"   {n} finding{'' if n == 1 else 's'}\n")
-        for v, loc in _in_input_order(src.content, res.violations):
+        for v, loc in findings[:_MAX_FINDING_LINES]:
             view = f"  view {v.view}" if v.view and v.view != "normalized" else ""
             where = f"  line {loc[0]} col {loc[1]}" if loc else ""
             out.write(
                 f"    {v.type:<{type_width}} {_MASKED_VALUE:<18} confidence {v.confidence:.2f}  "
                 f"layer {v.classifier}{view}{where}\n"
             )
+        if len(findings) > _MAX_FINDING_LINES:
+            out.write(f"    {_not_listed_line(findings[_MAX_FINDING_LINES:])}\n")
         out.write("\n")
 
     if not any_guard:
@@ -591,11 +639,14 @@ def _run_inner(argv: list[str]) -> int:
     else:
         _render_human(sources, results)
 
+    notes = [_QUIET_WITH_JSON] if args.json and args.quiet else []
     if unread == "stream":
-        # A piped stdout is block-buffered; flushing it first keeps the line
+        notes.append(_STDIN_NOT_READ)
+    if notes:
+        # A piped stdout is block-buffered; flushing it first keeps the lines
         # after the report where both streams go to one log.
         sys.stdout.flush()
-        sys.stderr.write(f"aicomply: {_STDIN_NOT_READ}\n")
+        sys.stderr.write("".join(f"aicomply: {note}\n" for note in notes))
 
     return 1 if any(r.verdict != "CLEAN" for r in scanned) else 0
 

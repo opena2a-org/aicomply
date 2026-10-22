@@ -36,9 +36,13 @@ Inputs are canonicalized before patterns run:
 - **Unicode homoglyphs** are folded via NFKC (`１２３-４５-６７８９` → `123-45-6789`).
 - **Zero-width and bidi-control characters** are stripped (`123-45-6789` with a zero-width space, U+200B, between each pair of adjacent digits → `123-45-6789`).
 - **Whitespace-injected** values are scanned in a compact view that strips spaces only between digit/separator characters, so prose word boundaries stay intact (`1 2 3 - 4 5 - 6 7 8 9` matches; `My SSN is 123-45-6789` still works).
-- **Base64 / URL-encoded** payloads are extracted and scanned in addition to the canonical stream (bounded recursion, length-gated, ASCII-printable round-trip required).
+- **Base64 / URL-encoded** payloads are extracted and scanned in addition to the canonical stream (bounded recursion, ASCII-printable round-trip required). A candidate is a run of characters from the encoding's alphabet, which for URL encoding holds `=`, `&`, `?` and `/`, so a key such as `ssn=` counts toward the run's length. A run is decoded only when it is at least 24 characters long, and a URL-encoded run only when it also holds at least two percent-escapes. So `ssn=123%2D45%2D6789` (19 characters), `q=SSN%20123%2D45%2D6789` (23) and `ssn=123-45%2D6789&page=1&sort=asc` (one escape) are `CLEAN`, while `https://example.com/form?ssn=123%2D45%2D6789` (44 characters) and `data=%53%53%4E%20%31%32%33%2D%34%35%2D%36%37%38%39` are each an `SSN` finding with `view` `decoded-url`.
 
 Every pattern match carries a `view` field (`normalized` / `compact` / `decoded-base64` / `decoded-url`) and best-effort original-content anchoring so you can audit which canonicalization surfaced each match. Findings that do not come from a pattern match have no `view`: Guard findings, `POLICY_DENY` / `POLICY_WARN`, `SUPPLY_CHAIN_ALERT` and `FLEET_ANOMALY_ELEVATED`. The CLI's `--json` output prints `"view": null` for them. Each CLI finding also carries `line` and `column`, 1-based positions in the original input. In both the TypeScript and the Python CLI, `column` counts Unicode code points from the start of the line, so a character outside the Basic Multilingual Plane, such as the emoji U+1F600, is one column. A `decoded-base64` or `decoded-url` finding points at the start of the encoded token it was decoded from, and a finding without a `view`, such as a Guard finding, prints `"line": null, "column": null`.
+
+## Binary files
+
+The CLI decodes each file as text: in the encoding of the UTF-32, UTF-16 or UTF-8 byte order mark it starts with, and as UTF-8 when it starts with none, each byte sequence that does not decode becoming U+FFFD. A binary file, such as an executable, is decoded and scanned the same way, and the CLI prints no note that it is binary. A value written in it as text is reported: an SSN line between two blocks of random bytes is a `VIOLATION`. A binary file that holds no such value is `CLEAN`.
 
 ## What this package does NOT detect
 
