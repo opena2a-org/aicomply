@@ -29,14 +29,15 @@ A file of 2 GiB or more gets
 `cannot read '<file>': it is 2 GiB or larger, and this CLI reads files under 2 GiB`.
 A smaller file whose text does not decode into one string gets
 `cannot scan '<file>': at <n> bytes it is too large to decode as one input`; on
-Node 26.12 that was a file of 629145600 bytes decoded as UTF-8 and a UTF-16 file
-of 300000000 bytes.
+Node 26.12 that was a file of 629145600 bytes decoded as UTF-8, a UTF-16 file
+of 300000000 bytes and a UTF-32 file of 1073741784 bytes of U+1F600 characters.
 
-When stdin is scanned, it is read after the named files, and UTF-8 or UTF-16
-stdin whose text does not decode into one string ends the run the same way, with
-`cannot scan (stdin): at <n> bytes it is too large to decode as one input`; on
-Node 26.12 that was 629145600 bytes decoded as UTF-8
-(`head -c 629145600 /dev/zero | aicomply scan`) and UTF-16 input of 300000000 bytes.
+When stdin is scanned, it is read after the named files, and UTF-8, UTF-16 or
+UTF-32 stdin whose text does not decode into one string ends the run the same
+way, with `cannot scan (stdin): at <n> bytes it is too large to decode as one input`;
+on Node 26.12 that was 629145600 bytes decoded as UTF-8
+(`head -c 629145600 /dev/zero | aicomply scan`), UTF-16 input of 300000000 bytes
+and UTF-32 input of 1073741784 bytes of U+1F600 characters.
 
 A gate over the files of a diff can leave out the deleted ones:
 `git diff --cached --name-only --diff-filter=d` lists the staged files without them.

@@ -11,6 +11,7 @@ import { createServer, type Server } from 'net';
 import { devNull, tmpdir } from 'os';
 import { join } from 'path';
 import { PassThrough, Readable } from 'stream';
+import { serialize } from 'v8';
 import { decodeInput, filesGlob, locate, run } from '../cli';
 import { classifyWithRegex } from '../classifier/regex';
 import { PATTERN_TYPES } from '../classifier/regex/pack';
@@ -322,6 +323,38 @@ describe('aicomply CLI', () => {
       err: `aicomply: cannot scan (stdin): at ${size} bytes it is too large to decode as one input\n`,
     });
   });
+
+  // The UTF-32 decoder made one string for each code point and joined them at
+  // the end. On 629145600 bytes of U+1F600, the start of this input, it ran
+  // out of heap: the process aborted with exit code 134 and nothing from the
+  // CLI.
+  it('says a UTF-32 stdin whose text is longer than the longest string is too large to decode', async () => {
+    // U+1F600 is two UTF-16 code units, so one copy more than half the length
+    // of the longest string is longer than the longest string.
+    const mark = Buffer.from([0xff, 0xfe, 0, 0]);
+    const size = mark.length + 4 * (Math.floor(bufferConstants.MAX_STRING_LENGTH / 2) + 1);
+    pipeRepeated(mark, Buffer.alloc(2 ** 20, Buffer.from([0x00, 0xf6, 0x01, 0x00])), size);
+    const cap = capture();
+    const code = await run(['scan']);
+    cap.restore();
+    expect({ code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({
+      code: 2,
+      out: '',
+      err: `aicomply: cannot scan (stdin): at ${size} bytes it is too large to decode as one input\n`,
+    });
+  }, 60_000);
+
+  // On this input the decoder that kept one string for each code point in an
+  // array threw "Invalid array length", so the CLI said a text that fits in
+  // one string was too large to decode.
+  it('decodes UTF-32 text of more code points than an array holds', () => {
+    const count = 157286399;
+    const data = Buffer.alloc(4 + 4 * count, Buffer.from([0x61, 0, 0, 0]));
+    data.set([0xff, 0xfe, 0, 0]);
+    const text = decodeInput(data);
+    // Compared as a boolean: a failing toBe would print both strings.
+    expect({ length: text.length, same: text === 'a'.repeat(count) }).toEqual({ length: count, same: true });
+  }, 60_000);
 
   // A directory used to get the missing-file message, "check the path",
   // though the path exists.
@@ -1082,6 +1115,29 @@ describe('aicomply CLI', () => {
       const u16 = Buffer.concat([Buffer.from([0xfe, 0xff, 0xd8, 0x00]), utf16be(ssn), Buffer.from([0x5a])]);
       expect(decodeInput(u32)).toBe(`��${ssn}�`);
       expect(decodeInput(u16)).toBe(`�${ssn}�`);
+    });
+
+    // UTF-32 text whose code points are all at most U+00FF is read back one
+    // byte for each character, and other text as UTF-16LE. v8.serialize tags
+    // a string held in one byte for each character 0x22 and one held in two
+    // bytes 0x63, after its 2-byte header and any 0x00 padding.
+    it('decodes code points on each side of U+00FF and U+FFFF to the text, held as UTF-8 input of it is', () => {
+      const held = (s: string): number => {
+        const bytes = serialize(s);
+        let i = 2;
+        while (bytes[i] === 0) i += 1;
+        return bytes[i];
+      };
+      const texts = ['SSN \u{0}\u{7f}\u{80}\u{ff}', 'SSN \u{ff}\u{100}', 'SSN \u{d7ff}\u{e000}\u{ffff}\u{10000}\u{1f600}\u{10ffff}'];
+      const utf8 = texts.map((t) => held(decodeInput(Buffer.from(t, 'utf8'))));
+      expect(utf8).toEqual([0x22, 0x63, 0x63]);
+      texts.forEach((t, n) => {
+        for (const le of [true, false]) {
+          const mark = Buffer.from(le ? [0xff, 0xfe, 0, 0] : [0, 0, 0xfe, 0xff]);
+          const text = decodeInput(Buffer.concat([mark, utf32(t, le)]));
+          expect({ t, le, text, held: held(text) }).toEqual({ t, le, text: t, held: utf8[n] });
+        }
+      });
     });
 
     it('drops one UTF-8 mark at the start and keeps decoding other input as UTF-8', () => {

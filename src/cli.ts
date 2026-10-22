@@ -19,6 +19,7 @@
  * small-library pattern. argv is parsed by hand.
  */
 
+import { constants as bufferConstants } from 'buffer';
 import { fstatSync, readFileSync, statSync, type Stats } from 'fs';
 import { comply } from './index';
 import { DEFAULT_NANOMIND_DAEMON_URL } from './classifier/guard-client/nanomind-adapter';
@@ -299,18 +300,55 @@ export function decodeInput(data: Buffer): string {
 
 /**
  * UTF-32 without its mark. A unit above U+10FFFF or in the surrogate range, and
- * 1 to 3 bytes left over at the end, each become one U+FFFD.
+ * 1 to 3 bytes left over at the end, each become one U+FFFD. The length of the
+ * text is counted first, and text longer than the longest string throws a
+ * RangeError before any of it is decoded.
  */
 function decodeUtf32(data: Buffer, littleEndian: boolean): string {
-  const parts: string[] = [];
-  let i = 0;
-  for (; i + 4 <= data.length; i += 4) {
+  const end = data.length - (data.length % 4);
+  const codePoint = (i: number): number => {
     const cp = littleEndian ? data.readUInt32LE(i) : data.readUInt32BE(i);
-    const valid = cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff);
-    parts.push(valid ? String.fromCodePoint(cp) : '�');
+    return cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff) ? cp : 0xfffd;
+  };
+  // The length in UTF-16 code units, where a code point above U+FFFF takes two
+  // (a surrogate pair), and whether every code point is at most U+00FF. The
+  // U+FFFD for bytes left over is one code unit, above U+00FF.
+  let length = end < data.length ? 1 : 0;
+  let latin1 = end === data.length;
+  for (let i = 0; i < end; i += 4) {
+    const cp = codePoint(i);
+    length += cp > 0xffff ? 2 : 1;
+    if (cp > 0xff) latin1 = false;
   }
-  if (i < data.length) parts.push('�');
-  return parts.join('');
+  if (length > bufferConstants.MAX_STRING_LENGTH) {
+    throw new RangeError(`the text is ${length} UTF-16 code units, longer than the longest string`);
+  }
+  // The text is written into one buffer and read back as one string. On Node
+  // 26.12, one string for each code point, joined at the end, ran out of heap
+  // on 629145600 bytes of U+1F600 and threw "Invalid array length" on
+  // 629145600 bytes of U+0061. Text whose code points are all at most U+00FF
+  // is read back as latin1, one byte for each: read back as UTF-16LE, a text
+  // of 157286373 such characters, in lines, ran out of memory in the
+  // JSON.stringify of the Guard request, where the same text decoded from
+  // UTF-8 was scanned.
+  let o = 0;
+  if (latin1) {
+    const out = Buffer.allocUnsafe(length);
+    for (let i = 0; i < end; i += 4) out[o++] = codePoint(i);
+    return out.toString('latin1');
+  }
+  const out = Buffer.allocUnsafe(length * 2);
+  for (let i = 0; i < end; i += 4) {
+    const cp = codePoint(i);
+    if (cp > 0xffff) {
+      o = out.writeUInt16LE(0xd800 + ((cp - 0x10000) >> 10), o);
+      o = out.writeUInt16LE(0xdc00 + ((cp - 0x10000) & 0x3ff), o);
+    } else {
+      o = out.writeUInt16LE(cp, o);
+    }
+  }
+  if (end < data.length) out.writeUInt16LE(0xfffd, o);
+  return out.toString('utf16le');
 }
 
 /**
@@ -326,6 +364,7 @@ function decodeNamed(data: Buffer, name: string): string {
     // what fails here is the length. On Node 26.12, toString throws
     // ERR_STRING_TOO_LONG past the longest string, and the UTF-16 TextDecoder
     // throws ERR_ENCODING_INVALID_ENCODED_DATA from 268435456 bytes on.
+    // decodeUtf32 throws a RangeError past the longest string.
     throw new UsageError(`cannot scan ${name}: at ${data.length} bytes it is too large to decode as one input`);
   }
 }
