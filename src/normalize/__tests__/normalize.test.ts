@@ -13,10 +13,11 @@
  */
 
 import { normalize, normalizeForScan } from '../index';
-import { normalizeNFKC } from '../nfkc';
+import { nfkcStage, normalizeNFKC } from '../nfkc';
 import { stripZeroWidth } from '../zero-width';
 import { buildCompactForm } from '../whitespace';
 import { extractEncoded } from '../encoded';
+import { PIECES_PER_JOIN, TextBuilder } from '../text-builder';
 
 describe('NFKC normalization (homoglyph defense)', () => {
   it('folds fullwidth digits to ASCII digits', () => {
@@ -42,6 +43,60 @@ describe('NFKC normalization (homoglyph defense)', () => {
     const r = normalizeNFKC('１２３');
     expect(r.output).toBe('123');
     expect(r.offsetMap).toEqual([0, 1, 2]);
+  });
+
+  // The stage held the pieces of its output in one array, two for each code
+  // point below, and threw "Invalid array length" on both texts.
+  it('keeps a text of 67108864 copies of U+1F600 as it is', () => {
+    const input = '\u{1F600}'.repeat(67108864);
+    const r = nfkcStage(input);
+    const map = r.offsets;
+    // Compared as a boolean: a failing toBe would print both strings.
+    expect({
+      same: r.output === input,
+      changedCount: r.changedCount,
+      mapLength: map?.length,
+      // Both code units of a pair point at its first.
+      firstPair: map && [map[0], map[1]],
+      lastPair: map && [map[map.length - 2], map[map.length - 1]],
+    }).toEqual({
+      same: true,
+      changedCount: 0,
+      mapLength: input.length,
+      firstPair: [0, 0],
+      lastPair: [input.length - 2, input.length - 2],
+    });
+  }, 60_000);
+
+  it('folds a text of 67108864 fullwidth digits', () => {
+    const count = 67108864;
+    const r = nfkcStage('\u{FF10}'.repeat(count));
+    expect({ same: r.output === '0'.repeat(count), changedCount: r.changedCount, map: r.offsets }).toEqual({
+      same: true,
+      changedCount: count,
+      map: undefined,
+    });
+  }, 60_000);
+});
+
+describe('TextBuilder (the output text of a stage)', () => {
+  it('returns the pieces in the order they were appended, across joins', () => {
+    const builder = new TextBuilder();
+    const pieces: string[] = [];
+    for (let k = 0; k < 2 * PIECES_PER_JOIN + 5; k += 1) {
+      // Every third piece is empty.
+      const piece = k % 3 === 0 ? '' : `${k},`;
+      builder.append(piece);
+      pieces.push(piece);
+    }
+    expect(builder.finish() === pieces.join('')).toBe(true);
+  });
+
+  it('returns an empty string when no piece or only empty pieces were appended', () => {
+    expect(new TextBuilder().finish()).toBe('');
+    const builder = new TextBuilder();
+    builder.append('');
+    expect(builder.finish()).toBe('');
   });
 });
 

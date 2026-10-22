@@ -16,6 +16,7 @@
  */
 
 import { OffsetMapBuilder, offsetMapToArray, type OffsetMap } from './offset-map';
+import { TextBuilder } from './text-builder';
 
 export interface NFKCResult {
   output: string;
@@ -51,15 +52,18 @@ export function normalizeNFKC(input: string): NFKCResult {
 /**
  * normalizeNFKC() with the map as an OffsetMap. An ASCII character is its own
  * NFKC form, so only code points at or above U+0080 are normalized, and a run
- * of one-code-unit code points that are their own NFKC form goes to the
- * output as one slice of the input.
+ * of code points that are their own NFKC form goes to the output as one slice
+ * of the input.
  */
 export function nfkcStage(input: string): NFKCStage {
-  const parts: string[] = [];
+  const output = new TextBuilder();
   const offsets = new OffsetMapBuilder(input.length);
   let changedCount = 0;
-  // input[copied, i) is a run that goes to the output as it is.
+  // input[copied, i) is a run that goes to the output as it is, and
+  // input[mapped, i) the end of that run whose code units each point at their
+  // own index.
   let copied = 0;
+  let mapped = 0;
   let i = 0;
   while (i < input.length) {
     if (input.charCodeAt(i) < 0x80) {
@@ -69,22 +73,28 @@ export function nfkcStage(input: string): NFKCStage {
     const length = (input.codePointAt(i) as number) > 0xffff ? 2 : 1;
     const codePoint = input.slice(i, i + length);
     const normalized = codePoint.normalize('NFKC');
-    if (normalized === codePoint && length === 1) {
-      i += 1;
-      continue;
-    }
     // Each output code unit of a code point that NFKC changes, or that is
     // held in two code units, points at its first code unit.
-    parts.push(input.slice(copied, i));
-    offsets.copy(copied, i - copied);
-    if (normalized !== codePoint) changedCount += 1;
-    parts.push(normalized);
+    if (normalized === codePoint) {
+      if (length === 2) {
+        offsets.copy(mapped, i - mapped);
+        offsets.repeat(i, 2);
+        mapped = i + 2;
+      }
+      i += length;
+      continue;
+    }
+    output.append(input.slice(copied, i));
+    offsets.copy(mapped, i - mapped);
+    changedCount += 1;
+    output.append(normalized);
     offsets.repeat(i, normalized.length);
     i += length;
     copied = i;
+    mapped = i;
   }
-  offsets.copy(copied, input.length - copied);
+  offsets.copy(mapped, input.length - mapped);
   if (copied === 0) return { output: input, offsets: offsets.finish(), changedCount };
-  parts.push(input.slice(copied));
-  return { output: parts.join(''), offsets: offsets.finish(), changedCount };
+  output.append(input.slice(copied));
+  return { output: output.finish(), offsets: offsets.finish(), changedCount };
 }
