@@ -18,6 +18,7 @@ from typing import IO
 import pytest
 
 import aicomply
+from aicomply.classifier.regex import classify_with_regex
 from aicomply.classifier.regex.pack import PATTERN_TYPES
 from aicomply.cli import _files_glob, _locate, _render_human, _render_json, _Source, run
 from aicomply.types import ClassifierResult, ComplyResult, Violation
@@ -978,6 +979,29 @@ def test_scan_prints_no_characters_of_a_detected_value(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     masked = {x["type"]: x["maskedValue"] for x in payload[0]["findings"]}
     assert masked == {"PASSPORT": "•••", "MRN": "•••", "SSN": "•••"}
+
+
+def test_masked_value_comment_states_what_the_library_redaction_shows():
+    # It said the library's redacted value keeps 6 of a 7-character passport
+    # number's characters; the library masks all 7.
+    source = Path(aicomply.__file__).with_name("cli.py").read_text(encoding="utf-8")
+    lines = source.splitlines()
+    at = lines.index('_MASKED_VALUE = "•••"')
+    start = at
+    while lines[start - 1].startswith("#"):
+        start -= 1
+    comment = " ".join(line.removeprefix("#").strip() for line in lines[start:at])
+    assert not re.search(r"\bkeeps \d+ of its characters\b", comment)
+    assert "still shows the last 2 or 4 characters of a value longer than 8 characters" in comment
+    assert '``start``/``end`` can span a keyword such as "Passport:"' in comment
+
+    def shown(content: str) -> list[tuple[str, str]]:
+        found = classify_with_regex(content).violations
+        return [(v.value, content[v.start : v.end]) for v in found]
+
+    assert shown("Passport: A123456") == [("*******", "Passport: A123456")]
+    assert shown("Passport: A12345678") == [("...78", "Passport: A12345678")]
+    assert shown("card 4111111111111111") == [("...1111", "4111111111111111")]
 
 
 # Normalization held a list entry and an int object for each character of each

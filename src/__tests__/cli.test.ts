@@ -11,6 +11,7 @@ import { devNull, tmpdir } from 'os';
 import { join } from 'path';
 import { PassThrough, Readable } from 'stream';
 import { decodeInput, filesGlob, locate, run } from '../cli';
+import { classifyWithRegex } from '../classifier/regex';
 import { PATTERN_TYPES } from '../classifier/regex/pack';
 
 function capture(): { out: string[]; err: string[]; restore: () => void } {
@@ -516,6 +517,26 @@ describe('aicomply CLI', () => {
       payload[0].findings.map((x: { type: string; maskedValue: string }) => [x.type, x.maskedValue]),
     );
     expect(masked).toEqual({ PASSPORT: '•••', MRN: '•••', SSN: '•••' });
+  });
+
+  it('the comment on MASKED_VALUE states what the library redaction shows', () => {
+    // It said the library's redacted value keeps 6 of a 7-character passport
+    // number's characters; the library masks all 7.
+    const source = readFileSync(join(__dirname, '..', 'cli.ts'), 'utf8');
+    const at = source.indexOf('\nconst MASKED_VALUE ');
+    const doc = source
+      .slice(source.lastIndexOf('/**', at) + 3, source.lastIndexOf('*/', at))
+      .replace(/^\s*\* ?/gm, '')
+      .replace(/\s+/g, ' ');
+    expect(doc).not.toMatch(/\bkeeps \d+ of its characters\b/);
+    expect(doc).toContain('still shows the last 2 or 4 characters of a value longer than 8 characters');
+    expect(doc).toContain('`start`/`end` can span a keyword such as "Passport:"');
+
+    const shown = (content: string) =>
+      classifyWithRegex(content).violations.map((v) => [v.value, content.slice(v.start, v.end)]);
+    expect(shown('Passport: A123456')).toEqual([['*******', 'Passport: A123456']]);
+    expect(shown('Passport: A12345678')).toEqual([['...78', 'Passport: A12345678']]);
+    expect(shown('card 4111111111111111')).toEqual([['...1111', '4111111111111111']]);
   });
 
   it('--quiet prints only the verdict word', async () => {

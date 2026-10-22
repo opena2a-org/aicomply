@@ -167,10 +167,10 @@ EXAMPLES
 
 
 # What the CLI prints in place of a detected value. The library's redacted
-# ``value`` can still carry most of a short match (a 7-character passport number
-# keeps 6 of its characters), and a finding does not record the matched value's
-# length (``start``/``end`` can span a keyword such as "Passport:"), so no share
-# of the value is printed.
+# ``value`` still shows the last 2 or 4 characters of a value longer than 8
+# characters, and a finding has no field for the matched value's length
+# (``start``/``end`` can span a keyword such as "Passport:"), so no share of the
+# value is printed.
 _MASKED_VALUE = "•••"
 
 
