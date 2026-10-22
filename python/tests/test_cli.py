@@ -743,9 +743,12 @@ def test_input_of_0_bytes_beside_others_is_reported_and_scanned_inputs_decide(tm
     assert capsys.readouterr().out == "VIOLATION\n"
 
 
-# The human output gives an input of 0 bytes no verdict; --json gave it "CLEAN",
-# a verdict no layer reached (mirror of the TS CLI tests).
-def test_json_gives_an_input_of_0_bytes_beside_others_a_null_verdict(tmp_path, capsys):
+# The report lists an input of 0 bytes as EMPTY, and --json gives it the same
+# word. --json gave it "CLEAN", a verdict no layer reached, and then null (mirror
+# of the TS CLI tests).
+def test_json_gives_an_input_of_0_bytes_beside_others_the_verdict_the_report_prints(
+    tmp_path, capsys
+):
     empty = tmp_path / "empty-json.txt"
     dirty = tmp_path / "dirty-json.txt"
     empty.write_bytes(b"")
@@ -757,15 +760,22 @@ def test_json_gives_an_input_of_0_bytes_beside_others_a_null_verdict(tmp_path, c
     assert empty_entry == {
         "source": str(empty),
         "bytes": 0,
-        "verdict": None,
+        "verdict": "EMPTY",
         "guardActive": False,
         "layers": [],
         "findings": [],
     }
     assert (dirty_entry["source"], dirty_entry["verdict"]) == (str(dirty), "VIOLATION")
 
+    assert run(["scan", str(empty), str(dirty)]) == 1
+    [empty_line] = [line for line in capsys.readouterr().out.splitlines() if str(empty) in line]
+    assert empty_line.split()[0] == empty_entry["verdict"]
+
     run(["scan", "--help"])
-    assert '(--json: "bytes": 0, "verdict": null,\n"layers": [])' in capsys.readouterr().out
+    assert (
+        'listed as EMPTY, "0 bytes, nothing to classify" (--json: "bytes": 0,\n'
+        '"verdict": "EMPTY", "layers": [])'
+    ) in capsys.readouterr().out
 
 
 def test_a_second_utf8_byte_order_mark_stays_in_the_text(tmp_path, capsys):

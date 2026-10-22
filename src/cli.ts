@@ -137,8 +137,9 @@ const SCAN_HELP = `aicomply scan -- scan files or piped stdin for sensitive cont
 Runs the deterministic regex layer over each input, plus the optional semantic
 Guard layer when a local nanomind-daemon is reachable. Prints a verdict per
 input and an overall verdict. An input of 0 bytes is not classified: it is
-listed as "0 bytes, nothing to classify" (--json: "bytes": 0, "verdict": null,
-"layers": []), and the inputs that were scanned decide the exit code.
+listed as EMPTY, "0 bytes, nothing to classify" (--json: "bytes": 0,
+"verdict": "EMPTY", "layers": []), and the inputs that were scanned decide the
+exit code.
 The report lists the first ${MAX_FINDING_LINES} findings of each input and counts the rest by
 type; --json lists every finding.
 
@@ -183,6 +184,12 @@ EXAMPLES
  * value is printed.
  */
 const MASKED_VALUE = '•••';
+
+/**
+ * The verdict of an input of 0 bytes, in the report and in --json. No layer
+ * runs on such an input, so it gets this word in place of a layer's verdict.
+ */
+const EMPTY_VERDICT = 'EMPTY';
 
 function readStdin(): Promise<Buffer> {
   return new Promise((resolve) => {
@@ -553,8 +560,9 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
     const src = sources[i];
     const res = results[i];
     if (src.bytes === 0) {
-      // No layer ran on it, so it gets no verdict and adds none to the total.
-      out.write(`  EMPTY      ${src.label}   0 bytes, nothing to classify\n\n`);
+      // No layer ran on it, so it gets no layer's verdict and adds none to the
+      // total.
+      out.write(`  ${EMPTY_VERDICT.padEnd(10)} ${src.label}   0 bytes, nothing to classify\n\n`);
       continue;
     }
     if (guardActive(res)) anyGuard = true;
@@ -627,10 +635,10 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
 export function renderJson(sources: Source[], results: ComplyResult[]): void {
   const payload = sources.map((src, i) => ({
     source: src.label,
-    // An input of 0 bytes was not classified: its `verdict` is null and its
-    // `layers` is [].
+    // An input of 0 bytes was not classified: its `verdict` is EMPTY, the
+    // word the report prints for it, and its `layers` is [].
     bytes: src.bytes,
-    verdict: src.bytes === 0 ? null : results[i].verdict,
+    verdict: src.bytes === 0 ? EMPTY_VERDICT : results[i].verdict,
     guardActive: guardActive(results[i]),
     layers: results[i].layers,
     findings: results[i].violations.map((v) => {
