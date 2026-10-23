@@ -63,8 +63,8 @@ export type {
   EncodedHybridPublicKey,
   EncodedHybridSignature,
 } from './arp';
-export { scanPatterns, luhnCheck } from './classifier/regex/patterns';
-export type { PatternMatch, PatternType } from './classifier/regex/patterns';
+export { scanPatterns, scanEachPattern, luhnCheck } from './classifier/regex/patterns';
+export type { PatternMatch, PatternScan, PatternType } from './classifier/regex/patterns';
 export { PACK_VERSION, PACK_SHA256 } from './classifier/regex/pack';
 
 import { types as utilTypes } from 'util';

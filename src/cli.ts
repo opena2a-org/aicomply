@@ -659,6 +659,13 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
     if (findings.length > MAX_FINDING_LINES) {
       out.write(`    ${notListedLine(findings.slice(MAX_FINDING_LINES))}\n`);
     }
+    const unevaluated = res.unevaluatedPatterns ?? [];
+    if (unevaluated.length > 0) {
+      out.write(
+        `    not evaluated: ${unevaluated.join(', ')}; the regex engine could not run ` +
+          `${unevaluated.length === 1 ? 'this pattern' : 'these patterns'} on the input, so the input is not reported CLEAN\n`,
+      );
+    }
     out.write('\n');
   }
 
@@ -706,6 +713,10 @@ export function renderJson(sources: Source[], results: ComplyResult[]): void {
     verdict: src.bytes === 0 ? EMPTY_VERDICT : results[i].verdict,
     guardActive: guardActive(results[i]),
     layers: results[i].layers,
+    // The patterns the regex engine could not run on this input, when any.
+    ...(results[i].unevaluatedPatterns !== undefined
+      ? { unevaluatedPatterns: results[i].unevaluatedPatterns }
+      : {}),
     findings: results[i].violations.map((v) => {
       const loc = locateFinding(src.content, v);
       return {

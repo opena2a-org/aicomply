@@ -17,8 +17,9 @@
  *     hit; changes the verdict only when the caller sets onRegistryUnknown
  */
 
-import { classifyWithRegex } from '../regex';
+import { classifyWithRegex, toRegexResult } from '../regex';
 import { packIdentity } from '../regex/pack';
+import { PATTERNS } from '../regex/patterns';
 import { classifyWithNanoMindDaemon } from '../guard-client/nanomind-adapter';
 import type { NanoMindAdapterOptions } from '../guard-client/nanomind-adapter';
 import { verifyClassification } from '../../arp/verify';
@@ -340,6 +341,11 @@ export async function classifyDualLayer(
     result.normalizedContent = norm.normalizedContent;
   }
   result.normalizations = norm.steps;
+  // The patterns the regex engine could not run on the content: their ids,
+  // not content, so they are kept on a DENY as well.
+  if (regexResult.unevaluatedPatterns !== undefined) {
+    result.unevaluatedPatterns = [...regexResult.unevaluatedPatterns];
+  }
 
   // Name the pack the regex layer ran and the layers that ran. Guard is
   // listed only when its classification was accepted into classifierResults:
@@ -430,7 +436,9 @@ export async function verifySuppliedGuard(
  * suppressed when a match in a non-normalized view points at the same
  * (type, originalStart, originalEnd) range as one already found in
  * the normalized view - avoids double-reporting the same SSN that's
- * detected both raw and via the compact-form pass.
+ * detected both raw and via the compact-form pass. A pattern the regex
+ * engine could not run on one view or more is listed once, in pack order,
+ * with one PATTERN_NOT_EVALUATED finding.
  */
 export function scanAllViews(norm: ScanNormalization): ClassifierResult {
   const normalizedScan = classifyWithRegex(norm.normalizedContent, {
@@ -438,11 +446,14 @@ export function scanAllViews(norm: ScanNormalization): ClassifierResult {
     offsetMap: norm.offsetMap,
   });
 
-  const all: Violation[] = [...normalizedScan.violations];
+  // Pattern matches only: each carries its view. A PATTERN_NOT_EVALUATED
+  // finding carries none, and is added once for all the views below.
+  const all: Violation[] = normalizedScan.violations.filter((v) => v.view !== undefined);
   const seen = new Set<string>();
   for (const v of all) {
     seen.add(`${v.type}@${v.originalStart}-${v.originalEnd}`);
   }
+  const unevaluated = new Set(normalizedScan.unevaluatedPatterns);
 
   for (const ext of norm.decodedExtractions) {
     // ext.source matches ViolationView 1:1 - use it directly. When
@@ -455,6 +466,7 @@ export function scanAllViews(norm: ScanNormalization): ClassifierResult {
         ? { offsetMap: ext.offsetMap }
         : { originalAnchor: { start: ext.originalStart, end: ext.originalEnd } }),
     });
+    for (const id of scan.unevaluatedPatterns ?? []) unevaluated.add(id);
     // Dedup key:
     //  - For findings with a precise offsetMap (compact + normalized
     //    views): the originalStart/End pair uniquely identifies the
@@ -466,6 +478,7 @@ export function scanAllViews(norm: ScanNormalization): ClassifierResult {
     //    onto a single dedup key.
     const hasOffsetMap = ext.offsetMap !== undefined;
     for (const v of scan.violations) {
+      if (v.view === undefined) continue;
       const key = hasOffsetMap
         ? `${v.type}@${v.originalStart}-${v.originalEnd}`
         : `${v.type}@${v.originalStart}-${v.originalEnd}#${v.view}:${v.start}-${v.end}`;
@@ -475,11 +488,10 @@ export function scanAllViews(norm: ScanNormalization): ClassifierResult {
     }
   }
 
-  return {
-    classifier: 'regex',
-    verdict: all.length === 0 ? 'CLEAN' : 'VIOLATION',
-    violations: all,
-  };
+  return toRegexResult(
+    all,
+    PATTERNS.filter((p) => unevaluated.has(p.id)).map((p) => p.id),
+  );
 }
 
 /**

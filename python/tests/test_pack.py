@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -210,3 +211,76 @@ def test_compile_pack_refuses_an_unanchored_reference_form():
 def test_compile_pack_refuses_bytes_that_are_not_json():
     with pytest.raises(PackError, match="not valid JSON"):
         compile_pack(b'{"schemaVersion":')
+
+
+#: The shape ``grep -c '{[0-9]*,}' pack/patterns.json`` counts.
+_OPEN_REPEAT = re.compile(r"\{[0-9]*,\}")
+
+#: Each pattern whose token repeat carries the upper bound 1000, with that bound
+#: removed again.
+_REOPENED = [
+    (p["id"], re.sub(r"\{(\d+),1000\}", r"{\1,}", p["source"], count=1))
+    for p in _DOC["patterns"]
+    if re.search(r"\{\d+,(1000)?\}", p["source"])
+]
+
+
+def test_the_pack_file_has_no_counted_repeat_without_an_upper_bound():
+    assert _OPEN_REPEAT.findall(_BYTES.decode("utf-8")) == []
+
+
+def test_bounds_the_token_repeat_of_six_credential_patterns():
+    assert [pid for pid, _ in _REOPENED] == [
+        "anthropic-api-key",
+        "openai-project-key",
+        "openrouter-key",
+        "openai-legacy-key",
+        "bearer-token",
+        "generic-key-assignment",
+    ]
+
+
+@pytest.mark.parametrize("pid,source", _REOPENED, ids=[pid for pid, _ in _REOPENED])
+def test_compile_pack_refuses_a_token_repeat_left_open_naming_the_pattern(pid, source):
+    message = (
+        rf"^aicomply pattern pack: pattern {pid}: source has the counted repeat "
+        r"\{\d+,\}, which has no upper bound"
+    )
+    with pytest.raises(PackError, match=message):
+        compile_pack(_with_pattern(pid, source=source))
+
+
+@pytest.mark.parametrize(
+    "source,repeat",
+    [
+        (r"Bearer\s+([A-Za-z0-9._~+/=-]{20,1001})", "{20,1001}"),
+        (r"Bearer\s+([A-Za-z0-9._~+/=-]{1001,2000})", "{1001,2000}"),
+        (r"Bearer\s+([A-Za-z0-9._~+/=-]{1001})", "{1001}"),
+    ],
+)
+def test_compile_pack_refuses_a_count_above_1000_naming_the_pattern(source, repeat):
+    message = (
+        "aicomply pattern pack: pattern bearer-token: source has the counted repeat "
+        f"{repeat}, whose count is above 1000"
+    )
+    with pytest.raises(PackError, match=re.escape(message)):
+        compile_pack(_with_pattern("bearer-token", source=source))
+
+
+def test_compile_pack_refuses_a_counted_repeat_without_an_upper_bound_in_a_reference_form():
+    doc = {**_DOC, "referenceForms": [{"id": "open", "source": r"^\$[A-Z_]{1,}$"}]}
+    message = (
+        "aicomply pattern pack: referenceForms[0]: source has the counted repeat {1,}, "
+        "which has no upper bound"
+    )
+    with pytest.raises(PackError, match=re.escape(message)):
+        compile_pack(json.dumps(doc).encode())
+
+
+@pytest.mark.parametrize(
+    "source",
+    [r"Bearer\s+\{20,\}", r"Bearer\s+[{20,}]+", r"Bearer\s+([A-Za-z0-9._~+/=-]{20,1000})"],
+)
+def test_compile_pack_accepts_braces_that_are_not_an_open_or_oversized_repeat(source):
+    compiled = compile_pack(_with_pattern("bearer-token", source=source))
+    assert [p.regex.pattern for p in compiled.patterns if p.id == "bearer-token"] == [source]

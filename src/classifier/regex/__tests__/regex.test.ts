@@ -1,4 +1,11 @@
-import { dropOverlappingRepeats, scanPatterns, luhnCheck, type PatternMatch } from '../patterns';
+import {
+  dropOverlappingRepeats,
+  scanPatterns,
+  luhnCheck,
+  PATTERNS,
+  type PatternDefinition,
+  type PatternMatch,
+} from '../patterns';
 import { classifyWithRegex } from '..';
 
 describe('luhnCheck', () => {
@@ -578,5 +585,123 @@ describe('matches of one value at overlapping ranges', () => {
     const used = process.cpuUsage(before);
     expect(matches).toHaveLength(200_000);
     expect((used.user + used.system) / 1000).toBeLessThan(3000);
+  });
+});
+
+describe('a token repeat stops at its upper bound', () => {
+  // The upper bound of the token repeat of each pattern below.
+  const BOUND = 1000;
+  // Assembled at run time, so this file holds no key-shaped text.
+  const s = ['s', 'k-'].join('');
+  const prefixes: Array<[string, string]> = [
+    ['anthropic-api-key', `${s}ant-api03-`],
+    ['openai-project-key', `${s}proj-`],
+    ['openrouter-key', `${s}or-v1-`],
+    ['openai-legacy-key', s],
+    ['bearer-token', 'Bearer '],
+    ['generic-key-assignment', 'api_key='],
+  ];
+
+  /** Index and length of the first match of pack pattern `id` in `text`. */
+  function firstMatch(id: string, text: string): [number, number] | null {
+    const pattern = PATTERNS.find((p) => p.id === id) as PatternDefinition;
+    pattern.regex.lastIndex = 0;
+    const m = pattern.regex.exec(text);
+    pattern.regex.lastIndex = 0;
+    return m === null ? null : [m.index, m[0].length];
+  }
+
+  it.each(prefixes)('%s matches a token of the bound length whole', (id, prefix) => {
+    const text = prefix + 'a'.repeat(BOUND);
+    expect(firstMatch(id, text)).toEqual([0, text.length]);
+  });
+
+  it.each(prefixes)('%s matches a token one past the bound up to the bound', (id, prefix) => {
+    const text = prefix + 'a'.repeat(BOUND + 1);
+    expect(firstMatch(id, text)).toEqual([0, prefix.length + BOUND]);
+  });
+
+  it.each(prefixes)('%s reports a token far past the bound as one finding up to the bound', (_id, prefix) => {
+    const text = prefix + 'a'.repeat(2 ** 23);
+    const found = scanPatterns(text).map((m) => [m.type, m.start, m.end]);
+    expect(found).toEqual([['CREDENTIAL', 0, prefix.length + BOUND]]);
+  });
+});
+
+describe('a pattern the regex engine cannot run on the content', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  /** Make pack pattern `id` throw from its regex, as the engine does when it cannot run it. */
+  function failPattern(id: string): jest.SpyInstance {
+    const pattern = PATTERNS.find((p) => p.id === id) as PatternDefinition;
+    return jest.spyOn(pattern.regex, 'exec').mockImplementation(() => {
+      throw new RangeError('Maximum call stack size exceeded');
+    });
+  }
+
+  // In pack order the SSN pattern runs before bearer-token and the MRN pattern after it.
+  const content = 'Customer SSN 078-05-1120 on file\nMRN: A1234567\n';
+
+  it('is listed as not evaluated, and the other patterns still run and keep their matches', () => {
+    failPattern('bearer-token');
+    const mrn = jest.spyOn(PATTERNS.find((p) => p.id === 'mrn')!.regex, 'exec');
+    const result = classifyWithRegex(content);
+    expect(mrn).toHaveBeenCalled();
+    expect(result).toMatchObject({ verdict: 'VIOLATION', unevaluatedPatterns: ['bearer-token'] });
+    expect(result.violations.map((v) => v.type).sort()).toEqual([
+      'MRN',
+      'PATTERN_NOT_EVALUATED:bearer-token',
+      'SSN',
+    ]);
+  });
+
+  it('is never reported CLEAN when no other pattern matches', () => {
+    failPattern('bearer-token');
+    expect(classifyWithRegex('nothing sensitive in this line')).toEqual({
+      classifier: 'regex',
+      verdict: 'VIOLATION',
+      violations: [
+        {
+          type: 'PATTERN_NOT_EVALUATED:bearer-token',
+          value: 'bearer-token',
+          start: 0,
+          end: 0,
+          confidence: 1,
+          classifier: 'regex',
+        },
+      ],
+      unevaluatedPatterns: ['bearer-token'],
+    });
+  });
+
+  it('makes scanPatterns throw an error that names the pattern once every pattern has run', () => {
+    failPattern('bearer-token');
+    const mrn = jest.spyOn(PATTERNS.find((p) => p.id === 'mrn')!.regex, 'exec');
+    expect(() => scanPatterns(content)).toThrow(
+      'aicomply: pattern bearer-token was not evaluated on this content (RangeError: Maximum call stack size exceeded)',
+    );
+    expect(mrn).toHaveBeenCalled();
+  });
+
+  it('contains the error the engine throws for a counted repeat with no upper bound', () => {
+    // Added beside the pack, past the loader, which refuses such a source.
+    const planted: PatternDefinition = {
+      id: 'planted-open-repeat',
+      type: 'CREDENTIAL',
+      regex: new RegExp('tok_([a-z]{20,})', 'g'),
+      confidence: 0.9,
+    };
+    PATTERNS.push(planted);
+    try {
+      const result = classifyWithRegex(`${content}tok_${'a'.repeat(2 ** 23)}`);
+      expect(result).toMatchObject({ verdict: 'VIOLATION', unevaluatedPatterns: ['planted-open-repeat'] });
+      expect(result.violations.map((v) => v.type).sort()).toEqual([
+        'MRN',
+        'PATTERN_NOT_EVALUATED:planted-open-repeat',
+        'SSN',
+      ]);
+    } finally {
+      PATTERNS.pop();
+    }
   });
 });

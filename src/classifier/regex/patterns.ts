@@ -43,48 +43,107 @@ export function isEnvVarReference(value: string): boolean {
   return PACK.referenceForms.some((form) => form.test(trimmed));
 }
 
-/**
- * Scan content against all patterns and return validated matches.
- */
-export function scanPatterns(content: string): PatternMatch[] {
+/** The matches of one scan of the content, and the patterns it could not run. */
+export interface PatternScan {
+  /** The validated matches, as scanPatterns() returns them when every pattern ran. */
+  matches: PatternMatch[];
+  /**
+   * Ids of the patterns the regex engine threw on for this content, in pack
+   * order. The matches such a pattern found before the error are kept.
+   */
+  unevaluatedPatterns: string[];
+}
+
+/** Add the validated matches of `pattern` in `content` to `matches`. */
+function collectMatches(pattern: PatternDefinition, content: string, matches: PatternMatch[]): void {
+  // Reset regex state for global patterns
+  pattern.regex.lastIndex = 0;
+
+  let match: RegExpExecArray | null;
+  while ((match = pattern.regex.exec(content)) !== null) {
+    const fullMatch = match[0];
+    const capturedValue = match[1] || fullMatch;
+
+    // An env-var reference names a secret without carrying one. Skipping it
+    // here (not per-pattern) keeps the definition in one place; the anchored
+    // forms mean a literal sitting next to a reference still reports. The
+    // same reference is capturable by any keyword rule -- the generic
+    // api_key rule and the Bearer rule both matched it before this landed.
+    if (isEnvVarReference(capturedValue)) {
+      continue;
+    }
+
+    // Run validator if present
+    if (pattern.validate && !pattern.validate(capturedValue)) {
+      continue;
+    }
+
+    matches.push({
+      type: pattern.type,
+      value: capturedValue,
+      start: match.index,
+      end: match.index + fullMatch.length,
+      confidence: pattern.confidence,
+    });
+  }
+}
+
+/** Every pattern's matches, and each pattern that threw with what it threw. */
+function runPatterns(content: string): {
+  matches: PatternMatch[];
+  failures: Array<{ id: string; error: unknown }>;
+} {
   const matches: PatternMatch[] = [];
+  const failures: Array<{ id: string; error: unknown }> = [];
 
   for (const pattern of PATTERNS) {
-    // Reset regex state for global patterns
-    pattern.regex.lastIndex = 0;
-
-    let match: RegExpExecArray | null;
-    while ((match = pattern.regex.exec(content)) !== null) {
-      const fullMatch = match[0];
-      const capturedValue = match[1] || fullMatch;
-
-      // An env-var reference names a secret without carrying one. Skipping it
-      // here (not per-pattern) keeps the definition in one place; the anchored
-      // forms mean a literal sitting next to a reference still reports. The
-      // same reference is capturable by any keyword rule -- the generic
-      // api_key rule and the Bearer rule both matched it before this landed.
-      if (isEnvVarReference(capturedValue)) {
-        continue;
-      }
-
-      // Run validator if present
-      if (pattern.validate && !pattern.validate(capturedValue)) {
-        continue;
-      }
-
-      matches.push({
-        type: pattern.type,
-        value: capturedValue,
-        start: match.index,
-        end: match.index + fullMatch.length,
-        confidence: pattern.confidence,
-      });
+    // An error the engine throws for one pattern, such as a RangeError when
+    // it runs out of backtracking stack, ends that pattern's search only: the
+    // next pattern still runs, and the matches of the others stand.
+    try {
+      collectMatches(pattern, content, matches);
+    } catch (error) {
+      failures.push({ id: pattern.id, error });
+    } finally {
+      pattern.regex.lastIndex = 0;
     }
   }
 
   // Deduplicate overlapping matches: higher confidence wins
   matches.sort((a, b) => b.confidence - a.confidence);
-  return dropOverlappingRepeats(matches);
+  return { matches: dropOverlappingRepeats(matches), failures };
+}
+
+/**
+ * Scan content against all patterns and return the validated matches with
+ * the ids of the patterns the regex engine could not run on it.
+ */
+export function scanEachPattern(content: string): PatternScan {
+  const { matches, failures } = runPatterns(content);
+  return { matches, unevaluatedPatterns: failures.map((f) => f.id) };
+}
+
+/**
+ * Scan content against all patterns and return validated matches.
+ *
+ * When the regex engine could not run a pattern on the content, this throws
+ * once every pattern has run, naming each such pattern, rather than return
+ * the matches of the others as if the scan were whole. scanEachPattern()
+ * returns those matches and the ids of the patterns that did not run.
+ */
+export function scanPatterns(content: string): PatternMatch[] {
+  const { matches, failures } = runPatterns(content);
+  if (failures.length > 0) {
+    const first = failures[0].error;
+    const reason = first instanceof Error ? `${first.name}: ${first.message}` : String(first);
+    const one = failures.length === 1;
+    throw new Error(
+      `aicomply: pattern${one ? '' : 's'} ${failures.map((f) => f.id).join(', ')} ` +
+        `${one ? 'was' : 'were'} not evaluated on this content (${reason}); scanEachPattern() ` +
+        'returns the matches of the other patterns and the ids of those not evaluated',
+    );
+  }
+  return matches;
 }
 
 /**

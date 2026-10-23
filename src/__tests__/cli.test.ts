@@ -15,6 +15,7 @@ import { serialize } from 'v8';
 import { decodeInput, filesGlob, locate, run } from '../cli';
 import { classifyWithRegex } from '../classifier/regex';
 import { PATTERN_TYPES } from '../classifier/regex/pack';
+import { PATTERNS, type PatternDefinition } from '../classifier/regex/patterns';
 
 /**
  * Records what is written to stdout and stderr. A write's callback is called
@@ -1654,6 +1655,98 @@ require.extensions['.ts'] = (module, filename) => {
     });
   });
 
+  describe('a pattern the regex engine cannot run on the input', () => {
+    /** Make pack pattern `id` throw from its regex, as the engine does when it cannot run it. */
+    function failPattern(id: string): void {
+      const pattern = PATTERNS.find((p) => p.id === id) as PatternDefinition;
+      jest.spyOn(pattern.regex, 'exec').mockImplementation(() => {
+        throw new RangeError('Maximum call stack size exceeded');
+      });
+    }
+
+    async function scan(args: string[]): Promise<{ code: number; out: string; err: string }> {
+      const cap = capture();
+      try {
+        const code = await run(['scan', ...args]);
+        return { code, out: cap.out.join(''), err: cap.err.join('') };
+      } finally {
+        cap.restore();
+      }
+    }
+
+    const NOTE =
+      '    not evaluated: bearer-token; the regex engine could not run this pattern on the input, so the input is not reported CLEAN\n';
+
+    it('--quiet prints VIOLATION and exits 1 when no other pattern matches', async () => {
+      failPattern('bearer-token');
+      const f = fixture('unevaluated-plain.txt', 'nothing sensitive in this line\n');
+      expect(await scan([f, '--quiet'])).toEqual({ code: 1, out: 'VIOLATION\n', err: '' });
+    });
+
+    it('the report gives VIOLATION and names the pattern when no other pattern matches', async () => {
+      failPattern('bearer-token');
+      const f = fixture('unevaluated-plain.txt', 'nothing sensitive in this line\n');
+      const { code, out, err } = await scan([f]);
+      expect({ code, err }).toEqual({ code: 1, err: '' });
+      expect(out).toContain(`  VIOLATION  ${f}   1 finding\n`);
+      expect(out).toMatch(/\n {4}PATTERN_NOT_EVALUATED:bearer-token +••• +confidence 1\.00 {2}layer regex\n/);
+      expect(out).toContain(NOTE);
+      expect(out).toContain('Verdict: VIOLATION');
+      expect(out).not.toContain('CLEAN  ·');
+    });
+
+    it('--json gives VIOLATION and names the pattern when no other pattern matches', async () => {
+      failPattern('bearer-token');
+      const f = fixture('unevaluated-plain.txt', 'nothing sensitive in this line\n');
+      const { code, out, err } = await scan([f, '--json']);
+      expect({ code, err }).toEqual({ code: 1, err: '' });
+      const [source] = JSON.parse(out);
+      expect(source).toMatchObject({ verdict: 'VIOLATION', unevaluatedPatterns: ['bearer-token'] });
+      expect(source.findings).toEqual([
+        {
+          type: 'PATTERN_NOT_EVALUATED:bearer-token',
+          maskedValue: '•••',
+          confidence: 1,
+          classifier: 'regex',
+          view: null,
+          line: null,
+          column: null,
+        },
+      ]);
+    });
+
+    it('keeps the findings of the other patterns in every output form', async () => {
+      failPattern('bearer-token');
+      const f = fixture('unevaluated-flagged.txt', 'Customer SSN 078-05-1120 on file\nMRN: A1234567\n');
+
+      expect(await scan([f, '--quiet'])).toEqual({ code: 1, out: 'VIOLATION\n', err: '' });
+
+      const report = await scan([f]);
+      expect(report.code).toBe(1);
+      expect(report.out).toContain(`  VIOLATION  ${f}   3 findings\n`);
+      expect(report.out).toMatch(/\n {4}SSN +••• .* line 1 col 14\n/);
+      expect(report.out).toMatch(/\n {4}MRN +••• .* line 2 col 1\n/);
+      expect(report.out).toContain(NOTE);
+
+      const json = await scan([f, '--json']);
+      expect(json.code).toBe(1);
+      const [source] = JSON.parse(json.out);
+      expect(source).toMatchObject({ verdict: 'VIOLATION', unevaluatedPatterns: ['bearer-token'] });
+      expect(source.findings.map((x: { type: string }) => x.type).sort()).toEqual([
+        'MRN',
+        'PATTERN_NOT_EVALUATED:bearer-token',
+        'SSN',
+      ]);
+    });
+
+    it('--json has no unevaluatedPatterns for an input every pattern ran on', async () => {
+      const f = fixture('unevaluated-none.txt', 'Customer SSN 078-05-1120 on file\n');
+      const { code, out } = await scan([f, '--json']);
+      expect(code).toBe(1);
+      expect(JSON.parse(out)[0]).not.toHaveProperty('unevaluatedPatterns');
+    });
+  });
+
   describe('input of many megabytes', () => {
     // A scan of a 77 MB file ended with "JavaScript heap out of memory" and
     // exit 134: normalization held an array entry, and in the compact view an
@@ -1804,5 +1897,40 @@ require.extensions['.ts'] = (module, filename) => {
         findings: [{ type: 'SSN', view: 'normalized', line: count + 1, column: 14 }],
       });
     }, 120_000);
+
+    // Each token repeat of the pack stops at its upper bound, so the token is
+    // one finding and the scan goes on to the line after it.
+    it('reports both findings of a file whose token runs far past the bound, in every output form', async () => {
+      const f = fixture('long-token.txt', `Bearer ${'a'.repeat(2 ** 23)}\nCustomer SSN 078-05-1120 on file\n`);
+      const scan = async (args: string[]) => {
+        const cap = capture();
+        try {
+          const code = await run(['scan', f, ...args]);
+          return { code, out: cap.out.join(''), err: cap.err.join('') };
+        } finally {
+          cap.restore();
+        }
+      };
+
+      expect(await scan(['--quiet'])).toEqual({ code: 1, out: 'VIOLATION\n', err: '' });
+
+      const report = await scan([]);
+      expect({ code: report.code, err: report.err }).toEqual({ code: 1, err: '' });
+      expect(report.out).toContain(`  VIOLATION  ${f}   2 findings\n`);
+      expect(report.out).toMatch(/\n {4}CREDENTIAL +••• .* line 1 col 1\n {4}SSN +••• .* line 2 col 14\n/);
+
+      const json = await scan(['--json']);
+      expect({ code: json.code, err: json.err }).toEqual({ code: 1, err: '' });
+      const [source] = JSON.parse(json.out);
+      expect(source.verdict).toBe('VIOLATION');
+      expect(source).not.toHaveProperty('unevaluatedPatterns');
+      const byLine = source.findings
+        .map((x: { type: string; line: number }) => [x.type, x.line])
+        .sort((a: [string, number], b: [string, number]) => a[1] - b[1]);
+      expect(byLine).toEqual([
+        ['CREDENTIAL', 1],
+        ['SSN', 2],
+      ]);
+    }, 60_000);
   });
 });

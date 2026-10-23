@@ -60,8 +60,8 @@ export interface Violation {
    * stream (NFKC + zero-width-stripped). 'compact' / 'decoded-*' indicate the
    * match only surfaced after additional adversarial-mutation handling.
    * Set on every pattern match; absent on Guard, POLICY_DENY / POLICY_WARN,
-   * SUPPLY_CHAIN_ALERT and FLEET_ANOMALY_ELEVATED findings, which do not
-   * come from a content view.
+   * SUPPLY_CHAIN_ALERT, FLEET_ANOMALY_ELEVATED and PATTERN_NOT_EVALUATED
+   * findings, which do not come from a content view.
    */
   view?: ViolationView;
   /**
@@ -80,6 +80,12 @@ export interface ClassifierResult {
   classifier: 'regex' | 'guard';
   verdict: Verdict;
   violations: Violation[];
+  /**
+   * Ids of the patterns the regex engine could not run on the content, in
+   * pack order, set only when there is at least one. Each has a
+   * `PATTERN_NOT_EVALUATED:<id>` violation, so the verdict is not CLEAN.
+   */
+  unevaluatedPatterns?: string[];
 }
 
 export interface RiskContext {
@@ -183,6 +189,13 @@ export interface ComplyResult {
     regex: ClassifierResult;
     guard?: ClassifierResult;
   };
+  /**
+   * Ids of the patterns the regex engine could not run on the content, in
+   * pack order, set only when there is at least one. The other patterns ran
+   * and their matches stand; each listed pattern has a
+   * `PATTERN_NOT_EVALUATED:<id>` violation, so the verdict is not CLEAN.
+   */
+  unevaluatedPatterns?: string[];
   signatureValid?: boolean;
   verifyError?: {
     code: string;

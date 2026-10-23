@@ -6,9 +6,10 @@ Port of classifier/regex/pack.ts. The detection regexes are data in
 against the pack contract and compiles it; nothing else in the package holds a
 detection pattern literal.
 
-The loader fails closed: a missing, malformed or non-portable pack raises at
-import time rather than leaving the classifier running with no patterns, which
-would report every input as CLEAN.
+The loader fails closed: a missing, malformed or non-portable pack, or one with
+a counted repeat that has no upper bound, raises at import time rather than
+leaving the classifier running with no patterns, which would report every input
+as CLEAN.
 
 Each pattern entry carries ``id``, ``class`` (the violation type a match
 reports), ``source`` (the regex), ``flags``, ``validator`` (a name from
@@ -138,6 +139,64 @@ def non_portable_construct(source: str) -> str | None:
     return None
 
 
+#: The largest count a counted repeat in the pack may carry. RE2 refuses a
+#: larger one, so a larger count is outside the portable subset as well.
+MAX_REPEAT_COUNT = 1000
+
+#: A counted repeat at a given position: ``{n}``, ``{n,}`` or ``{n,m}``.
+_COUNTED_REPEAT = re.compile(r"\{([0-9]+)(?:(,)([0-9]*))?\}")
+
+
+def counted_repeat_problem(source: str) -> str | None:
+    """Return why a counted repeat in ``source`` keeps it out of the pack, or None.
+
+    Every counted repeat (``{n}``, ``{n,}`` or ``{n,m}`` outside a character
+    class) carries an upper bound, and no count above ``MAX_REPEAT_COUNT``.
+    The JavaScript regex engine keeps backtracking state for each character a
+    counted repeat matches, so one with no upper bound can make it throw on a
+    long enough run of the characters it repeats; both runtimes read one pack,
+    so this one refuses such a source too. An escaped brace, a brace in a
+    character class and ``{,m}`` open no counted repeat here.
+    """
+    in_class = False
+    i = 0
+    n = len(source)
+    while i < n:
+        c = source[i]
+        if c == "\\":
+            i += 2
+            continue
+        if in_class:
+            if c == "]":
+                in_class = False
+            i += 1
+            continue
+        if c == "[":
+            in_class = True
+            i += 1
+            continue
+        if c == "{":
+            repeat = _COUNTED_REPEAT.match(source, i)
+            if repeat is not None:
+                text = repeat.group(0)
+                low, comma, high = repeat.group(1, 2, 3)
+                if comma is not None and high == "":
+                    return (
+                        f"the counted repeat {text}, which has no upper bound; "
+                        f"write it as {{{low},m}} with m at most {MAX_REPEAT_COUNT}"
+                    )
+                counts = [int(low)] + ([] if high is None else [int(high)])
+                if max(counts) > MAX_REPEAT_COUNT:
+                    return (
+                        f"the counted repeat {text}, whose count is above {MAX_REPEAT_COUNT}, "
+                        "the largest RE2 accepts"
+                    )
+                i += len(text)
+                continue
+        i += 1
+    return None
+
+
 def _fail(message: str) -> PackError:
     return PackError(f"aicomply pattern pack: {message}")
 
@@ -148,6 +207,9 @@ def _compile(where: str, source: object, flags: int) -> re.Pattern[str]:
     construct = non_portable_construct(source)
     if construct is not None:
         raise _fail(f"{where}: source uses a {construct}, which is outside the portable subset")
+    repeat = counted_repeat_problem(source)
+    if repeat is not None:
+        raise _fail(f"{where}: source has {repeat}")
     try:
         return re.compile(source, flags)
     except re.error as err:

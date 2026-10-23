@@ -6,9 +6,10 @@
  * it against the pack contract, and compiles it. Nothing else in the codebase
  * holds a detection pattern literal.
  *
- * The loader fails closed: a missing, malformed or non-portable pack throws at
- * import time rather than leaving the classifier running with no patterns,
- * which would report every input as CLEAN.
+ * The loader fails closed: a missing, malformed or non-portable pack, or one
+ * with a counted repeat that has no upper bound, throws at import time rather
+ * than leaving the classifier running with no patterns, which would report
+ * every input as CLEAN.
  *
  * File shape (camelCase):
  *
@@ -113,6 +114,58 @@ export function nonPortableConstruct(source: string): string | null {
   return null;
 }
 
+/**
+ * The largest count a counted repeat in the pack may carry. RE2 refuses a
+ * larger one, so a larger count is outside the portable subset as well.
+ */
+export const MAX_REPEAT_COUNT = 1000;
+
+/** A counted repeat at the start of the text from `lastIndex`: `{n}`, `{n,}` or `{n,m}`. */
+const COUNTED_REPEAT = /\{(\d+)(?:(,)(\d*))?\}/y;
+
+/**
+ * Return why a counted repeat in `source` keeps it out of the pack, or null.
+ *
+ * Every counted repeat (`{n}`, `{n,}` or `{n,m}` outside a character class)
+ * carries an upper bound, and no count above MAX_REPEAT_COUNT. The JavaScript
+ * regex engine keeps backtracking state for each character a counted repeat
+ * matches, so one with no upper bound can make it throw on a long enough run
+ * of the characters it repeats, and the pattern then reaches no result for
+ * that content. An escaped brace, a brace in a character class and `{,m}`
+ * open no counted repeat here.
+ */
+export function countedRepeatProblem(source: string): string | null {
+  let inClass = false;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    if (c === '\\') {
+      i++;
+      continue;
+    }
+    if (inClass) {
+      if (c === ']') inClass = false;
+      continue;
+    }
+    if (c === '[') {
+      inClass = true;
+      continue;
+    }
+    if (c !== '{') continue;
+    COUNTED_REPEAT.lastIndex = i;
+    const repeat = COUNTED_REPEAT.exec(source);
+    if (repeat === null) continue;
+    const [text, min, comma, max] = repeat;
+    if (comma !== undefined && max === '') {
+      return `the counted repeat ${text}, which has no upper bound; write it as {${min},m} with m at most ${MAX_REPEAT_COUNT}`;
+    }
+    if (Number(min) > MAX_REPEAT_COUNT || (max !== undefined && Number(max) > MAX_REPEAT_COUNT)) {
+      return `the counted repeat ${text}, whose count is above ${MAX_REPEAT_COUNT}, the largest RE2 accepts`;
+    }
+    i += text.length - 1;
+  }
+  return null;
+}
+
 function fail(message: string): never {
   throw new Error(`aicomply pattern pack: ${message}`);
 }
@@ -129,6 +182,8 @@ function compileRegex(where: string, source: unknown, flags: string): RegExp {
   if (construct !== null) {
     fail(`${where}: source uses a ${construct}, which is outside the portable subset`);
   }
+  const repeat = countedRepeatProblem(source);
+  if (repeat !== null) fail(`${where}: source has ${repeat}`);
   try {
     return new RegExp(source, flags);
   } catch (err) {
