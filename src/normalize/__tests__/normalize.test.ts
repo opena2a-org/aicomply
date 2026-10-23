@@ -14,8 +14,8 @@
 
 import { normalize, normalizeForScan } from '../index';
 import { nfkcStage, normalizeNFKC } from '../nfkc';
-import { stripZeroWidth } from '../zero-width';
-import { buildCompactForm } from '../whitespace';
+import { stripZeroWidth, zeroWidthStage } from '../zero-width';
+import { buildCompactForm, compactStage } from '../whitespace';
 import { extractEncoded } from '../encoded';
 import { PIECES_PER_JOIN, TextBuilder } from '../text-builder';
 
@@ -132,6 +132,25 @@ describe('Zero-width / bidi-control stripping', () => {
     // 'a' came from position 0, 'b' came from position 2 (U+200B was at 1).
     expect(r.offsetMap).toEqual([0, 2]);
   });
+
+  // The stage held one array entry for each character it strips, and threw
+  // "Invalid array length" on this text.
+  it('strips 134217728 copies of U+200B, 1024 after each of 131072 copies of a', () => {
+    const runs = 131072;
+    const run = `a${'\u{200B}'.repeat(1024)}`;
+    const r = zeroWidthStage(run.repeat(runs));
+    const map = r.offsets;
+    // Each a points at its own index in the input.
+    let wrong = 0;
+    for (let k = 0; k < runs; k += 1) if (map?.[k] !== k * run.length) wrong += 1;
+    // Compared as a boolean: a failing toBe would print both strings.
+    expect({ same: r.output === 'a'.repeat(runs), removedCount: r.removedCount, mapLength: map?.length, wrong }).toEqual({
+      same: true,
+      removedCount: 134217728,
+      mapLength: runs,
+      wrong: 0,
+    });
+  }, 60_000);
 });
 
 describe('Compact-form view (whitespace-injection defense)', () => {
@@ -163,6 +182,24 @@ describe('Compact-form view (whitespace-injection defense)', () => {
     // because both neighbors of each space are token chars.
     expect(r.compact).toBe('My SSN is 123');
   });
+
+  // The stage held one array entry for each whitespace run it strips, and
+  // threw "Invalid array length" on this text.
+  it('compacts 134217728 copies of "1 " followed by "1"', () => {
+    const count = 134217728;
+    const r = compactStage(`${'1 '.repeat(count)}1`);
+    const map = r.offsets;
+    // Each 1 points at its own index in the input.
+    let wrong = 0;
+    for (let k = 0; k <= count; k += 1) if (map?.[k] !== 2 * k) wrong += 1;
+    // Compared as a boolean: a failing toBe would print both strings.
+    expect({ same: r.compact === '1'.repeat(count + 1), removedCount: r.removedCount, mapLength: map?.length, wrong }).toEqual({
+      same: true,
+      removedCount: count,
+      mapLength: count + 1,
+      wrong: 0,
+    });
+  }, 60_000);
 });
 
 describe('Base64 / URL decode extraction', () => {
