@@ -1700,6 +1700,22 @@ require.extensions['.ts'] = (module, filename) => {
       });
     }, 60_000);
 
+    // The compact stage of the normalizer held one array entry for each
+    // whitespace run it removed and threw "Invalid array length" on this
+    // input, so the scan exited 2 with that message.
+    it('scans a stdin of 134217728 copies of "1 " followed by "1"', async () => {
+      const count = 134217728;
+      pipeRepeated(Buffer.alloc(0), Buffer.alloc(2 ** 20, '1 '), 2 * count + 1);
+      const cap = capture();
+      const code = await run(['scan', '--quiet']);
+      cap.restore();
+      expect({ code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({
+        code: 0,
+        out: 'CLEAN\n',
+        err: '',
+      });
+    }, 120_000);
+
     // The NFKC stage of the normalizer held two array entries for each of
     // these code points and threw "Invalid array length", so the scan exited 2
     // with that message. Past that stage, JSON.stringify of the Guard request
