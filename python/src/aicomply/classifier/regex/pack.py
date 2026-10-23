@@ -146,6 +146,9 @@ MAX_REPEAT_COUNT = 1000
 #: A counted repeat at a given position: ``{n}``, ``{n,}`` or ``{n,m}``.
 _COUNTED_REPEAT = re.compile(r"\{([0-9]+)(?:(,)([0-9]*))?\}")
 
+#: ``{,}`` or ``{,m}`` at a given position.
+_NO_LOWER_BOUND_FORM = re.compile(r"\{,([0-9]*)\}")
+
 
 def counted_repeat_problem(source: str) -> str | None:
     """Return why a counted repeat in ``source`` keeps it out of the pack, or None.
@@ -155,8 +158,10 @@ def counted_repeat_problem(source: str) -> str | None:
     The JavaScript regex engine keeps backtracking state for each character a
     counted repeat matches, so one with no upper bound can make it throw on a
     long enough run of the characters it repeats; both runtimes read one pack,
-    so this one refuses such a source too. An escaped brace, a brace in a
-    character class and ``{,m}`` open no counted repeat here.
+    so this one refuses such a source too. ``{,m}`` and ``{,}`` are refused as
+    well: Python reads them as counted repeats, ``{,}`` with no upper bound,
+    where JavaScript and RE2 read them as text. An escaped brace and a brace in
+    a character class open no counted repeat.
     """
     in_class = False
     i = 0
@@ -176,6 +181,14 @@ def counted_repeat_problem(source: str) -> str | None:
             i += 1
             continue
         if c == "{":
+            form = _NO_LOWER_BOUND_FORM.match(source, i)
+            if form is not None:
+                unbounded = " with no upper bound" if form.group(1) == "" else ""
+                return (
+                    f"the brace form {form.group(0)}, which Python reads as a counted repeat"
+                    f"{unbounded} and JavaScript and RE2 read as text; write {{0,m}} with m "
+                    f"at most {MAX_REPEAT_COUNT} for a repeat, or \\{{ for a brace"
+                )
             repeat = _COUNTED_REPEAT.match(source, i)
             if repeat is not None:
                 text = repeat.group(0)

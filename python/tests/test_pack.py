@@ -267,6 +267,28 @@ def test_compile_pack_refuses_a_count_above_1000_naming_the_pattern(source, repe
         compile_pack(_with_pattern("bearer-token", source=source))
 
 
+@pytest.mark.parametrize(
+    "source,problem",
+    [
+        (
+            r"Bearer\s+([A-Za-z0-9._~+/=-]{,})",
+            "the brace form {,}, which Python reads as a counted repeat with no upper bound "
+            "and JavaScript and RE2 read as text",
+        ),
+        (
+            r"Bearer\s+([A-Za-z0-9._~+/=-]{,1000})",
+            "the brace form {,1000}, which Python reads as a counted repeat "
+            "and JavaScript and RE2 read as text",
+        ),
+    ],
+    ids=["{,}", "{,1000}"],
+)
+def test_compile_pack_refuses_a_brace_form_the_runtimes_read_differently(source, problem):
+    message = f"aicomply pattern pack: pattern bearer-token: source has {problem}"
+    with pytest.raises(PackError, match=re.escape(message)):
+        compile_pack(_with_pattern("bearer-token", source=source))
+
+
 def test_compile_pack_refuses_a_counted_repeat_without_an_upper_bound_in_a_reference_form():
     doc = {**_DOC, "referenceForms": [{"id": "open", "source": r"^\$[A-Z_]{1,}$"}]}
     message = (

@@ -280,6 +280,23 @@ describe('every counted repeat in the pack has an upper bound', () => {
     );
   });
 
+  it.each([
+    [
+      '{,}',
+      'Bearer\\s+([A-Za-z0-9._~+/=-]{,})',
+      'the brace form {,}, which Python reads as a counted repeat with no upper bound and JavaScript and RE2 read as text',
+    ],
+    [
+      '{,1000}',
+      'Bearer\\s+([A-Za-z0-9._~+/=-]{,1000})',
+      'the brace form {,1000}, which Python reads as a counted repeat and JavaScript and RE2 read as text',
+    ],
+  ])('refuses the brace form %s, which Python reads as a repeat and JavaScript as text, naming the pattern', (_form, source, problem) => {
+    expect(() => compilePack(withPattern('bearer-token', { source }))).toThrow(
+      `aicomply pattern pack: pattern bearer-token: source has ${problem}`,
+    );
+  });
+
   it('refuses a counted repeat without an upper bound in a reference form', () => {
     const doc = { ...packDoc, referenceForms: [{ id: 'open', source: '^\\$[A-Z_]{1,}$' }] };
     expect(() => compilePack(Buffer.from(JSON.stringify(doc)))).toThrow(
