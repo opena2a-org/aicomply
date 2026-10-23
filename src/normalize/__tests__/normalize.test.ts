@@ -200,6 +200,59 @@ describe('Compact-form view (whitespace-injection defense)', () => {
       wrong: 0,
     });
   }, 60_000);
+
+  it('keeps the runs between removed whitespace in order across more runs than PIECES_PER_JOIN', () => {
+    // The numbers 0 to 2 * PIECES_PER_JOIN + 4, one to three spaces between each two.
+    let input = '0';
+    let expected = '0';
+    const map = [0];
+    for (let k = 1; k < 2 * PIECES_PER_JOIN + 5; k += 1) {
+      input += ' '.repeat(1 + (k % 3));
+      for (const digit of String(k)) {
+        map.push(input.length);
+        input += digit;
+      }
+      expected += String(k);
+    }
+    const r = buildCompactForm(input);
+    // Compared as booleans: a failing toEqual would print both texts.
+    expect({
+      same: r.compact === expected,
+      sameMap: r.offsetMap.length === map.length && r.offsetMap.every((from, k) => from === map[k]),
+      removedCount: r.removedCount,
+    }).toEqual({ same: true, sameMap: true, removedCount: input.length - expected.length });
+  });
+
+  // The stage held the pieces of its output in one array, one for each
+  // whitespace run it removed, and threw "Invalid array length" on this text.
+  it('removes the space between each two digits of 134217728 copies of "1 " followed by "1"', () => {
+    const count = 134217728;
+    const r = normalizeForScan('1 '.repeat(count) + '1');
+    const compact = r.decodedExtractions.find((ext) => ext.source === 'compact');
+    const map = compact?.offsetMap;
+    // Digit k of the compact view came from index 2k of the input.
+    let firstWrong = -1;
+    for (let k = 0; map !== undefined && k < map.length; k += 1) {
+      if (map[k] !== 2 * k) {
+        firstWrong = k;
+        break;
+      }
+    }
+    // Compared as a boolean: a failing toBe would print both strings.
+    expect({
+      steps: r.steps,
+      same: compact?.decoded === '1'.repeat(count + 1),
+      range: [compact?.originalStart, compact?.originalEnd],
+      mapLength: map?.length,
+      firstWrong,
+    }).toEqual({
+      steps: [{ transform: 'compact-whitespace', count }],
+      same: true,
+      range: [0, 2 * count + 1],
+      mapLength: count + 1,
+      firstWrong: -1,
+    });
+  }, 60_000);
 });
 
 describe('Base64 / URL decode extraction', () => {
