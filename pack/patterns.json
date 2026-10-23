@@ -97,7 +97,7 @@
     {
       "id": "anthropic-api-key",
       "class": "CREDENTIAL",
-      "source": "(sk-ant-api\\d{2}-[A-Za-z0-9_-]{20,})",
+      "source": "(sk-ant-api\\d{2}-[A-Za-z0-9_-]{20,1000})",
       "flags": "",
       "validator": "none",
       "context": {
@@ -111,7 +111,7 @@
     {
       "id": "openai-project-key",
       "class": "CREDENTIAL",
-      "source": "(sk-proj-[A-Za-z0-9_-]{20,})",
+      "source": "(sk-proj-[A-Za-z0-9_-]{20,1000})",
       "flags": "",
       "validator": "none",
       "context": {
@@ -125,7 +125,7 @@
     {
       "id": "openrouter-key",
       "class": "CREDENTIAL",
-      "source": "(sk-or-v1-[A-Za-z0-9]{48,})",
+      "source": "(sk-or-v1-[A-Za-z0-9]{48,1000})",
       "flags": "",
       "validator": "none",
       "context": {
@@ -139,7 +139,7 @@
     {
       "id": "openai-legacy-key",
       "class": "CREDENTIAL",
-      "source": "\\b(sk-[A-Za-z0-9]{48,})",
+      "source": "\\b(sk-[A-Za-z0-9]{48,1000})",
       "flags": "",
       "validator": "none",
       "context": {
@@ -181,7 +181,7 @@
     {
       "id": "bearer-token",
       "class": "CREDENTIAL",
-      "source": "Bearer\\s+([A-Za-z0-9._~+/=-]{20,})",
+      "source": "Bearer\\s+([A-Za-z0-9._~+/=-]{20,1000})",
       "flags": "",
       "validator": "none",
       "context": {
@@ -195,7 +195,7 @@
     {
       "id": "generic-key-assignment",
       "class": "CREDENTIAL",
-      "source": "(?:api[_-]?key|secret[_-]?key|access[_-]?token)\\s*[:=]\\s*['\"]?([A-Za-z0-9._~+/-]{16,}={0,2})['\"]?",
+      "source": "(?:api[_-]?key|secret[_-]?key|access[_-]?token)\\s*[:=]\\s*['\"]?([A-Za-z0-9._~+/-]{16,1000}={0,2})['\"]?",
       "flags": "i",
       "validator": "notEmptyAssignmentTarget",
       "context": {

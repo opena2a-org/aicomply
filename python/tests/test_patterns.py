@@ -8,7 +8,12 @@ import time
 import pytest
 
 from aicomply.classifier.regex import classify_with_regex, scan_patterns
-from aicomply.classifier.regex.patterns import PatternMatch, drop_overlapping_repeats, luhn_check
+from aicomply.classifier.regex.patterns import (
+    PATTERNS,
+    PatternMatch,
+    drop_overlapping_repeats,
+    luhn_check,
+)
 
 
 def _types(text: str) -> set[str]:
@@ -227,3 +232,42 @@ def test_scans_40000_findings_of_one_ssn_and_one_card_number_in_under_3_seconds_
     used = time.process_time() - before
     assert len(matches) == 40_000
     assert used < 3
+
+
+#: The upper bound of the token repeat of each pattern below.
+_BOUND = 1000
+#: Assembled at run time, so this file holds no key-shaped text.
+_S = "".join(["s", "k-"])
+_BOUNDED_PREFIXES = [
+    ("anthropic-api-key", f"{_S}ant-api03-"),
+    ("openai-project-key", f"{_S}proj-"),
+    ("openrouter-key", f"{_S}or-v1-"),
+    ("openai-legacy-key", _S),
+    ("bearer-token", "Bearer "),
+    ("generic-key-assignment", "api_key="),
+]
+
+
+def _first_match(pid: str, text: str) -> tuple[int, int] | None:
+    pattern = next(p for p in PATTERNS if p.id == pid)
+    m = pattern.regex.search(text)
+    return None if m is None else (m.start(), len(m.group(0)))
+
+
+@pytest.mark.parametrize("pid,prefix", _BOUNDED_PREFIXES, ids=[pid for pid, _ in _BOUNDED_PREFIXES])
+def test_a_token_of_the_bound_length_matches_whole(pid, prefix):
+    text = prefix + "a" * _BOUND
+    assert _first_match(pid, text) == (0, len(text))
+
+
+@pytest.mark.parametrize("pid,prefix", _BOUNDED_PREFIXES, ids=[pid for pid, _ in _BOUNDED_PREFIXES])
+def test_a_token_one_past_the_bound_matches_up_to_the_bound(pid, prefix):
+    text = prefix + "a" * (_BOUND + 1)
+    assert _first_match(pid, text) == (0, len(prefix) + _BOUND)
+
+
+@pytest.mark.parametrize("pid,prefix", _BOUNDED_PREFIXES, ids=[pid for pid, _ in _BOUNDED_PREFIXES])
+def test_a_token_far_past_the_bound_is_one_finding_up_to_the_bound(pid, prefix):
+    text = prefix + "a" * 2**23
+    found = [(m.type, m.start, m.end) for m in scan_patterns(text)]
+    assert found == [("CREDENTIAL", 0, len(prefix) + _BOUND)]

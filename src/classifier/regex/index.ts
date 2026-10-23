@@ -10,8 +10,44 @@
  * finding with its source view and best-effort original-content range.
  */
 
-import { scanPatterns, type PatternMatch } from './patterns';
+import { scanEachPattern, type PatternMatch } from './patterns';
 import type { ClassifierResult, Violation, ViolationView } from '../../types';
+
+/** The type of the finding for a pattern the regex engine could not run, before `:<pattern id>`. */
+export const PATTERN_NOT_EVALUATED = 'PATTERN_NOT_EVALUATED';
+
+/**
+ * The finding for pattern `id` when the regex engine could not run it on the
+ * content. Its type names the pattern, as POLICY_DENY names its rule; it is
+ * not a match, so it has no content view and no position.
+ */
+export function notEvaluatedFinding(id: string): Violation {
+  return {
+    type: `${PATTERN_NOT_EVALUATED}:${id}`,
+    value: id,
+    start: 0,
+    end: 0,
+    confidence: 1.0,
+    classifier: 'regex',
+  };
+}
+
+/**
+ * The regex classifier result for `violations`, the pattern matches, with a
+ * PATTERN_NOT_EVALUATED finding for each of `unevaluatedPatterns`: CLEAN only
+ * when nothing matched and every pattern ran.
+ */
+export function toRegexResult(violations: Violation[], unevaluatedPatterns: string[]): ClassifierResult {
+  if (unevaluatedPatterns.length === 0) {
+    return { classifier: 'regex', verdict: violations.length === 0 ? 'CLEAN' : 'VIOLATION', violations };
+  }
+  return {
+    classifier: 'regex',
+    verdict: 'VIOLATION',
+    violations: violations.concat(unevaluatedPatterns.map(notEvaluatedFinding)),
+    unevaluatedPatterns: [...unevaluatedPatterns],
+  };
+}
 
 export interface ScanViewOptions {
   /** Which content view this scan represents. Defaults to 'normalized'. */
@@ -34,7 +70,7 @@ export function classifyWithRegex(
   content: string,
   options?: ScanViewOptions,
 ): ClassifierResult {
-  const matches = scanPatterns(content);
+  const { matches, unevaluatedPatterns } = scanEachPattern(content);
   const view: ViolationView = options?.view ?? 'normalized';
 
   const violations: Violation[] = matches.map((m: PatternMatch) => {
@@ -65,11 +101,7 @@ export function classifyWithRegex(
     return violation;
   });
 
-  return {
-    classifier: 'regex',
-    verdict: violations.length === 0 ? 'CLEAN' : 'VIOLATION',
-    violations,
-  };
+  return toRegexResult(violations, unevaluatedPatterns);
 }
 
 /**

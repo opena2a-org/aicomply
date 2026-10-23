@@ -240,3 +240,59 @@ describe('compilePack refuses a pack that breaks the contract', () => {
     expect(() => compilePack(Buffer.from('{"schemaVersion":'))).toThrow(/not valid JSON/);
   });
 });
+
+describe('every counted repeat in the pack has an upper bound', () => {
+  it('leaves no counted repeat in the pack file without an upper bound', () => {
+    // The shape `grep -c '{[0-9]*,}' pack/patterns.json` counts.
+    expect(packBytes.toString('utf8').match(/\{[0-9]*,\}/g)).toBeNull();
+  });
+
+  // Each pattern whose token repeat carries the upper bound 1000, with that
+  // bound removed again.
+  const reopened: Array<[string, string]> = (packDoc.patterns as Entry[])
+    .filter((p) => /\{\d+,(1000)?\}/.test(p.source as string))
+    .map((p) => [p.id as string, (p.source as string).replace(/\{(\d+),1000\}/, '{$1,}')]);
+
+  it('bounds the token repeat of six credential patterns', () => {
+    expect(reopened.map(([id]) => id)).toEqual([
+      'anthropic-api-key',
+      'openai-project-key',
+      'openrouter-key',
+      'openai-legacy-key',
+      'bearer-token',
+      'generic-key-assignment',
+    ]);
+  });
+
+  it.each(reopened)('refuses pattern %s with its token repeat left open, naming the pattern', (id, source) => {
+    expect(() => compilePack(withPattern(id, { source }))).toThrow(
+      new RegExp(`^aicomply pattern pack: pattern ${id}: source has the counted repeat \\{\\d+,\\}, which has no upper bound`),
+    );
+  });
+
+  it.each([
+    ['an upper bound above 1000', 'Bearer\\s+([A-Za-z0-9._~+/=-]{20,1001})', '{20,1001}'],
+    ['a lower bound above 1000', 'Bearer\\s+([A-Za-z0-9._~+/=-]{1001,2000})', '{1001,2000}'],
+    ['an exact count above 1000', 'Bearer\\s+([A-Za-z0-9._~+/=-]{1001})', '{1001}'],
+  ])('refuses %s, naming the pattern', (_label, source, repeat) => {
+    expect(() => compilePack(withPattern('bearer-token', { source }))).toThrow(
+      `aicomply pattern pack: pattern bearer-token: source has the counted repeat ${repeat}, whose count is above 1000`,
+    );
+  });
+
+  it('refuses a counted repeat without an upper bound in a reference form', () => {
+    const doc = { ...packDoc, referenceForms: [{ id: 'open', source: '^\\$[A-Z_]{1,}$' }] };
+    expect(() => compilePack(Buffer.from(JSON.stringify(doc)))).toThrow(
+      'aicomply pattern pack: referenceForms[0]: source has the counted repeat {1,}, which has no upper bound',
+    );
+  });
+
+  it.each([
+    ['escaped braces', 'Bearer\\s+\\{20,\\}'],
+    ['braces in a character class', 'Bearer\\s+[{20,}]+'],
+    ['an upper bound of 1000', 'Bearer\\s+([A-Za-z0-9._~+/=-]{20,1000})'],
+  ])('accepts %s', (_label, source) => {
+    const compiled = compilePack(withPattern('bearer-token', { source }));
+    expect(compiled.patterns.find((p) => p.id === 'bearer-token')?.regex.source).toBe(new RegExp(source).source);
+  });
+});
