@@ -26,6 +26,7 @@
  */
 
 import { OffsetMapBuilder, offsetMapToArray, type OffsetMap } from './offset-map';
+import { TextBuilder } from './text-builder';
 
 const ASCII_WHITESPACE: ReadonlySet<number> = new Set([
   0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20,
@@ -80,7 +81,7 @@ export function buildCompactForm(input: string): CompactFormResult {
  * goes to the output as one slice of the input.
  */
 export function compactStage(input: string): CompactStage {
-  const parts: string[] = [];
+  const compact = new TextBuilder();
   const offsets = new OffsetMapBuilder(input.length);
   let removed = 0;
   // input[copied, i) is a run that goes to the output as it is.
@@ -98,7 +99,7 @@ export function compactStage(input: string): CompactStage {
     const stripRun = i > 0 && end < input.length
       && isTokenChar(input.charCodeAt(i - 1)) && isTokenChar(input.charCodeAt(end));
     if (stripRun) {
-      parts.push(input.slice(copied, i));
+      compact.append(input.slice(copied, i));
       offsets.copy(copied, i - copied);
       removed += end - i;
       copied = end;
@@ -107,6 +108,6 @@ export function compactStage(input: string): CompactStage {
   }
   offsets.copy(copied, input.length - copied);
   if (removed === 0) return { compact: input, offsets: offsets.finish(), removedCount: 0 };
-  parts.push(input.slice(copied));
-  return { compact: parts.join(''), offsets: offsets.finish(), removedCount: removed };
+  compact.append(input.slice(copied));
+  return { compact: compact.finish(), offsets: offsets.finish(), removedCount: removed };
 }

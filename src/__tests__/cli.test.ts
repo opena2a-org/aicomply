@@ -1208,6 +1208,20 @@ describe('aicomply CLI', () => {
       expect(locate(text, text.indexOf('078-05-1120'))).toEqual({ line: 1, column: 8 });
     });
 
+    // The locator held the index of each surrogate pair in one array and threw
+    // "Invalid array length" on this text.
+    it('locate: 134217729 characters outside the BMP before the match are one column each', () => {
+      const count = 134217729;
+      const text = `${emoji.repeat(count)} SSN 078-05-1120`;
+      try {
+        expect(locate(text, 2 * count + 5)).toEqual({ line: 1, column: count + 6 });
+      } finally {
+        // The locator keeps the offsets of the last content it was given until
+        // it is given another.
+        locate('', 0);
+      }
+    }, 60_000);
+
     it('prints the column in code points when a character outside the BMP precedes the match', async () => {
       const f = fixture('located-emoji.txt', `${emoji}${emoji} SSN 078-05-1120\n`);
       const capJson = capture();
@@ -1703,6 +1717,76 @@ require.extensions['.ts'] = (module, filename) => {
         stdout: child.stdout.toString(),
         stderr: child.stderr.toString(),
       }).toEqual({ status: 0, stdout: 'CLEAN\n', stderr: '' });
+    }, 120_000);
+
+    /**
+     * `aicomply scan --json` of `input` on stdin, in a child process: its exit
+     * code and stderr, and the verdict and findings of the report.
+     */
+    function scanStdinJson(input: Buffer) {
+      const child = spawnSync(process.execPath, ['-r', hook, CLI, 'scan', '--json'], {
+        env: ENV,
+        input,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const stdout = child.stdout.toString();
+      const report = stdout === '' ? undefined : JSON.parse(stdout)[0];
+      return {
+        status: child.status,
+        stderr: child.stderr.toString(),
+        verdict: report?.verdict,
+        findings: report?.findings.map((f: { type: string; view: string; line: number; column: number }) => ({
+          type: f.type,
+          view: f.view,
+          line: f.line,
+          column: f.column,
+        })),
+      };
+    }
+
+    // The zero-width stage of the normalizer held one array entry for each
+    // character it strips and threw "Invalid array length", so the scan exited
+    // 2 with that message. On Node 26.12 an array holds at most 134217728
+    // entries.
+    it('scans a stdin of 134217729 copies of U+200B followed by an SSN', () => {
+      const count = 134217729;
+      const input = Buffer.concat([
+        Buffer.alloc(3 * count, Buffer.from('\u{200B}', 'utf8')),
+        Buffer.from('Customer SSN 078-05-1120 on file\n'),
+      ]);
+      expect(scanStdinJson(input)).toEqual({
+        status: 1,
+        stderr: '',
+        verdict: 'VIOLATION',
+        findings: [{ type: 'SSN', view: 'normalized', line: 1, column: count + 14 }],
+      });
+    }, 120_000);
+
+    // The compact stage held one array entry for each whitespace run it
+    // strips, and the scan exited 2 with the same message.
+    it('scans a stdin of 134217728 copies of "1 " followed by an SSN spaced out', () => {
+      const count = 134217728;
+      const input = Buffer.concat([Buffer.alloc(2 * count, '1 '), Buffer.from('1 SSN 078 - 05 - 1120\n')]);
+      expect(scanStdinJson(input)).toEqual({
+        status: 1,
+        stderr: '',
+        verdict: 'VIOLATION',
+        // Found in the view with the spaces between digits and dashes removed.
+        findings: [{ type: 'SSN', view: 'compact', line: 1, column: 2 * count + 7 }],
+      });
+    }, 120_000);
+
+    // The finding locator held the index of each newline in one array, and the
+    // scan exited 2 with the same message.
+    it('scans a stdin of 134217729 newlines followed by an SSN', () => {
+      const count = 134217729;
+      const input = Buffer.concat([Buffer.alloc(count, '\n'), Buffer.from('Customer SSN 078-05-1120 on file\n')]);
+      expect(scanStdinJson(input)).toEqual({
+        status: 1,
+        stderr: '',
+        verdict: 'VIOLATION',
+        findings: [{ type: 'SSN', view: 'normalized', line: count + 1, column: 14 }],
+      });
     }, 120_000);
   });
 });

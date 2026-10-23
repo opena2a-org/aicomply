@@ -21,6 +21,7 @@
  */
 
 import { OffsetMapBuilder, offsetMapToArray, type OffsetMap } from './offset-map';
+import { TextBuilder } from './text-builder';
 
 const STRIP_CODE_POINTS: ReadonlySet<number> = new Set([
   0x200b, 0x200c, 0x200d, 0x200e, 0x200f,
@@ -57,7 +58,7 @@ export function stripZeroWidth(input: string): ZeroWidthStripResult {
  * characters goes to the output as one slice of the input.
  */
 export function zeroWidthStage(input: string): ZeroWidthStage {
-  const parts: string[] = [];
+  const output = new TextBuilder();
   const offsets = new OffsetMapBuilder(input.length);
   let removed = 0;
   // input[copied, i) is a run that goes to the output as it is.
@@ -65,13 +66,13 @@ export function zeroWidthStage(input: string): ZeroWidthStage {
   for (let i = 0; i < input.length; i += 1) {
     const unit = input.charCodeAt(i);
     if (unit < 0x200b || !STRIP_CODE_POINTS.has(unit)) continue;
-    parts.push(input.slice(copied, i));
+    output.append(input.slice(copied, i));
     offsets.copy(copied, i - copied);
     removed += 1;
     copied = i + 1;
   }
   offsets.copy(copied, input.length - copied);
   if (removed === 0) return { output: input, offsets: offsets.finish(), removedCount: 0 };
-  parts.push(input.slice(copied));
-  return { output: parts.join(''), offsets: offsets.finish(), removedCount: removed };
+  output.append(input.slice(copied));
+  return { output: output.finish(), offsets: offsets.finish(), removedCount: removed };
 }

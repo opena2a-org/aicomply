@@ -452,9 +452,35 @@ export interface FindingLocation {
 
 interface ContentOffsets {
   content: string;
-  newlines: number[];
+  newlines: Uint32Array;
   /** Index of the high surrogate of each surrogate pair. */
-  surrogatePairs: number[];
+  surrogatePairs: Uint32Array;
+}
+
+/**
+ * Offsets into a content, in the order they are added, held in a Uint32Array
+ * that doubles in length when it is full. On Node 26.12 an array holds at most
+ * 134217728 entries (see normalize/text-builder.ts), and a content can hold
+ * more newlines or surrogate pairs than that.
+ */
+class OffsetList {
+  private offsets = new Uint32Array(1024);
+  private length = 0;
+
+  add(offset: number): void {
+    if (this.length === this.offsets.length) {
+      const grown = new Uint32Array(2 * this.length);
+      grown.set(this.offsets);
+      this.offsets = grown;
+    }
+    this.offsets[this.length] = offset;
+    this.length += 1;
+  }
+
+  /** The offsets added, in the order they were added. */
+  finish(): Uint32Array {
+    return this.offsets.subarray(0, this.length);
+  }
 }
 
 // The renderers locate every finding of one input in turn, so the newline and
@@ -464,25 +490,25 @@ let offsetCache: ContentOffsets | undefined;
 
 function contentOffsets(content: string): ContentOffsets {
   if (offsetCache === undefined || offsetCache.content !== content) {
-    const newlines: number[] = [];
+    const newlines = new OffsetList();
     for (let i = content.indexOf('\n'); i !== -1; i = content.indexOf('\n', i + 1)) {
-      newlines.push(i);
+      newlines.add(i);
     }
     // A character outside the Basic Multilingual Plane, such as an emoji, is
     // one code point held in two UTF-16 code units: a high surrogate followed
     // by a low one.
-    const surrogatePairs: number[] = [];
+    const surrogatePairs = new OffsetList();
     const pair = /[\uD800-\uDBFF][\uDC00-\uDFFF]/g;
     for (let m = pair.exec(content); m !== null; m = pair.exec(content)) {
-      surrogatePairs.push(m.index);
+      surrogatePairs.add(m.index);
     }
-    offsetCache = { content, newlines, surrogatePairs };
+    offsetCache = { content, newlines: newlines.finish(), surrogatePairs: surrogatePairs.finish() };
   }
   return offsetCache;
 }
 
 /** How many of the ascending `offsets` are below `limit`. */
-function countBelow(offsets: number[], limit: number): number {
+function countBelow(offsets: Uint32Array, limit: number): number {
   let lo = 0;
   let hi = offsets.length;
   while (lo < hi) {
