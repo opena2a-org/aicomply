@@ -1,0 +1,74 @@
+{
+  "notEvaluatedLines": [
+    {
+      "ids": ["bearer-token"],
+      "lines": ["    not evaluated: bearer-token"]
+    },
+    {
+      "ids": ["bearer-token", "iban"],
+      "lines": ["    not evaluated: bearer-token, iban"]
+    },
+    {
+      "ids": [
+        "ssn",
+        "pan",
+        "cui-marking",
+        "aws-access-key-id",
+        "aws-secret-access-key",
+        "anthropic-api-key",
+        "openai-project-key",
+        "openrouter-key",
+        "openai-legacy-key",
+        "github-pat-classic",
+        "github-pat-fine-grained",
+        "bearer-token",
+        "generic-key-assignment",
+        "iban",
+        "passport",
+        "mrn",
+        "npi"
+      ],
+      "lines": [
+        "    not evaluated: ssn, pan, cui-marking, aws-access-key-id,",
+        "                   aws-secret-access-key, anthropic-api-key, openai-project-key,",
+        "                   openrouter-key, openai-legacy-key, github-pat-classic,",
+        "                   github-pat-fine-grained, bearer-token,",
+        "                   generic-key-assignment, iban, passport, mrn, npi"
+      ]
+    }
+  ],
+  "incompleteTrailers": [
+    { "patterns": 1, "trailer": "1 pattern not evaluated" },
+    { "patterns": 2, "trailer": "2 patterns not evaluated" }
+  ],
+  "flaggedTrailers": [
+    { "findings": 1, "patterns": 1, "trailer": "1 finding, 1 pattern not evaluated" },
+    { "findings": 2, "patterns": 1, "trailer": "2 findings, 1 pattern not evaluated" }
+  ],
+  "incompleteVerdictLines": [
+    {
+      "notEvaluatedInputs": 1,
+      "line": "Verdict: INCOMPLETE  ·  no findings, but 1 input was not evaluated in full. Check this content for the patterns named above before it reaches an LLM."
+    },
+    {
+      "notEvaluatedInputs": 2,
+      "line": "Verdict: INCOMPLETE  ·  no findings, but 2 inputs were not evaluated in full. Check this content for the patterns named above before it reaches an LLM."
+    }
+  ],
+  "flaggedVerdictLines": [
+    {
+      "verdict": "VIOLATION",
+      "findings": 1,
+      "inputs": 3,
+      "notEvaluatedInputs": 1,
+      "line": "Verdict: VIOLATION  ·  1 finding across 3 inputs; 1 input not evaluated in full. Block, redact, or log before this content reaches an LLM."
+    },
+    {
+      "verdict": "VIOLATION",
+      "findings": 1,
+      "inputs": 3,
+      "notEvaluatedInputs": 2,
+      "line": "Verdict: VIOLATION  ·  1 finding across 3 inputs; 2 inputs not evaluated in full. Block, redact, or log before this content reaches an LLM."
+    }
+  ]
+}

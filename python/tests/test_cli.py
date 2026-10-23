@@ -22,7 +22,17 @@ import aicomply
 from aicomply.classifier.regex import classify_with_regex
 from aicomply.classifier.regex.pack import PATTERN_TYPES
 from aicomply.classifier.regex.patterns import PATTERNS
-from aicomply.cli import _files_glob, _locate, _render_human, _render_json, _Source, main, run
+from aicomply.cli import (
+    _files_glob,
+    _locate,
+    _not_evaluated_lines,
+    _render_human,
+    _render_json,
+    _Source,
+    _verdict_line,
+    main,
+    run,
+)
 from aicomply.types import ClassifierResult, ComplyResult, Violation
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -849,6 +859,85 @@ def test_a_pattern_error_ends_the_run_with_exit_2_and_no_verdict(
             "",
             "aicomply: maximum recursion depth exceeded\n",
         )
+
+
+# The report's words for an input not evaluated in full, from the golden file
+# the TS CLI's tests read too. The scan of this port ends the run on a pattern
+# error (above), so its report has no such input to print; the two helpers that
+# give these lines are held to the TS report's words here.
+_NOT_EVALUATED_GOLDEN = json.loads(
+    (_REPO_ROOT / "src" / "__tests__" / "fixtures" / "not-evaluated-lines.json").read_text(
+        encoding="utf-8"
+    )
+)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    _NOT_EVALUATED_GOLDEN["notEvaluatedLines"],
+    ids=lambda entry: f"{len(entry['ids'])}-ids",
+)
+def test_the_lines_naming_the_patterns_not_evaluated_are_the_golden_lines(entry):
+    lines = _not_evaluated_lines(entry["ids"])
+    assert lines == entry["lines"]
+    assert all(len(line) <= 80 for line in lines)
+
+
+def test_the_golden_lines_for_every_pattern_name_the_pack_in_pack_order():
+    entry = _NOT_EVALUATED_GOLDEN["notEvaluatedLines"][-1]
+    assert entry["ids"] == [p.id for p in PATTERNS]
+    assert len(entry["lines"]) == 5
+
+
+def test_an_input_every_pattern_ran_on_has_no_line_naming_patterns():
+    assert _not_evaluated_lines([]) == []
+
+
+@pytest.mark.parametrize(
+    "entry",
+    _NOT_EVALUATED_GOLDEN["incompleteVerdictLines"],
+    ids=lambda entry: f"{entry['notEvaluatedInputs']}-not-evaluated",
+)
+def test_the_incomplete_verdict_line_is_the_golden_line(entry):
+    m = entry["notEvaluatedInputs"]
+    # The line counts the inputs not evaluated in full, not the inputs.
+    for inputs in (m, m + 2):
+        assert _verdict_line("INCOMPLETE", 0, inputs, m) == entry["line"]
+
+
+@pytest.mark.parametrize(
+    "entry",
+    _NOT_EVALUATED_GOLDEN["flaggedVerdictLines"],
+    ids=lambda entry: f"{entry['verdict']}-{entry['notEvaluatedInputs']}-not-evaluated",
+)
+def test_a_flagged_verdict_line_counts_the_inputs_not_evaluated_in_full(entry):
+    line = _verdict_line(
+        entry["verdict"], entry["findings"], entry["inputs"], entry["notEvaluatedInputs"]
+    )
+    assert line == entry["line"]
+
+
+# With every pattern evaluated, the line is the one the report prints.
+@pytest.mark.parametrize(
+    ("content", "worst", "findings"),
+    [
+        ("nothing sensitive in this line\n", "CLEAN", 0),
+        ("Customer SSN 078-05-1120 on file\nMRN: A1234567\n", "VIOLATION", 2),
+    ],
+    ids=["clean", "violation"],
+)
+def test_the_verdict_line_with_every_pattern_evaluated_is_the_reports_last_line(
+    tmp_path, capsys, content, worst, findings
+):
+    empty = tmp_path / "empty.txt"
+    empty.write_text("")
+    scanned = tmp_path / "scanned.txt"
+    scanned.write_text(content)
+    other = tmp_path / "other.txt"
+    other.write_text("nothing sensitive here either\n")
+    assert run(["scan", str(empty), str(scanned), str(other)]) == (0 if worst == "CLEAN" else 1)
+    last = capsys.readouterr().out.rstrip("\n").splitlines()[-1]
+    assert last == _verdict_line(worst, findings, 3, 0)
 
 
 def test_missing_file_exit_2(capsys):

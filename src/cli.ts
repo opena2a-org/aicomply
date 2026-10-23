@@ -86,6 +86,15 @@ const OPTION_NAMES = new Set(['--json', '--quiet', '-q', '--help', '-h', '--vers
  */
 const MAX_FINDING_LINES = 50;
 
+/** The start of the first line that names the patterns not evaluated on an input. */
+const NOT_EVALUATED_LABEL = '    not evaluated: ';
+
+/**
+ * The lines that name the patterns not evaluated on an input are at most this
+ * many columns wide, unless one id alone is wider: they break only between ids.
+ */
+const NAMES_LINE_WIDTH = 80;
+
 const HELP = `aicomply -- inline content classifier for AI agent I/O
 
 Detects SSNs, card and bank account numbers, passport and medical record
@@ -636,6 +645,41 @@ function notListedLine(rest: LocatedFinding[]): string {
   return `... ${rest.length} more (${counts}); use --json for all`;
 }
 
+/**
+ * The findings of a result that the report lists and counts: its violations
+ * but the PATTERN_NOT_EVALUATED entries, as the lines under the input's row
+ * name those patterns instead.
+ */
+function reportedFindings(res: ComplyResult): Violation[] {
+  return res.violations.filter((v) => !v.type.startsWith(`${PATTERN_NOT_EVALUATED}:`));
+}
+
+/**
+ * The lines under an input's row that name the patterns the regex engine
+ * could not run on it, in the order given, joined by ", ". A line breaks only
+ * between ids, before an id that would take it past NAMES_LINE_WIDTH columns,
+ * and the next line starts at the column of the first id; every line but the
+ * last ends with the comma. Every id is named. None when `ids` is empty.
+ */
+function notEvaluatedLines(ids: readonly string[]): string[] {
+  const indent = ' '.repeat(NOT_EVALUATED_LABEL.length);
+  const lines: string[] = [];
+  let line = '';
+  ids.forEach((id, i) => {
+    const name = i === ids.length - 1 ? id : `${id},`;
+    if (line === '') {
+      line = NOT_EVALUATED_LABEL + name;
+    } else if (line.length + 1 + name.length > NAMES_LINE_WIDTH) {
+      lines.push(line);
+      line = indent + name;
+    } else {
+      line += ` ${name}`;
+    }
+  });
+  if (line !== '') lines.push(line);
+  return lines;
+}
+
 export function renderHuman(sources: Source[], results: ComplyResult[]): void {
   const out = process.stdout;
   let anyGuard = false;
@@ -644,12 +688,18 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
   const verdicts = sources.map((src, i) => (src.bytes === 0 ? undefined : inputVerdict(results[i])));
   const scanned = verdicts.filter((v): v is InputVerdict => v !== undefined);
   const worst = worstVerdict(scanned);
+  // The inputs that were scanned with a pattern the regex engine could not run.
+  const notEvaluatedInputs = verdicts.filter(
+    (v, i) => v !== undefined && (results[i].unevaluatedPatterns ?? []).length > 0,
+  ).length;
 
   // The findings of each flagged input in input order; an empty, CLEAN or
-  // INCOMPLETE input lists none. Each input lists its first MAX_FINDING_LINES.
+  // INCOMPLETE input lists none. A pattern that was not evaluated is not a
+  // finding: it is named under the input's row, never listed or counted here.
+  // Each input lists its first MAX_FINDING_LINES.
   const ordered = sources.map((src, i) =>
     verdicts[i] === 'VIOLATION' || verdicts[i] === 'DENY'
-      ? inInputOrder(src.content, results[i].violations)
+      ? inInputOrder(src.content, reportedFindings(results[i]))
       : [],
   );
 
@@ -682,14 +732,19 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
       out.write(`   no finding in the ${PATTERN_TYPES.length} pattern classes (aicomply --help lists them)\n\n`);
       continue;
     }
-    if (verdict === 'INCOMPLETE') {
-      // The patterns that did not run are named below; they are not findings.
-      out.write('   no finding from the patterns that ran\n');
-    } else {
-      totalFindings += res.violations.length;
-      out.write(`   ${res.violations.length} finding${res.violations.length === 1 ? '' : 's'}\n`);
-    }
     const findings = ordered[i];
+    const unevaluated = res.unevaluatedPatterns ?? [];
+    // The patterns that did not run are counted apart and named below the
+    // findings; they are not findings.
+    const k = unevaluated.length;
+    const notRun = `${k} pattern${k === 1 ? '' : 's'} not evaluated`;
+    if (verdict === 'INCOMPLETE') {
+      out.write(`   ${notRun}\n`);
+    } else {
+      const n = findings.length;
+      totalFindings += n;
+      out.write(`   ${n} finding${n === 1 ? '' : 's'}${k === 0 ? '' : `, ${notRun}`}\n`);
+    }
     for (const { v, loc } of findings.slice(0, MAX_FINDING_LINES)) {
       const layer = v.classifier;
       const view = v.view && v.view !== 'normalized' ? `  view ${v.view}` : '';
@@ -701,13 +756,7 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
     if (findings.length > MAX_FINDING_LINES) {
       out.write(`    ${notListedLine(findings.slice(MAX_FINDING_LINES))}\n`);
     }
-    const unevaluated = res.unevaluatedPatterns ?? [];
-    if (unevaluated.length > 0) {
-      out.write(
-        `    not evaluated: ${unevaluated.join(', ')}; the regex engine could not run ` +
-          `${unevaluated.length === 1 ? 'this pattern' : 'these patterns'} on the input, so the input is not reported CLEAN\n`,
-      );
-    }
+    for (const line of notEvaluatedLines(unevaluated)) out.write(`${line}\n`);
     out.write('\n');
   }
 
@@ -739,14 +788,16 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
     // states what was checked and makes no claim about the content.
     out.write('Verdict: CLEAN  ·  no findings from the layers that ran.\n');
   } else if (worst === 'INCOMPLETE') {
-    const n = scanned.filter((v) => v === 'INCOMPLETE').length;
+    const m = notEvaluatedInputs;
     out.write(
-      `Verdict: INCOMPLETE  ·  no findings, but ${n} input${n === 1 ? ' was' : 's were'} not evaluated in full, ` +
-        'so the scan reached no verdict.\n',
+      `Verdict: INCOMPLETE  ·  no findings, but ${m} input${m === 1 ? ' was' : 's were'} not evaluated in full. ` +
+        'Check this content for the patterns named above before it reaches an LLM.\n',
     );
   } else {
+    const m = notEvaluatedInputs;
+    const notEvaluated = m === 0 ? '' : `; ${m} input${m === 1 ? '' : 's'} not evaluated in full`;
     out.write(
-      `Verdict: ${worst}  ·  ${totalFindings} finding${totalFindings === 1 ? '' : 's'} across ${sources.length} input${sources.length === 1 ? '' : 's'}. ` +
+      `Verdict: ${worst}  ·  ${totalFindings} finding${totalFindings === 1 ? '' : 's'} across ${sources.length} input${sources.length === 1 ? '' : 's'}${notEvaluated}. ` +
         'Block, redact, or log before this content reaches an LLM.\n',
     );
   }
