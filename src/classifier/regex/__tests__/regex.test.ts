@@ -628,6 +628,44 @@ describe('a token repeat stops at its upper bound', () => {
   });
 });
 
+describe('the checks on a captured value judge the match, which ends at the bound', () => {
+  const BOUND = 1000;
+  // Assembled at run time, so this file holds no key-shaped text.
+  const s = ['s', 'k-'].join('');
+  const reference = 'process.env.';
+  const types = (text: string): string[] => scanPatterns(text).map((m) => m.type);
+
+  it('suppresses a Bearer or api_key= value whose captured first 1000 characters are a reference form', () => {
+    // process.env. and 988 A are 1000 characters; the 112 A and the tail past them are not captured.
+    const name = 'A'.repeat(1100);
+    expect(scanPatterns(`api_key=${reference}${name}.tail`)).toEqual([]);
+    expect(scanPatterns(`Authorization: Bearer ${reference}${name}-tail`)).toEqual([]);
+  });
+
+  it('reports the same lines when the run ends inside the bound, so the tail is captured', () => {
+    const name = 'A'.repeat(900);
+    expect(types(`api_key=${reference}${name}.tail`)).toEqual(['CREDENTIAL']);
+    expect(types(`Authorization: Bearer ${reference}${name}-tail`)).toEqual(['CREDENTIAL']);
+  });
+
+  it('runs the api_key= validator on the captured value, which carries no = past the bound', () => {
+    const found = scanPatterns(`api_key=${'A'.repeat(1500)}=`);
+    expect(found.map((m) => [m.type, m.value])).toEqual([['CREDENTIAL', 'A'.repeat(BOUND)]]);
+    // Inside the bound, or directly after it, the = is captured and the value is an empty assignment's next key.
+    expect(scanPatterns(`api_key=${'A'.repeat(900)}=`)).toEqual([]);
+    expect(scanPatterns(`api_key=${'A'.repeat(BOUND)}=`)).toEqual([]);
+  });
+
+  it('keeps both findings of a key two patterns capture to different 1000th characters', () => {
+    const found = scanPatterns(`Authorization: Bearer ${s}proj-${'a'.repeat(1500)}`);
+    expect(found.map((m) => [m.type, m.value.length])).toEqual([
+      ['CREDENTIAL', BOUND + 8],
+      ['CREDENTIAL', BOUND],
+    ]);
+    expect(types(`Authorization: Bearer ${s}proj-${'a'.repeat(900)}`)).toEqual(['CREDENTIAL']);
+  });
+});
+
 describe('a pattern the regex engine cannot run on the content', () => {
   afterEach(() => jest.restoreAllMocks());
 
