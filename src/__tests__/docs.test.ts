@@ -9,7 +9,8 @@
  * The tracked Markdown also points readers only at a change record the
  * repository has: a CHANGELOG mention needs a tracked CHANGELOG file.
  * The 2.3.0 release notes lead with the exit-code change, repeat the README's
- * staged-diff gate line, and end with the known issues, whose fleet entry
+ * staged-diff gate line (neither shows a gate that tests the exit code for 1
+ * alone), and end with the known issues, whose fleet entry
  * names the package that is not listed as the one without a fleet signal and
  * does not say the threshold does not apply against the production Registry.
  * Their list of the policy packs 2.3.0 rejects holds the message comply()
@@ -331,9 +332,19 @@ describe('2.3.0 release notes', () => {
 
   it('show the staged-diff gate exactly as the README does', () => {
     const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
-    const gate = readme.split('\n').find((line) => line.startsWith('git diff --cached |'));
+    const gate = readme.split('\n').find((line) => line.startsWith('git diff --cached'));
     expect(gate).toBeDefined();
     expect(notes().split('\n')).toContain(gate);
+  });
+
+  // A gate that tests the scan's exit code for 1 alone passes when the scan
+  // reached no verdict, and run as a /bin/sh hook its own exit status is 0
+  // when the change is flagged.
+  it('show no gate that tests the exit code for 1 alone, nor does the README', () => {
+    const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+    for (const text of [readme, notes()]) {
+      expect(text).not.toMatch(/\$\?\s*-eq\s*1\b/);
+    }
   });
 
   it('end with the known issues, naming the supply-chain lookup defect', () => {

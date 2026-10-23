@@ -2042,4 +2042,89 @@ require.extensions['.ts'] = (module, filename) => {
       ]);
     }, 60_000);
   });
+
+  // The README's line for a git hook or a CI step that scans the staged
+  // changes, run as written in a scratch git repository: as an executable
+  // /bin/sh script, the form a hook takes and whose exit status git reads,
+  // and under `bash --noprofile --norc -eo pipefail -c`, the shell a GitHub
+  // Actions step runs. `npx @opena2a/aicomply` runs this tree's CLI. The line
+  // passes on 0 only: 0 when nothing is staged or the staged change is CLEAN,
+  // 1 when it is flagged.
+  describe('the README staged-diff gate line', () => {
+    const posixIt = process.platform === 'win32' ? it.skip : it;
+    const GATE = readFileSync(join(__dirname, '..', '..', 'README.md'), 'utf8')
+      .split('\n')
+      .find((line) => line.startsWith('git diff --cached'));
+    let gitEnv: NodeJS.ProcessEnv;
+    let script: string;
+
+    beforeAll(() => {
+      const hook = fixture('gate-transpile-hook.js', HOOK);
+      const bin = join(dir, 'gate-bin');
+      mkdirSync(bin);
+      const quoted = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+      // Stands in for npx: runs this tree's CLI for @opena2a/aicomply, and
+      // nothing else.
+      writeFileSync(
+        join(bin, 'npx'),
+        '#!/bin/sh\n' +
+          '[ "$1" = "@opena2a/aicomply" ] || { echo "npx stand-in: $1 is not @opena2a/aicomply" >&2; exit 127; }\n' +
+          'shift\n' +
+          `exec ${quoted(process.execPath)} -r ${quoted(hook)} ${quoted(CLI)} "$@"\n`,
+      );
+      chmodSync(join(bin, 'npx'), 0o755);
+      // git reads no global or system configuration, so a setting of the
+      // machine the test runs on does not change what the diff prints.
+      gitEnv = { ...ENV, PATH: `${bin}:${process.env.PATH}`, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1' };
+      script = join(dir, 'gate.sh');
+      writeFileSync(script, `#!/bin/sh\n${GATE}\n`);
+      chmodSync(script, 0o755);
+    });
+
+    /** A scratch git repository; `staged`, when given, is staged as notes.txt. */
+    function repository(name: string, staged?: string): string {
+      const repo = join(dir, name);
+      mkdirSync(repo);
+      const git = (args: string[]) => execFileSync('git', args, { cwd: repo, env: gitEnv, stdio: 'pipe' });
+      git(['init', '-q']);
+      if (staged !== undefined) {
+        writeFileSync(join(repo, 'notes.txt'), staged);
+        git(['add', 'notes.txt']);
+      }
+      return repo;
+    }
+
+    /** The exit status, stdout and stderr of the line in `repo`, in each shell form. */
+    function gate(repo: string): Record<'sh' | 'bash', [number | null, string, string]> {
+      const sh = spawnSync(script, [], { cwd: repo, env: gitEnv, encoding: 'utf8' });
+      const bash = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', String(GATE)], {
+        cwd: repo,
+        env: gitEnv,
+        encoding: 'utf8',
+      });
+      return { sh: [sh.status, sh.stdout, sh.stderr], bash: [bash.status, bash.stdout, bash.stderr] };
+    }
+
+    it('is the line that skips the scan when nothing is staged and exits with its code otherwise', () => {
+      expect(GATE).toBe('git diff --cached --quiet || git diff --cached | npx @opena2a/aicomply scan -q');
+    });
+
+    posixIt('exits 0 without scanning when nothing is staged', () => {
+      expect(gate(repository('gate-nothing-staged'))).toEqual({ sh: [0, '', ''], bash: [0, '', ''] });
+    }, 60_000);
+
+    posixIt('exits 0 when the staged change is CLEAN', () => {
+      expect(gate(repository('gate-clean', 'nothing sensitive in this line\n'))).toEqual({
+        sh: [0, 'CLEAN\n', ''],
+        bash: [0, 'CLEAN\n', ''],
+      });
+    }, 60_000);
+
+    posixIt('exits 1 when the staged change is flagged', () => {
+      expect(gate(repository('gate-flagged', 'Customer SSN 078-05-1120 on file\n'))).toEqual({
+        sh: [1, 'VIOLATION\n', ''],
+        bash: [1, 'VIOLATION\n', ''],
+      });
+    }, 60_000);
+  });
 });
