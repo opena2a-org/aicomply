@@ -27,6 +27,7 @@ import shlex
 import stat
 import sys
 from bisect import bisect_left
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -83,6 +84,13 @@ _OPTION_NAMES = frozenset({"--json", "--quiet", "-q", "--help", "-h", "--version
 # The report lists at most this many findings of an input, then one line that
 # counts the rest by type; --json lists every finding.
 _MAX_FINDING_LINES = 50
+
+# The start of the first line that names the patterns not evaluated on an input.
+_NOT_EVALUATED_LABEL = "    not evaluated: "
+
+# The lines that name the patterns not evaluated on an input are at most this
+# many columns wide, unless one id alone is wider: they break only between ids.
+_NAMES_LINE_WIDTH = 80
 
 
 HELP = """aicomply -- inline content classifier for AI agent I/O
@@ -462,6 +470,64 @@ def _not_listed_line(rest: list[tuple[Violation, tuple[int, int] | None]]) -> st
         f"{t} {n}" for t, n in sorted(by_type.items(), key=lambda item: -item[1])
     )
     return f"... {len(rest)} more ({counts}); use --json for all"
+
+
+# The two helpers below give the report's lines for an input on which the regex
+# engine could not run a pattern, in the TS CLI's words. The scan of this port
+# ends the run on such an error, so _render_human has no such input to print.
+
+
+def _not_evaluated_lines(ids: Sequence[str]) -> list[str]:
+    """The lines under an input's row that name the patterns the regex engine
+    could not run on it, in the order given, joined by ", ", as in the TS CLI.
+    A line breaks only between ids, before an id that would take it past
+    _NAMES_LINE_WIDTH columns, and the next line starts at the column of the
+    first id; every line but the last ends with the comma. Every id is named.
+    None when ``ids`` is empty.
+    """
+    indent = " " * len(_NOT_EVALUATED_LABEL)
+    lines: list[str] = []
+    line = ""
+    for i, pattern_id in enumerate(ids):
+        name = pattern_id if i == len(ids) - 1 else f"{pattern_id},"
+        if not line:
+            line = _NOT_EVALUATED_LABEL + name
+        elif len(line) + 1 + len(name) > _NAMES_LINE_WIDTH:
+            lines.append(line)
+            line = indent + name
+        else:
+            line += f" {name}"
+    if line:
+        lines.append(line)
+    return lines
+
+
+def _verdict_line(
+    worst: str, total_findings: int, input_count: int, not_evaluated_inputs: int
+) -> str:
+    """The report's last line, as in the TS CLI: ``worst`` is the worst verdict
+    of the inputs that were scanned, and ``not_evaluated_inputs`` the number of
+    them with a pattern the regex engine could not run, given whenever it is
+    not 0.
+    """
+    if worst == "CLEAN":
+        # CLEAN is also the verdict for an input no layer detects, so the line
+        # states what was checked and makes no claim about the content.
+        return "Verdict: CLEAN  ·  no findings from the layers that ran."
+    m = not_evaluated_inputs
+    if worst == "INCOMPLETE":
+        return (
+            f"Verdict: INCOMPLETE  ·  no findings, but {m} input"
+            f"{' was' if m == 1 else 's were'} not evaluated in full. "
+            "Check this content for the patterns named above before it reaches an LLM."
+        )
+    not_evaluated = "" if m == 0 else f"; {m} input{'' if m == 1 else 's'} not evaluated in full"
+    return (
+        f"Verdict: {worst}  ·  {total_findings} "
+        f"finding{'' if total_findings == 1 else 's'} across {input_count} "
+        f"input{'' if input_count == 1 else 's'}{not_evaluated}. "
+        "Block, redact, or log before this content reaches an LLM."
+    )
 
 
 def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:

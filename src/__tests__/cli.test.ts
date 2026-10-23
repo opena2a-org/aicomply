@@ -1691,13 +1691,65 @@ require.extensions['.ts'] = (module, filename) => {
       });
     }
 
-    const NOTE =
-      '    not evaluated: bearer-token; the regex engine could not run this pattern on the input, so the input is not reported CLEAN\n';
+    /**
+     * The report's words for an input not evaluated in full, as both CLIs'
+     * tests read them: the lines that name the patterns, the row trailers and
+     * the overall lines.
+     */
+    const GOLDEN = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'not-evaluated-lines.json'), 'utf8')) as {
+      notEvaluatedLines: { ids: string[]; lines: string[] }[];
+      incompleteTrailers: { patterns: number; trailer: string }[];
+      flaggedTrailers: { findings: number; patterns: number; trailer: string }[];
+      incompleteVerdictLines: { notEvaluatedInputs: number; line: string }[];
+      flaggedVerdictLines: { verdict: string; findings: number; inputs: number; notEvaluatedInputs: number; line: string }[];
+    };
+
+    /** The golden entry named by `fields`; a test that names no entry fails here. */
+    function golden<T>(entries: T[], fields: Partial<T>): T {
+      const entry = entries.find((e) => Object.entries(fields).every(([k, v]) => e[k as keyof T] === v));
+      if (entry === undefined) throw new Error(`no golden entry for ${JSON.stringify(fields)}`);
+      return entry;
+    }
+
+    /** The golden lines that name `ids`, without their newlines. */
+    function namesLines(ids: string[]): string[] {
+      const entry = GOLDEN.notEvaluatedLines.find((e) => e.ids.join() === ids.join());
+      if (entry === undefined) throw new Error(`no golden entry for ${ids.join()}`);
+      return entry.lines;
+    }
+
+    const incompleteTrailer = (patterns: number) => golden(GOLDEN.incompleteTrailers, { patterns }).trailer;
+    const flaggedTrailer = (findings: number, patterns: number) =>
+      golden(GOLDEN.flaggedTrailers, { findings, patterns }).trailer;
+    const incompleteVerdictLine = (notEvaluatedInputs: number) =>
+      golden(GOLDEN.incompleteVerdictLines, { notEvaluatedInputs }).line;
+    const flaggedVerdictLine = (verdict: string, findings: number, inputs: number, notEvaluatedInputs: number) =>
+      golden(GOLDEN.flaggedVerdictLines, { verdict, findings, inputs, notEvaluatedInputs }).line;
+
+    /** The lines of the report between the row of input `label` and the blank line after it. */
+    function linesUnderRow(out: string, label: string): string[] {
+      const lines = out.split('\n');
+      const row = lines.findIndex((line) => /^ {2}\S+ +/.test(line) && line.includes(` ${label}   `));
+      if (row === -1) throw new Error(`no row for ${label}`);
+      return lines.slice(row + 1, lines.indexOf('', row));
+    }
+
+    /** The finding rows of a report: a type, then the masked value. */
+    const findingRows = (out: string) => out.split('\n').filter((line) => /^ {4}\S+ +••• +confidence /.test(line));
+
+    /** The report's last line, without its newline. */
+    function lastLine(out: string): string {
+      expect(out.endsWith('\n')).toBe(true);
+      return out.slice(0, -1).split('\n').pop() as string;
+    }
+
+    const NOTE = namesLines(['bearer-token']).map((line) => `${line}\n`).join('');
 
     // An input with no finding that was not evaluated in full has no verdict:
     // it is INCOMPLETE, never CLEAN, and the run exits 2 unless another input
-    // is flagged.
-    const INCOMPLETE_LINE = (label: string) => `  INCOMPLETE ${label}   no finding from the patterns that ran\n${NOTE}`;
+    // is flagged. Its row counts the patterns that did not run, and the line
+    // under it names them.
+    const INCOMPLETE_LINE = (label: string) => `  INCOMPLETE ${label}   ${incompleteTrailer(1)}\n${NOTE}`;
 
     it('--quiet prints INCOMPLETE and exits 2 when no other pattern matches', async () => {
       failPattern('bearer-token');
@@ -1713,9 +1765,7 @@ require.extensions['.ts'] = (module, filename) => {
       expect(out).toContain(INCOMPLETE_LINE(f));
       // The pattern that did not run is not a finding, so it is not listed as one.
       expect(out).not.toContain('PATTERN_NOT_EVALUATED');
-      expect(out).toContain(
-        'Verdict: INCOMPLETE  ·  no findings, but 1 input was not evaluated in full, so the scan reached no verdict.\n',
-      );
+      expect(lastLine(out)).toBe(incompleteVerdictLine(1));
       expect(out).not.toContain('CLEAN  ·');
       expect(out).not.toContain('Verdict: VIOLATION');
     });
@@ -1749,10 +1799,17 @@ require.extensions['.ts'] = (module, filename) => {
 
       const report = await scan([f]);
       expect(report.code).toBe(1);
-      expect(report.out).toContain(`  VIOLATION  ${f}   3 findings\n`);
+      // The row counts the two findings and, apart, the pattern that did not
+      // run; the line after the finding rows names it.
+      expect(report.out).toContain(`  VIOLATION  ${f}   ${flaggedTrailer(2, 1)}\n`);
       expect(report.out).toMatch(/\n {4}SSN +••• .* line 1 col 14\n/);
       expect(report.out).toMatch(/\n {4}MRN +••• .* line 2 col 1\n/);
-      expect(report.out).toContain(NOTE);
+      expect(report.out).not.toContain('PATTERN_NOT_EVALUATED');
+      expect(linesUnderRow(report.out, f)).toEqual([
+        expect.stringMatching(/^ {4}SSN +••• /),
+        expect.stringMatching(/^ {4}MRN +••• /),
+        ...namesLines(['bearer-token']),
+      ]);
 
       const json = await scan([f, '--json']);
       expect(json.code).toBe(1);
@@ -1780,6 +1837,9 @@ require.extensions['.ts'] = (module, filename) => {
       let other: string;
       let flagged: string;
       let empty: string;
+      let mixed: string;
+      let markedToo: string;
+      let flaggedTwice: string;
 
       beforeAll(() => {
         clean = fixture('incomplete-clean.txt', 'nothing sensitive in this line\n');
@@ -1787,6 +1847,9 @@ require.extensions['.ts'] = (module, filename) => {
         other = fixture('incomplete-other.txt', 'nothing sensitive here either\n');
         flagged = fixture('incomplete-flagged.txt', 'Customer SSN 078-05-1120 on file\n');
         empty = fixture('incomplete-empty.txt', '');
+        mixed = fixture('incomplete-mixed.txt', `Customer SSN 078-05-1120 on file, ${MARKER}\n`);
+        markedToo = fixture('incomplete-marked-too.txt', `another line with the ${MARKER}\n`);
+        flaggedTwice = fixture('incomplete-flagged-twice.txt', 'Customer SSN 078-05-1120 on file\nMRN: A1234567\n');
       });
 
       const CLEAN_LINE = (label: string) =>
@@ -1803,9 +1866,7 @@ require.extensions['.ts'] = (module, filename) => {
         expect(report.out).toContain(CLEAN_LINE(clean));
         expect(report.out).toContain(INCOMPLETE_LINE(marked));
         expect(report.out).toContain(CLEAN_LINE(other));
-        expect(report.out).toContain(
-          'Verdict: INCOMPLETE  ·  no findings, but 1 input was not evaluated in full, so the scan reached no verdict.\n',
-        );
+        expect(lastLine(report.out)).toBe(incompleteVerdictLine(1));
 
         const json = await scan([...files, '--json']);
         expect({ code: json.code, err: json.err }).toEqual({ code: 2, err: '' });
@@ -1830,8 +1891,9 @@ require.extensions['.ts'] = (module, filename) => {
         expect({ code: report.code, err: report.err }).toEqual({ code: 1, err: '' });
         expect(report.out).toContain(INCOMPLETE_LINE(marked));
         expect(report.out).toContain(`  VIOLATION  ${flagged}   1 finding\n`);
-        // The total counts the findings of the flagged inputs only.
-        expect(report.out).toContain('Verdict: VIOLATION  ·  1 finding across 3 inputs. ');
+        // The total counts the findings of the flagged inputs only, and the
+        // line gives the number of inputs not evaluated in full.
+        expect(lastLine(report.out)).toBe(flaggedVerdictLine('VIOLATION', 1, 3, 1));
 
         const json = await scan([...files, '--json']);
         expect({ code: json.code, err: json.err }).toEqual({ code: 1, err: '' });
@@ -1852,6 +1914,86 @@ require.extensions['.ts'] = (module, filename) => {
         expect({ code: report.code, err: report.err }).toEqual({ code: 2, err: '' });
         expect(report.out).toContain(`  EMPTY      ${empty}   0 bytes, nothing to classify\n`);
         expect(report.out).toContain(INCOMPLETE_LINE(marked));
+      });
+
+      it('beside an EMPTY and a CLEAN input, the INCOMPLETE row counts the pattern, one line names it, and the overall line gives the next step', async () => {
+        failPatternOn('bearer-token', MARKER);
+        const report = await scan([empty, clean, marked]);
+        expect({ code: report.code, err: report.err }).toEqual({ code: 2, err: '' });
+
+        const lines = report.out.split('\n');
+        const row = lines.indexOf(`  INCOMPLETE ${marked}   ${incompleteTrailer(1)}`);
+        expect(row).toBeGreaterThan(-1);
+        expect(lines.slice(row + 1, row + 3)).toEqual([...namesLines(['bearer-token']), '']);
+        expect(lines.filter((line) => line.includes('PATTERN_NOT_EVALUATED'))).toEqual([]);
+        expect(lastLine(report.out)).toBe(incompleteVerdictLine(1));
+        // The EMPTY row is the one printed when every pattern runs.
+        expect(lines).toContain(`  EMPTY      ${empty}   0 bytes, nothing to classify`);
+      });
+
+      it('a flagged input not evaluated in full: its row counts the finding and the pattern, one finding row at the 12-column type width, and the overall line counts both inputs not evaluated in full', async () => {
+        failPatternOn('bearer-token', MARKER);
+        const report = await scan([empty, mixed, marked]);
+        expect({ code: report.code, err: report.err }).toEqual({ code: 1, err: '' });
+
+        expect(report.out).toContain(`  VIOLATION  ${mixed}   ${flaggedTrailer(1, 1)}\n`);
+        const rows = findingRows(report.out);
+        expect(rows).toHaveLength(1);
+        expect(rows[0].startsWith(`    ${'SSN'.padEnd(12)} ••• `)).toBe(true);
+        expect(linesUnderRow(report.out, mixed)).toEqual([rows[0], ...namesLines(['bearer-token'])]);
+        expect(report.out).not.toContain('PATTERN_NOT_EVALUATED');
+        expect(lastLine(report.out)).toBe(flaggedVerdictLine('VIOLATION', 1, 3, 2));
+      });
+
+      it('every pack pattern fails: the names block is the golden pack entry, 5 lines of at most 80 columns', async () => {
+        for (const p of PATTERNS) failPatternOn(p.id, MARKER);
+        const report = await scan([marked]);
+        expect({ code: report.code, err: report.err }).toEqual({ code: 2, err: '' });
+        const block = linesUnderRow(report.out, marked);
+        // The golden entry that lists every pack pattern, in pack order.
+        expect(block).toEqual(namesLines(PATTERNS.map((p) => p.id)));
+        expect(block).toHaveLength(5);
+        for (const line of block) expect([...line].length).toBeLessThanOrEqual(80);
+      });
+
+      it.each(GOLDEN.notEvaluatedLines.map((e) => [e.ids.length, e] as const))(
+        'with %i pattern(s) not evaluated, the lines under the row are the golden lines',
+        async (_count, entry) => {
+          for (const id of entry.ids) failPatternOn(id, MARKER);
+          const report = await scan([marked]);
+          expect({ code: report.code, err: report.err }).toEqual({ code: 2, err: '' });
+          expect(linesUnderRow(report.out, marked)).toEqual(entry.lines);
+          for (const line of entry.lines) expect([...line].length).toBeLessThanOrEqual(80);
+        },
+      );
+
+      it('two inputs not evaluated in full and none flagged: the overall line counts both', async () => {
+        failPatternOn('bearer-token', MARKER);
+        failPatternOn('iban', MARKER);
+        const report = await scan([marked, markedToo]);
+        expect({ code: report.code, err: report.err }).toEqual({ code: 2, err: '' });
+        expect(report.out).toContain(`  INCOMPLETE ${markedToo}   ${incompleteTrailer(2)}\n`);
+        expect(lastLine(report.out)).toBe(incompleteVerdictLine(2));
+      });
+
+      it('a run in which no pattern fails prints the report unchanged, byte for byte', async () => {
+        const report = await scan([empty, clean, flaggedTwice]);
+        expect({ code: report.code, err: report.err }).toEqual({ code: 1, err: '' });
+        // With every pattern evaluated, no row counts a pattern not evaluated,
+        // no line names one, and the overall line has no such count.
+        expect(report.out).toBe(
+          '\n' +
+            `  EMPTY      ${empty}   0 bytes, nothing to classify\n\n` +
+            `  CLEAN      ${clean}   no finding in the ${PATTERN_TYPES.length} pattern classes (aicomply --help lists them)\n\n` +
+            `  VIOLATION  ${flaggedTwice}   2 findings\n` +
+            '    SSN          •••                confidence 0.95  layer regex  line 1 col 14\n' +
+            '    MRN          •••                confidence 0.90  layer regex  line 2 col 1\n\n' +
+            '  Semantic Guard layer: inactive (preview; no nanomind-daemon on http://127.0.0.1:47200).\n' +
+            '  It targets prompt-injection / exfiltration the regex layer cannot see, but the\n' +
+            '  current model over-flags benign text - preview only, not for production gating.\n' +
+            '  Try it: npm i @nanomind/daemon && npx nanomind-daemon start\n\n' +
+            'Verdict: VIOLATION  ·  2 findings across 3 inputs. Block, redact, or log before this content reaches an LLM.\n',
+        );
       });
     });
   });
