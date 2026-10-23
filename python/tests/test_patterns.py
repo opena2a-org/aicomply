@@ -271,3 +271,44 @@ def test_a_token_far_past_the_bound_is_one_finding_up_to_the_bound(pid, prefix):
     text = prefix + "a" * 2**23
     found = [(m.type, m.start, m.end) for m in scan_patterns(text)]
     assert found == [("CREDENTIAL", 0, len(prefix) + _BOUND)]
+
+
+# The checks on a captured value judge the match, which ends at the bound
+# (mirror of the describe block of that name in regex.test.ts).
+
+#: The reference form the checks see when it fills the captured value.
+_REFERENCE = "process.env."
+
+
+def test_a_value_whose_captured_first_1000_characters_are_a_reference_form_is_suppressed():
+    # process.env. and 988 A are 1000 characters; the 112 A and the tail past them are not captured.
+    name = "A" * 1100
+    assert scan_patterns(f"api_key={_REFERENCE}{name}.tail") == []
+    assert scan_patterns(f"Authorization: Bearer {_REFERENCE}{name}-tail") == []
+
+
+def test_the_same_lines_report_when_the_run_ends_inside_the_bound_so_the_tail_is_captured():
+    name = "A" * 900
+    assigned = scan_patterns(f"api_key={_REFERENCE}{name}.tail")
+    bearer = scan_patterns(f"Authorization: Bearer {_REFERENCE}{name}-tail")
+    assert [m.type for m in assigned] == ["CREDENTIAL"]
+    assert [m.type for m in bearer] == ["CREDENTIAL"]
+
+
+def test_the_api_key_validator_judges_the_captured_value_without_the_equals_past_the_bound():
+    found = scan_patterns("api_key=" + "A" * 1500 + "=")
+    assert [(m.type, m.value) for m in found] == [("CREDENTIAL", "A" * _BOUND)]
+    # Inside the bound, or directly after it, the = is captured and the value is an empty
+    # assignment's next key.
+    assert scan_patterns("api_key=" + "A" * 900 + "=") == []
+    assert scan_patterns("api_key=" + "A" * _BOUND + "=") == []
+
+
+def test_both_findings_of_a_key_two_patterns_capture_to_different_1000th_characters_are_kept():
+    found = scan_patterns(f"Authorization: Bearer {_S}proj-" + "a" * 1500)
+    assert [(m.type, len(m.value)) for m in found] == [
+        ("CREDENTIAL", _BOUND + 8),
+        ("CREDENTIAL", _BOUND),
+    ]
+    short = scan_patterns(f"Authorization: Bearer {_S}proj-" + "a" * 900)
+    assert [m.type for m in short] == ["CREDENTIAL"]
