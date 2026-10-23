@@ -123,6 +123,9 @@ export const MAX_REPEAT_COUNT = 1000;
 /** A counted repeat at the start of the text from `lastIndex`: `{n}`, `{n,}` or `{n,m}`. */
 const COUNTED_REPEAT = /\{(\d+)(?:(,)(\d*))?\}/y;
 
+/** `{,}` or `{,m}` at the start of the text from `lastIndex`. */
+const NO_LOWER_BOUND_FORM = /\{,(\d*)\}/y;
+
 /**
  * Return why a counted repeat in `source` keeps it out of the pack, or null.
  *
@@ -131,8 +134,10 @@ const COUNTED_REPEAT = /\{(\d+)(?:(,)(\d*))?\}/y;
  * regex engine keeps backtracking state for each character a counted repeat
  * matches, so one with no upper bound can make it throw on a long enough run
  * of the characters it repeats, and the pattern then reaches no result for
- * that content. An escaped brace, a brace in a character class and `{,m}`
- * open no counted repeat here.
+ * that content. `{,m}` and `{,}` are refused as well: Python reads them as
+ * counted repeats, `{,}` with no upper bound, where JavaScript and RE2 read
+ * them as text. An escaped brace and a brace in a character class open no
+ * counted repeat.
  */
 export function countedRepeatProblem(source: string): string | null {
   let inClass = false;
@@ -151,6 +156,15 @@ export function countedRepeatProblem(source: string): string | null {
       continue;
     }
     if (c !== '{') continue;
+    NO_LOWER_BOUND_FORM.lastIndex = i;
+    const form = NO_LOWER_BOUND_FORM.exec(source);
+    if (form !== null) {
+      return (
+        `the brace form ${form[0]}, which Python reads as a counted repeat` +
+        `${form[1] === '' ? ' with no upper bound' : ''} and JavaScript and RE2 read as text; ` +
+        `write {0,m} with m at most ${MAX_REPEAT_COUNT} for a repeat, or \\{ for a brace`
+      );
+    }
     COUNTED_REPEAT.lastIndex = i;
     const repeat = COUNTED_REPEAT.exec(source);
     if (repeat === null) continue;
