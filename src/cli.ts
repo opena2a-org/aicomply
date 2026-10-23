@@ -13,7 +13,8 @@
  * Exit codes make it usable as a CI gate:
  *   0  CLEAN          - no findings
  *   1  VIOLATION/DENY - findings present
- *   2  usage error, or no input (stdin is a terminal or every input is 0 bytes)
+ *   2  usage error, no input, or no verdict (an input that cannot be read or is INCOMPLETE)
+ *      no input: stdin is a terminal or every input is 0 bytes
  *
  * Dependency-free by design (no commander / yargs) to honor the org's
  * small-library pattern. argv is parsed by hand.
@@ -23,6 +24,7 @@ import { constants as bufferConstants } from 'buffer';
 import { fstatSync, readFileSync, statSync, type Stats } from 'fs';
 import { comply } from './index';
 import { DEFAULT_NANOMIND_DAEMON_URL } from './classifier/guard-client/nanomind-adapter';
+import { PATTERN_NOT_EVALUATED } from './classifier/regex';
 import { PATTERN_TYPES } from './classifier/regex/pack';
 import type { ComplyResult, Violation } from './types';
 import { packageVersion } from './version';
@@ -123,7 +125,8 @@ PATTERN CLASSES (regex layer)
 EXIT CODES
   0  CLEAN          no findings from the layers that ran
   1  VIOLATION/DENY findings present (usable as a CI gate)
-  2  usage error, or no input: stdin is a terminal or every input is 0 bytes
+  2  usage error, no input, or no verdict (an input that cannot be read or is INCOMPLETE)
+     no input: stdin is a terminal or every input is 0 bytes
 
 EXAMPLES
   aicomply scan ./support-ticket.txt
@@ -159,7 +162,7 @@ OPTIONS
   --json        Machine-readable JSON output (verdict + findings, values masked;
                 each finding carries its line and column in the input, and each
                 input its size in bytes and the layers that ran)
-  --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY);
+  --quiet, -q   Print only the verdict line (CLEAN / INCOMPLETE / VIOLATION / DENY);
                 --json takes precedence when both are given
   --help, -h    This help
   --            Ends the options; each later argument is an input, so a file
@@ -169,7 +172,8 @@ OPTIONS
 EXIT CODES
   0  CLEAN          no findings from the layers that ran
   1  VIOLATION/DENY findings present (usable as a CI gate)
-  2  usage error, or no input: stdin is a terminal or every input is 0 bytes
+  2  usage error, no input, or no verdict (an input that cannot be read or is INCOMPLETE)
+     no input: stdin is a terminal or every input is 0 bytes
 
 EXAMPLES
   aicomply scan ./support-ticket.txt
@@ -191,6 +195,42 @@ const MASKED_VALUE = '•••';
  * runs on such an input, so it gets this word in place of a layer's verdict.
  */
 const EMPTY_VERDICT = 'EMPTY';
+
+/**
+ * The verdicts of an input that was scanned, from the worst: --quiet prints
+ * the worst one any input has, and the report gives it as the overall verdict.
+ */
+const VERDICTS = ['DENY', 'VIOLATION', 'INCOMPLETE', 'CLEAN'] as const;
+type InputVerdict = (typeof VERDICTS)[number];
+
+/**
+ * The verdict of a scanned input. comply() gives VIOLATION for content on
+ * which the regex engine could not run a pattern, with a
+ * PATTERN_NOT_EVALUATED finding for each such pattern. When those are the
+ * only findings, the input was not evaluated in full and nothing was found
+ * in what was: it is INCOMPLETE, no verdict and never CLEAN.
+ */
+function inputVerdict(res: ComplyResult): InputVerdict {
+  if (res.verdict === 'DENY') return 'DENY';
+  const notEvaluated = new Set((res.unevaluatedPatterns ?? []).map((id) => `${PATTERN_NOT_EVALUATED}:${id}`));
+  if (notEvaluated.size === 0) return res.verdict;
+  return res.violations.every((v) => notEvaluated.has(v.type)) ? 'INCOMPLETE' : 'VIOLATION';
+}
+
+/** The worst of `verdicts`, the verdicts of the inputs that were scanned. */
+function worstVerdict(verdicts: InputVerdict[]): InputVerdict {
+  return VERDICTS.find((v) => verdicts.includes(v)) ?? 'CLEAN';
+}
+
+/**
+ * The exit code for the verdicts of the inputs that were scanned: 1 when any
+ * input is flagged (VIOLATION or DENY), whatever the others are; otherwise 2
+ * when any is INCOMPLETE, as the scan reached no verdict on it; otherwise 0.
+ */
+function exitCode(verdicts: InputVerdict[]): 0 | 1 | 2 {
+  const worst = worstVerdict(verdicts);
+  return worst === 'CLEAN' ? 0 : worst === 'INCOMPLETE' ? 2 : 1;
+}
 
 function readStdin(): Promise<Buffer> {
   return new Promise((resolve) => {
@@ -600,14 +640,17 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
   const out = process.stdout;
   let anyGuard = false;
   let totalFindings = 0;
-  let worst: 'CLEAN' | 'VIOLATION' | 'DENY' = 'CLEAN';
+  // The verdict of each input that was scanned; an input of 0 bytes has none.
+  const verdicts = sources.map((src, i) => (src.bytes === 0 ? undefined : inputVerdict(results[i])));
+  const scanned = verdicts.filter((v): v is InputVerdict => v !== undefined);
+  const worst = worstVerdict(scanned);
 
-  // The findings of each flagged input in input order; an empty or CLEAN
-  // input lists none. Each input lists its first MAX_FINDING_LINES.
+  // The findings of each flagged input in input order; an empty, CLEAN or
+  // INCOMPLETE input lists none. Each input lists its first MAX_FINDING_LINES.
   const ordered = sources.map((src, i) =>
-    src.bytes === 0 || results[i].verdict === 'CLEAN'
-      ? []
-      : inInputOrder(src.content, results[i].violations),
+    verdicts[i] === 'VIOLATION' || verdicts[i] === 'DENY'
+      ? inInputOrder(src.content, results[i].violations)
+      : [],
   );
 
   // The type column is as wide as the longest type printed, and at least 12
@@ -631,22 +674,21 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
       continue;
     }
     if (guardActive(res)) anyGuard = true;
-    totalFindings += res.violations.length;
-    if (res.verdict === 'DENY') worst = 'DENY';
-    else if (res.verdict === 'VIOLATION' && worst !== 'DENY') worst = 'VIOLATION';
+    const verdict = verdicts[i] as InputVerdict;
 
-    const tag =
-      res.verdict === 'CLEAN'
-        ? 'CLEAN     '
-        : res.verdict === 'DENY'
-          ? 'DENY      '
-          : 'VIOLATION ';
-    out.write(`  ${tag} ${src.label}`);
-    if (res.verdict === 'CLEAN') {
+    // Each verdict is at most 10 characters, the width of the column.
+    out.write(`  ${verdict.padEnd(10)} ${src.label}`);
+    if (verdict === 'CLEAN') {
       out.write(`   no finding in the ${PATTERN_TYPES.length} pattern classes (aicomply --help lists them)\n\n`);
       continue;
     }
-    out.write(`   ${res.violations.length} finding${res.violations.length === 1 ? '' : 's'}\n`);
+    if (verdict === 'INCOMPLETE') {
+      // The patterns that did not run are named below; they are not findings.
+      out.write('   no finding from the patterns that ran\n');
+    } else {
+      totalFindings += res.violations.length;
+      out.write(`   ${res.violations.length} finding${res.violations.length === 1 ? '' : 's'}\n`);
+    }
     const findings = ordered[i];
     for (const { v, loc } of findings.slice(0, MAX_FINDING_LINES)) {
       const layer = v.classifier;
@@ -696,6 +738,12 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
     // CLEAN is also the verdict for an input no layer detects, so the line
     // states what was checked and makes no claim about the content.
     out.write('Verdict: CLEAN  ·  no findings from the layers that ran.\n');
+  } else if (worst === 'INCOMPLETE') {
+    const n = scanned.filter((v) => v === 'INCOMPLETE').length;
+    out.write(
+      `Verdict: INCOMPLETE  ·  no findings, but ${n} input${n === 1 ? ' was' : 's were'} not evaluated in full, ` +
+        'so the scan reached no verdict.\n',
+    );
   } else {
     out.write(
       `Verdict: ${worst}  ·  ${totalFindings} finding${totalFindings === 1 ? '' : 's'} across ${sources.length} input${sources.length === 1 ? '' : 's'}. ` +
@@ -710,12 +758,12 @@ export function renderJson(sources: Source[], results: ComplyResult[]): void {
     // An input of 0 bytes was not classified: its `verdict` is EMPTY, the
     // word the report prints for it, and its `layers` is [].
     bytes: src.bytes,
-    verdict: src.bytes === 0 ? EMPTY_VERDICT : results[i].verdict,
+    verdict: src.bytes === 0 ? EMPTY_VERDICT : inputVerdict(results[i]),
     guardActive: guardActive(results[i]),
     layers: results[i].layers,
     // The patterns the regex engine could not run on this input, when any.
     ...(results[i].unevaluatedPatterns !== undefined
-      ? { unevaluatedPatterns: results[i].unevaluatedPatterns }
+      ? { notEvaluated: results[i].unevaluatedPatterns }
       : {}),
     findings: results[i].violations.map((v) => {
       const loc = locateFinding(src.content, v);
@@ -789,17 +837,11 @@ async function runInner(argv: string[]): Promise<number> {
   }
   // An input of 0 bytes was not classified, so the inputs that were decide
   // the verdict and the exit code.
-  const scanned = results.filter((_, i) => sources[i].bytes > 0);
+  const verdicts = results.filter((_, i) => sources[i].bytes > 0).map(inputVerdict);
 
   if (args.json) renderJson(sources, results);
-  else if (args.quiet) {
-    const worst = scanned.some((r) => r.verdict === 'DENY')
-      ? 'DENY'
-      : scanned.some((r) => r.verdict === 'VIOLATION')
-        ? 'VIOLATION'
-        : 'CLEAN';
-    process.stdout.write(`${worst}\n`);
-  } else renderHuman(sources, results);
+  else if (args.quiet) process.stdout.write(`${worstVerdict(verdicts)}\n`);
+  else renderHuman(sources, results);
 
   const notes = args.json && args.quiet ? [QUIET_WITH_JSON] : [];
   if (unread === 'stream') notes.push(STDIN_NOT_READ);
@@ -811,8 +853,9 @@ async function runInner(argv: string[]): Promise<number> {
     process.stderr.write(notes.map((note) => `aicomply: ${note}\n`).join(''));
   }
 
-  // Exit 1 if anything is not CLEAN, so the CLI works as a CI gate.
-  return scanned.some((r) => r.verdict !== 'CLEAN') ? 1 : 0;
+  // 0 only when every input that was scanned is CLEAN, so a CI gate passes
+  // on 0 alone: 1 when one is flagged, 2 when the scan reached no verdict.
+  return exitCode(verdicts);
 }
 
 /**

@@ -750,7 +750,7 @@ describe('aicomply CLI', () => {
     await run(['scan', '--help']);
     help.restore();
     expect(help.out.join('')).toContain(
-      '  --quiet, -q   Print only the verdict line (CLEAN / VIOLATION / DENY);\n' +
+      '  --quiet, -q   Print only the verdict line (CLEAN / INCOMPLETE / VIOLATION / DENY);\n' +
         '                --json takes precedence when both are given\n',
     );
   });
@@ -1043,13 +1043,17 @@ describe('aicomply CLI', () => {
       );
     });
 
-    it('--help and scan --help give the exit code for no input', async () => {
+    it('--help and scan --help give the exit code for no input and for no verdict', async () => {
       for (const argv of [['--help'], ['scan', '--help']]) {
         const cap = capture();
         await run(argv);
         cap.restore();
         expect(cap.out.join('')).toContain(
-          '  2  usage error, or no input: stdin is a terminal or every input is 0 bytes\n',
+          'EXIT CODES\n' +
+            '  0  CLEAN          no findings from the layers that ran\n' +
+            '  1  VIOLATION/DENY findings present (usable as a CI gate)\n' +
+            '  2  usage error, no input, or no verdict (an input that cannot be read or is INCOMPLETE)\n' +
+            '     no input: stdin is a terminal or every input is 0 bytes\n',
         );
       }
     });
@@ -1674,34 +1678,56 @@ require.extensions['.ts'] = (module, filename) => {
       }
     }
 
+    /**
+     * Make pack pattern `id` throw from its regex on a text that holds
+     * `marker`, as the engine does when it cannot run it, and run as before on
+     * any other text, so one input of several is not evaluated in full.
+     */
+    function failPatternOn(id: string, marker: string): void {
+      const pattern = PATTERNS.find((p) => p.id === id) as PatternDefinition;
+      jest.spyOn(pattern.regex, 'exec').mockImplementation((text: string) => {
+        if (text.includes(marker)) throw new RangeError('Maximum call stack size exceeded');
+        return RegExp.prototype.exec.call(pattern.regex, text);
+      });
+    }
+
     const NOTE =
       '    not evaluated: bearer-token; the regex engine could not run this pattern on the input, so the input is not reported CLEAN\n';
 
-    it('--quiet prints VIOLATION and exits 1 when no other pattern matches', async () => {
+    // An input with no finding that was not evaluated in full has no verdict:
+    // it is INCOMPLETE, never CLEAN, and the run exits 2 unless another input
+    // is flagged.
+    const INCOMPLETE_LINE = (label: string) => `  INCOMPLETE ${label}   no finding from the patterns that ran\n${NOTE}`;
+
+    it('--quiet prints INCOMPLETE and exits 2 when no other pattern matches', async () => {
       failPattern('bearer-token');
       const f = fixture('unevaluated-plain.txt', 'nothing sensitive in this line\n');
-      expect(await scan([f, '--quiet'])).toEqual({ code: 1, out: 'VIOLATION\n', err: '' });
+      expect(await scan([f, '--quiet'])).toEqual({ code: 2, out: 'INCOMPLETE\n', err: '' });
     });
 
-    it('the report gives VIOLATION and names the pattern when no other pattern matches', async () => {
+    it('the report gives INCOMPLETE and names the pattern when no other pattern matches', async () => {
       failPattern('bearer-token');
       const f = fixture('unevaluated-plain.txt', 'nothing sensitive in this line\n');
       const { code, out, err } = await scan([f]);
-      expect({ code, err }).toEqual({ code: 1, err: '' });
-      expect(out).toContain(`  VIOLATION  ${f}   1 finding\n`);
-      expect(out).toMatch(/\n {4}PATTERN_NOT_EVALUATED:bearer-token +••• +confidence 1\.00 {2}layer regex\n/);
-      expect(out).toContain(NOTE);
-      expect(out).toContain('Verdict: VIOLATION');
+      expect({ code, err }).toEqual({ code: 2, err: '' });
+      expect(out).toContain(INCOMPLETE_LINE(f));
+      // The pattern that did not run is not a finding, so it is not listed as one.
+      expect(out).not.toContain('PATTERN_NOT_EVALUATED');
+      expect(out).toContain(
+        'Verdict: INCOMPLETE  ·  no findings, but 1 input was not evaluated in full, so the scan reached no verdict.\n',
+      );
       expect(out).not.toContain('CLEAN  ·');
+      expect(out).not.toContain('Verdict: VIOLATION');
     });
 
-    it('--json gives VIOLATION and names the pattern when no other pattern matches', async () => {
+    it('--json gives INCOMPLETE and lists the pattern in notEvaluated when no other pattern matches', async () => {
       failPattern('bearer-token');
       const f = fixture('unevaluated-plain.txt', 'nothing sensitive in this line\n');
       const { code, out, err } = await scan([f, '--json']);
-      expect({ code, err }).toEqual({ code: 1, err: '' });
+      expect({ code, err }).toEqual({ code: 2, err: '' });
       const [source] = JSON.parse(out);
-      expect(source).toMatchObject({ verdict: 'VIOLATION', unevaluatedPatterns: ['bearer-token'] });
+      expect(source).toMatchObject({ verdict: 'INCOMPLETE', notEvaluated: ['bearer-token'] });
+      expect(source).not.toHaveProperty('unevaluatedPatterns');
       expect(source.findings).toEqual([
         {
           type: 'PATTERN_NOT_EVALUATED:bearer-token',
@@ -1731,7 +1757,7 @@ require.extensions['.ts'] = (module, filename) => {
       const json = await scan([f, '--json']);
       expect(json.code).toBe(1);
       const [source] = JSON.parse(json.out);
-      expect(source).toMatchObject({ verdict: 'VIOLATION', unevaluatedPatterns: ['bearer-token'] });
+      expect(source).toMatchObject({ verdict: 'VIOLATION', notEvaluated: ['bearer-token'] });
       expect(source.findings.map((x: { type: string }) => x.type).sort()).toEqual([
         'MRN',
         'PATTERN_NOT_EVALUATED:bearer-token',
@@ -1739,11 +1765,94 @@ require.extensions['.ts'] = (module, filename) => {
       ]);
     });
 
-    it('--json has no unevaluatedPatterns for an input every pattern ran on', async () => {
+    it('--json has no notEvaluated for an input every pattern ran on', async () => {
       const f = fixture('unevaluated-none.txt', 'Customer SSN 078-05-1120 on file\n');
       const { code, out } = await scan([f, '--json']);
       expect(code).toBe(1);
+      expect(JSON.parse(out)[0]).not.toHaveProperty('notEvaluated');
       expect(JSON.parse(out)[0]).not.toHaveProperty('unevaluatedPatterns');
+    });
+
+    describe('beside other inputs', () => {
+      const MARKER = 'markerthepatterncannotrunon';
+      let clean: string;
+      let marked: string;
+      let other: string;
+      let flagged: string;
+      let empty: string;
+
+      beforeAll(() => {
+        clean = fixture('incomplete-clean.txt', 'nothing sensitive in this line\n');
+        marked = fixture('incomplete-marked.txt', `this line holds the ${MARKER}\n`);
+        other = fixture('incomplete-other.txt', 'nothing sensitive here either\n');
+        flagged = fixture('incomplete-flagged.txt', 'Customer SSN 078-05-1120 on file\n');
+        empty = fixture('incomplete-empty.txt', '');
+      });
+
+      const CLEAN_LINE = (label: string) =>
+        `  CLEAN      ${label}   no finding in the ${PATTERN_TYPES.length} pattern classes (aicomply --help lists them)\n`;
+
+      it('one input not evaluated in full and the others CLEAN: INCOMPLETE and exit 2 in every output form', async () => {
+        failPatternOn('bearer-token', MARKER);
+        const files = [clean, marked, other];
+
+        expect(await scan([...files, '--quiet'])).toEqual({ code: 2, out: 'INCOMPLETE\n', err: '' });
+
+        const report = await scan(files);
+        expect({ code: report.code, err: report.err }).toEqual({ code: 2, err: '' });
+        expect(report.out).toContain(CLEAN_LINE(clean));
+        expect(report.out).toContain(INCOMPLETE_LINE(marked));
+        expect(report.out).toContain(CLEAN_LINE(other));
+        expect(report.out).toContain(
+          'Verdict: INCOMPLETE  ·  no findings, but 1 input was not evaluated in full, so the scan reached no verdict.\n',
+        );
+
+        const json = await scan([...files, '--json']);
+        expect({ code: json.code, err: json.err }).toEqual({ code: 2, err: '' });
+        const payload = JSON.parse(json.out);
+        expect(payload.map((s: { source: string; verdict: string }) => [s.source, s.verdict])).toEqual([
+          [clean, 'CLEAN'],
+          [marked, 'INCOMPLETE'],
+          [other, 'CLEAN'],
+        ]);
+        expect(payload[1].notEvaluated).toEqual(['bearer-token']);
+        expect(payload[0]).not.toHaveProperty('notEvaluated');
+        expect(payload[2]).not.toHaveProperty('notEvaluated');
+      });
+
+      it('a flagged input decides the exit beside an INCOMPLETE one: exit 1 in every output form', async () => {
+        failPatternOn('bearer-token', MARKER);
+        const files = [clean, marked, flagged];
+
+        expect(await scan([...files, '--quiet'])).toEqual({ code: 1, out: 'VIOLATION\n', err: '' });
+
+        const report = await scan(files);
+        expect({ code: report.code, err: report.err }).toEqual({ code: 1, err: '' });
+        expect(report.out).toContain(INCOMPLETE_LINE(marked));
+        expect(report.out).toContain(`  VIOLATION  ${flagged}   1 finding\n`);
+        // The total counts the findings of the flagged inputs only.
+        expect(report.out).toContain('Verdict: VIOLATION  ·  1 finding across 3 inputs. ');
+
+        const json = await scan([...files, '--json']);
+        expect({ code: json.code, err: json.err }).toEqual({ code: 1, err: '' });
+        const payload = JSON.parse(json.out);
+        expect(payload.map((s: { source: string; verdict: string }) => [s.source, s.verdict])).toEqual([
+          [clean, 'CLEAN'],
+          [marked, 'INCOMPLETE'],
+          [flagged, 'VIOLATION'],
+        ]);
+        expect(payload[1].notEvaluated).toEqual(['bearer-token']);
+      });
+
+      it('an input of 0 bytes beside an INCOMPLETE one decides nothing: INCOMPLETE and exit 2', async () => {
+        failPatternOn('bearer-token', MARKER);
+        expect(await scan([empty, marked, '--quiet'])).toEqual({ code: 2, out: 'INCOMPLETE\n', err: '' });
+
+        const report = await scan([empty, marked]);
+        expect({ code: report.code, err: report.err }).toEqual({ code: 2, err: '' });
+        expect(report.out).toContain(`  EMPTY      ${empty}   0 bytes, nothing to classify\n`);
+        expect(report.out).toContain(INCOMPLETE_LINE(marked));
+      });
     });
   });
 
@@ -1923,7 +2032,7 @@ require.extensions['.ts'] = (module, filename) => {
       expect({ code: json.code, err: json.err }).toEqual({ code: 1, err: '' });
       const [source] = JSON.parse(json.out);
       expect(source.verdict).toBe('VIOLATION');
-      expect(source).not.toHaveProperty('unevaluatedPatterns');
+      expect(source).not.toHaveProperty('notEvaluated');
       const byLine = source.findings
         .map((x: { type: string; line: number }) => [x.type, x.line])
         .sort((a: [string, number], b: [string, number]) => a[1] - b[1]);

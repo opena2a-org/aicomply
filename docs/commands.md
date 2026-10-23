@@ -4,12 +4,20 @@ The CLI has one command, `scan`, which reads files or piped stdin; `npx @opena2a
 
 ## Exit codes
 
-Exit code is `0` for CLEAN and `1` when anything is flagged, so it drops straight into CI.
-It is `2` on a usage error or no input (stdin is a terminal, or every input is 0 bytes,
-as an empty `git diff` is). An input of 0 bytes beside others is not classified and does
-not decide the overall verdict or the exit code. The report and `--json` give it the same
-verdict, `EMPTY`. The report lists it as
-`EMPTY      empty.txt   0 bytes, nothing to classify`, and `--json` as
+Exit code is `0` when every input is `CLEAN`, `1` when any input is flagged (`VIOLATION` or
+`DENY`), and `2` when the scan reached no verdict: a usage error, no input (stdin is a
+terminal, or every input is 0 bytes, as an empty `git diff` is), an input that cannot be
+read, or an input the scan could not evaluate in full, reported as `INCOMPLETE`. A flagged
+input decides the exit even beside an `INCOMPLETE` one. A gate passes on `0` only: `2`
+means the scan has no answer, not that it found nothing.
+
+An `INCOMPLETE` input is not `CLEAN`. The report names the patterns that were not
+evaluated on it, and `--json` lists them as `"notEvaluated"` beside
+`"verdict": "INCOMPLETE"`.
+
+An input of 0 bytes beside others is not classified and does not decide the overall
+verdict or the exit code. The report and `--json` give it the same verdict, `EMPTY`. The
+report lists it as `EMPTY      empty.txt   0 bytes, nothing to classify`, and `--json` as
 `"bytes": 0`, `"verdict": "EMPTY"`, `"layers": []`.
 
 ## An input that cannot be read

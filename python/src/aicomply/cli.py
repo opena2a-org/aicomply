@@ -11,7 +11,8 @@ in one command before writing integration code:
 Exit codes make it usable as a CI gate:
     0  CLEAN          - no findings
     1  VIOLATION/DENY - findings present
-    2  usage error, or no input (stdin is a terminal or every input is 0 bytes)
+    2  usage error, no input, or no verdict (an input that cannot be read or is INCOMPLETE)
+       no input: stdin is a terminal or every input is 0 bytes
 
 Dependency-free by design (argv parsed by hand) to honor the org small-library
 pattern and keep parity with the npm CLI's behaviour.
@@ -123,7 +124,8 @@ PATTERN CLASSES (regex layer)
 EXIT CODES
   0  CLEAN          no findings from the layers that ran
   1  VIOLATION/DENY findings present (usable as a CI gate)
-  2  usage error, or no input: stdin is a terminal or every input is 0 bytes
+  2  usage error, no input, or no verdict (an input that cannot be read or is INCOMPLETE)
+     no input: stdin is a terminal or every input is 0 bytes
 
 EXAMPLES
   aicomply scan ./support-ticket.txt
@@ -170,7 +172,8 @@ OPTIONS
 EXIT CODES
   0  CLEAN          no findings from the layers that ran
   1  VIOLATION/DENY findings present (usable as a CI gate)
-  2  usage error, or no input: stdin is a terminal or every input is 0 bytes
+  2  usage error, no input, or no verdict (an input that cannot be read or is INCOMPLETE)
+     no input: stdin is a terminal or every input is 0 bytes
 
 EXAMPLES
   aicomply scan ./support-ticket.txt
