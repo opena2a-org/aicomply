@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import tracemalloc
+from collections.abc import Iterator
 from pathlib import Path
 from typing import IO
 
@@ -20,7 +21,8 @@ import pytest
 import aicomply
 from aicomply.classifier.regex import classify_with_regex
 from aicomply.classifier.regex.pack import PATTERN_TYPES
-from aicomply.cli import _files_glob, _locate, _render_human, _render_json, _Source, run
+from aicomply.classifier.regex.patterns import PATTERNS
+from aicomply.cli import _files_glob, _locate, _render_human, _render_json, _Source, main, run
 from aicomply.types import ClassifierResult, ComplyResult, Violation
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -788,12 +790,64 @@ def test_a_second_utf8_byte_order_mark_stays_in_the_text(tmp_path, capsys):
     assert (finding["type"], finding["line"], finding["column"]) == ("SSN", 1, 6)
 
 
-def test_help_gives_the_exit_code_for_no_input(capsys):
+def test_help_gives_the_exit_code_for_no_input_and_for_no_verdict(capsys):
     for argv in (["--help"], ["scan", "--help"]):
         assert run(argv) == 0
         assert (
-            "  2  usage error, or no input: stdin is a terminal or every input is 0 bytes\n"
-            in capsys.readouterr().out
+            "EXIT CODES\n"
+            "  0  CLEAN          no findings from the layers that ran\n"
+            "  1  VIOLATION/DENY findings present (usable as a CI gate)\n"
+            "  2  usage error, no input, or no verdict"
+            " (an input that cannot be read or is INCOMPLETE)\n"
+            "     no input: stdin is a terminal or every input is 0 bytes\n"
+        ) in capsys.readouterr().out
+
+
+class _RaisingRegex:
+    """Stands in for a pack pattern's compiled regex: raises on a text that holds
+    ``marker``, as an error of the regex engine would, and searches as the
+    pattern does on any other text."""
+
+    def __init__(self, regex: re.Pattern[str], marker: str) -> None:
+        self._regex = regex
+        self._marker = marker
+
+    def finditer(self, text: str) -> Iterator[re.Match[str]]:
+        if self._marker in text:
+            raise RecursionError("maximum recursion depth exceeded")
+        return self._regex.finditer(text)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._regex, name)
+
+
+# The scan of this port does not contain an error the regex engine raises for
+# one pattern: the run ends on it before any verdict is printed, and main()
+# exits 2, the code for a scan that reached no verdict, with the error on
+# stderr. No input of the run is reported, CLEAN or flagged, so the run exits
+# 2 when a flagged input was scanned before the error as well.
+@pytest.mark.parametrize("flags", [["--quiet"], ["--json"], []], ids=["quiet", "json", "report"])
+def test_a_pattern_error_ends_the_run_with_exit_2_and_no_verdict(
+    tmp_path, monkeypatch, capsys, flags
+):
+    marker = "markerthepatterncannotrunon"
+    pattern = next(p for p in PATTERNS if p.id == "bearer-token")
+    monkeypatch.setattr(pattern, "regex", _RaisingRegex(pattern.regex, marker))
+    clean = tmp_path / "clean.txt"
+    clean.write_text("nothing sensitive in this line\n")
+    flagged = tmp_path / "flagged.txt"
+    flagged.write_text("Customer SSN 078-05-1120 on file\n")
+    marked = tmp_path / "marked.txt"
+    marked.write_text(f"this line holds the {marker}\n")
+    for files in ([clean, marked], [clean, flagged, marked]):
+        monkeypatch.setattr(sys, "argv", ["aicomply", "scan", *map(str, files), *flags])
+        with pytest.raises(SystemExit) as exited:
+            main()
+        captured = capsys.readouterr()
+        assert (exited.value.code, captured.out, captured.err) == (
+            2,
+            "",
+            "aicomply: maximum recursion depth exceeded\n",
         )
 
 
