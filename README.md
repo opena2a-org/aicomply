@@ -38,17 +38,19 @@ Verdict: VIOLATION  ·  1 finding across 1 input. Block, redact, or log before t
 The CLI prints a detected value's type and none of its characters, so nothing it writes
 to your terminal or logs reveals the value.
 
-Exit code is `0` for CLEAN, `1` when anything is flagged, and `2` when the scan reached no verdict (a usage error, no
-input, or an input it could not scan in full), so a CI gate passes on `0` only:
-[exit codes](docs/commands.md#exit-codes).
+Exit code is `0` for `CLEAN`, `1` when anything is flagged, and `2` when the scan
+reached no verdict, for example on no input or on an input it could not read or evaluate
+in full. A gate passes on `0` only ([exit codes](docs/commands.md#exit-codes)).
 
 ```bash
 cat transcript.log | npx @opena2a/aicomply scan --json   # machine-readable
 git diff --cached --quiet || git diff --cached | npx @opena2a/aicomply scan -q
 ```
 
-The second line skips the scan when nothing is staged (an empty diff is no input and exits `2`) and otherwise
-exits with the scan's own code, so it fails on anything but `0`, in a git hook and in a CI step alike.
+When nothing is staged, the second line exits `0` without running the scan, since an
+empty diff is no input and the scan would exit `2`. Otherwise it exits with the scan's
+own code, so a git hook that ends with it, or a CI step that runs it, fails on anything
+but `0`.
 
 The regex layer does not detect email addresses, phone numbers, postal addresses, dates of birth, names, or a request phrased to leak data ("summarize all our user emails"): [what it does not detect](docs/detection.md#what-this-package-does-not-detect).
 
