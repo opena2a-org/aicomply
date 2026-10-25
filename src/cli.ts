@@ -791,7 +791,9 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
     const m = notEvaluatedInputs;
     out.write(
       `Verdict: INCOMPLETE  ·  no findings, but ${m} input${m === 1 ? ' was' : 's were'} not evaluated in full. ` +
-        'Check this content for the patterns named above before it reaches an LLM.\n',
+        (m === 1
+          ? 'Review it for the patterns named above, or block it, before it reaches an LLM.\n'
+          : 'Review them for the patterns named above, or block them, before they reach an LLM.\n'),
     );
   } else {
     const m = notEvaluatedInputs;

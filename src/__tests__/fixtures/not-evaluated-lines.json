@@ -48,11 +48,11 @@
   "incompleteVerdictLines": [
     {
       "notEvaluatedInputs": 1,
-      "line": "Verdict: INCOMPLETE  ·  no findings, but 1 input was not evaluated in full. Check this content for the patterns named above before it reaches an LLM."
+      "line": "Verdict: INCOMPLETE  ·  no findings, but 1 input was not evaluated in full. Review it for the patterns named above, or block it, before it reaches an LLM."
     },
     {
       "notEvaluatedInputs": 2,
-      "line": "Verdict: INCOMPLETE  ·  no findings, but 2 inputs were not evaluated in full. Check this content for the patterns named above before it reaches an LLM."
+      "line": "Verdict: INCOMPLETE  ·  no findings, but 2 inputs were not evaluated in full. Review them for the patterns named above, or block them, before they reach an LLM."
     }
   ],
   "flaggedVerdictLines": [
