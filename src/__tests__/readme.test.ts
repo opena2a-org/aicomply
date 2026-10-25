@@ -165,10 +165,11 @@ function literal(source: string): unknown {
 }
 
 describe('README', () => {
-  it('opens with the OpenA2A family header in lines 1-6', () => {
-    const header = LINES.slice(0, 6);
+  it('opens with the OpenA2A family header in lines 1-9', () => {
+    // Title, badge row, then the family line, whose lead is the organization page.
+    const header = LINES.slice(0, 9);
     expect(
-      header.some((l) => l.startsWith('> **[OpenA2A](https://github.com/opena2a-org/opena2a)**: ')),
+      header.some((l) => l.startsWith('> **[OpenA2A](https://github.com/opena2a-org)**: ')),
     ).toBe(true);
   });
 
