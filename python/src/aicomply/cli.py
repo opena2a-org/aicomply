@@ -516,10 +516,17 @@ def _verdict_line(
         return "Verdict: CLEAN  ·  no findings from the layers that ran."
     m = not_evaluated_inputs
     if worst == "INCOMPLETE":
+        if m == 1:
+            review = (
+                "Review it for the patterns named above, or block it, before it reaches an LLM."
+            )
+        else:
+            review = (
+                "Review them for the patterns named above, or block them, before they reach an LLM."
+            )
         return (
             f"Verdict: INCOMPLETE  ·  no findings, but {m} input"
-            f"{' was' if m == 1 else 's were'} not evaluated in full. "
-            "Check this content for the patterns named above before it reaches an LLM."
+            f"{' was' if m == 1 else 's were'} not evaluated in full. {review}"
         )
     not_evaluated = "" if m == 0 else f"; {m} input{'' if m == 1 else 's'} not evaluated in full"
     return (
