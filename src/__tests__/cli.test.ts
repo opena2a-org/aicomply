@@ -2268,5 +2268,27 @@ require.extensions['.ts'] = (module, filename) => {
         bash: [1, 'VIOLATION\n', ''],
       });
     }, 60_000);
+
+    // A CI step checks out commits and stages nothing, so there the line takes
+    // its `git diff --cached --quiet` branch and never runs the scan, whatever
+    // the commits hold. The README tells a CI step to pipe the diff of the
+    // commits it checks to the scan instead, and shows `git show HEAD` for the
+    // checked-out commit.
+    posixIt('exits 0 without scanning in a fresh clone whose head commit is flagged, which git show HEAD piped to the scan reports', () => {
+      const origin = repository('gate-ci-origin', 'Customer SSN 078-05-1120 on file\n');
+      const git = (cwd: string, args: string[]) =>
+        execFileSync('git', args, { cwd, env: gitEnv, stdio: 'pipe', encoding: 'utf8' });
+      git(origin, ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'flagged']);
+      const clone = join(dir, 'gate-ci-clone');
+      git(dir, ['clone', '-q', origin, clone]);
+      expect(git(clone, ['diff', '--cached', '--name-only'])).toBe('');
+      expect(gate(clone)).toEqual({ sh: [0, '', ''], bash: [0, '', ''] });
+      const shown = spawnSync(
+        'bash',
+        ['--noprofile', '--norc', '-eo', 'pipefail', '-c', 'git show HEAD | npx @opena2a/aicomply scan -q'],
+        { cwd: clone, env: gitEnv, encoding: 'utf8' },
+      );
+      expect([shown.status, shown.stdout, shown.stderr]).toEqual([1, 'VIOLATION\n', '']);
+    }, 60_000);
   });
 });
