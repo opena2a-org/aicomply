@@ -12,6 +12,9 @@
  *   - The same for a package added with session.addSourcePackages() after
  *     create(), with no Registry request made by comply()
  *   - Cache miss => signals present, verdict unchanged
+ *   - No alert on a supply-chain alert page that is not complete for the
+ *     package => partial, with the page figures; an alert on it => DENY; a
+ *     complete unfiltered page or the package's own page => a negative
  *   - Unreachable Registry and absent package => distinct registrySignals.status
  *   - onRegistryUnknown => miss / error becomes VIOLATION or DENY via comply()
  *   - Empty content and an empty source package name still get the lookup
@@ -275,6 +278,24 @@ describe('comply(): cache miss handling', () => {
 describe('comply(): a package the Registry cannot vouch for', () => {
   const BASE_URL = 'https://registry.invalid';
 
+  /**
+   * The supply-chain alert page as the production Registry serves it: the
+   * alerts, the size of the population they come from (`total`), that
+   * population (no name or type filter: every package), the most alerts a
+   * page carries, and the state of the detector that writes the alerts.
+   * `overrides` replaces any of them.
+   */
+  function alertPage(alerts: unknown[], overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      alerts,
+      total: alerts.length,
+      population: { name: null, packageType: null },
+      limit: 1000,
+      producer: { state: 'current' },
+      ...overrides,
+    };
+  }
+
   /** Registry endpoints refuse the connection, as an unreachable host does. */
   function registryUnreachable(): void {
     jest.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
@@ -288,7 +309,7 @@ describe('comply(): a package the Registry cannot vouch for', () => {
         return new Response(JSON.stringify({ agents: [] }));
       }
       if (url === `${BASE_URL}/api/v1/intelligence/alerts?type=supply_chain`) {
-        return new Response(JSON.stringify({ alerts: [], total: 0 }));
+        return new Response(JSON.stringify(alertPage([])));
       }
       throw new TypeError('fetch failed');
     });
@@ -316,7 +337,7 @@ describe('comply(): a package the Registry cannot vouch for', () => {
           reason: 'typosquatting',
           publishedAt: '2026-10-18T00:00:00Z',
         };
-        return new Response(JSON.stringify({ alerts: [alert], total: 1 }));
+        return new Response(JSON.stringify(alertPage([alert])));
       }
       throw new TypeError('fetch failed');
     });
@@ -344,11 +365,12 @@ describe('comply(): a package the Registry cannot vouch for', () => {
   /**
    * Registry endpoints answer as production does: the fleet request that
    * names no package is refused with 400, one that names a package and a
-   * type gets that package's record (no fleet events for any package but
-   * suspicious-agent), and the alert list loads empty. Every other URL
-   * refuses.
+   * type gets that package's record (fleet events for suspicious-agent, with
+   * an anomaly score above 0.30, and for calm-agent, with one below it; none
+   * for any other package), and the alert request gets `page`, by default a
+   * complete page with no alerts. Every other URL refuses.
    */
-  function registryAnswersFleetPerPackage(): void {
+  function registryAnswersFleetPerPackage(page: Record<string, unknown> = alertPage([])): void {
     jest.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = new URL(String(input));
       if (`${url.origin}${url.pathname}` === `${BASE_URL}/api/v1/registry/fleet/anomaly-signal`) {
@@ -361,7 +383,9 @@ describe('comply(): a package the Registry cannot vouch for', () => {
         }
         const events = name === 'suspicious-agent'
           ? { anomalyScore: 0.55, eventCount: 12, lastSeenAt: '2026-10-18T00:00:00Z' }
-          : { anomalyScore: 0, eventCount: 0, lastSeenAt: null };
+          : name === 'calm-agent'
+            ? { anomalyScore: 0.1, eventCount: 3, lastSeenAt: '2026-10-18T00:00:00Z' }
+            : { anomalyScore: 0, eventCount: 0, lastSeenAt: null };
         return new Response(JSON.stringify({
           name,
           type,
@@ -372,7 +396,7 @@ describe('comply(): a package the Registry cannot vouch for', () => {
         }));
       }
       if (url.href === `${BASE_URL}/api/v1/intelligence/alerts?type=supply_chain`) {
-        return new Response(JSON.stringify({ alerts: [], total: 0 }));
+        return new Response(JSON.stringify(page));
       }
       throw new TypeError('fetch failed');
     });
@@ -440,6 +464,131 @@ describe('comply(): a package the Registry cannot vouch for', () => {
     expect(quiet.violations.map(v => v.type)).toEqual(['REGISTRY_UNKNOWN']);
     // addSourcePackages() sent the requests; comply() sent none (AC-005).
     expect(calls).toHaveLength(fetched);
+  });
+
+  /** A supply-chain alert for `name`. */
+  function alertFor(name: string, id: string): Record<string, unknown> {
+    return {
+      id,
+      name,
+      type: 'mcp_server',
+      severity: 'critical',
+      reason: 'typosquatting',
+      publishedAt: '2026-10-18T00:00:00Z',
+    };
+  }
+
+  /** `count` alerts, each for a package of its own, none of them one the tests look up. */
+  function otherAlerts(count: number): Record<string, unknown>[] {
+    return Array.from({ length: count }, (_, i) => alertFor(`other-package-${i}`, `other-${i}`));
+  }
+
+  /**
+   * A page cut from a larger population: 1,000 alerts, the limit, of 14,002.
+   * `rows` replaces the 1,000 alerts, which are for other packages.
+   */
+  function cutPage(rows: unknown[] = otherAlerts(1000)): Record<string, unknown> {
+    return alertPage(rows, { total: 14002 });
+  }
+
+  const LISTED = [
+    { name: 'calm-agent', type: 'mcp_server' },
+    { name: 'suspicious-agent', type: 'mcp_server' },
+  ];
+
+  it('takes no negative from a page that holds fewer alerts than its total: the lookup is partial, with both numbers', async () => {
+    registryAnswersFleetPerPackage(cutPage());
+    const session = await ClassificationSession.create({ baseUrl: BASE_URL, sourcePackages: LISTED });
+
+    const calm = await session.comply({ content: 'hello world', sourcePackage: 'calm-agent', useGuard: false });
+    const unlisted = await session.comply({ content: 'hello world', sourcePackage: 'any-package', useGuard: false });
+    const denied = await session.comply({
+      content: 'hello world',
+      sourcePackage: 'calm-agent',
+      useGuard: false,
+      onRegistryUnknown: 'deny',
+    });
+
+    const page = {
+      reason: 'the page holds 1000 of 14002 alerts',
+      alertsHeld: 1000,
+      total: 14002,
+      limit: 1000,
+      producerState: 'current',
+    };
+    expect(calm.registrySignals?.status).toBe('partial');
+    expect(calm.registrySignals?.supplyChainPage).toEqual(page);
+    expect(calm.registrySignals?.supplyChainBlock).toBe(false);
+    expect(calm.registrySignals?.fleetAnomalyScore).toBe(0.1);
+    // Unknown, as a miss is: the verdict stays as classified unless the caller asks.
+    expect(calm.verdict).toBe('CLEAN');
+    expect(unlisted.registrySignals?.status).toBe('partial');
+    expect(unlisted.registrySignals?.supplyChainPage).toEqual(page);
+    expect(denied.verdict).toBe('DENY');
+    expect(denied.violations.map(v => [v.type, v.value])).toEqual([['REGISTRY_UNKNOWN', 'status=partial']]);
+  });
+
+  it('blocks a package whose alert is on that page, listed or not', async () => {
+    registryAnswersFleetPerPackage(cutPage([
+      ...otherAlerts(998),
+      alertFor('calm-agent', 'sca-listed'),
+      alertFor('blocked-pkg', 'sca-unlisted'),
+    ]));
+    const session = await ClassificationSession.create({ baseUrl: BASE_URL, sourcePackages: LISTED });
+
+    for (const [sourcePackage, id] of [['calm-agent', 'sca-listed'], ['blocked-pkg', 'sca-unlisted']]) {
+      const result = await session.comply({ content: 'hello world', sourcePackage, useGuard: false });
+      expect(result.verdict).toBe('DENY');
+      expect(result.registrySignals?.status).toBe('hit');
+      expect(result.registrySignals?.supplyChainBlock).toBe(true);
+      expect(result.violations.map(v => [v.type, v.value])).toEqual([['SUPPLY_CHAIN_ALERT', id]]);
+    }
+  });
+
+  it('takes a negative from a complete unfiltered page', async () => {
+    registryAnswersFleetPerPackage(alertPage(otherAlerts(3)));
+    const session = await ClassificationSession.create({ baseUrl: BASE_URL, sourcePackages: LISTED });
+
+    const calm = await session.comply({ content: 'hello world', sourcePackage: 'calm-agent', useGuard: false });
+
+    expect(calm.verdict).toBe('CLEAN');
+    expect(calm.registrySignals?.status).toBe('hit');
+    expect(calm.registrySignals?.supplyChainBlock).toBe(false);
+    expect(calm.registrySignals?.supplyChainPage).toBeUndefined();
+  });
+
+  it('takes a negative from the page for the package itself, and none from it for another package', async () => {
+    registryAnswersFleetPerPackage(alertPage([], { population: { name: 'calm-agent', packageType: 'mcp_server' } }));
+    const session = await ClassificationSession.create({ baseUrl: BASE_URL, sourcePackages: LISTED });
+
+    const calm = await session.comply({ content: 'hello world', sourcePackage: 'calm-agent', useGuard: false });
+    const other = await session.comply({ content: 'hello world', sourcePackage: 'suspicious-agent', useGuard: false });
+
+    expect(calm.verdict).toBe('CLEAN');
+    expect(calm.registrySignals?.status).toBe('hit');
+    expect(other.registrySignals?.status).toBe('partial');
+    expect(other.registrySignals?.supplyChainPage?.reason).toBe('the page counts another population');
+    // The fleet anomaly threshold still applies to a partial lookup.
+    expect(other.verdict).toBe('VIOLATION');
+    expect(other.registrySignals?.fleetAnomalyScore).toBe(0.55);
+    expect(other.violations.map(v => v.type)).toEqual(['FLEET_ANOMALY_ELEVATED']);
+  });
+
+  it('names a producer state that is not current on every verdict that found no alert on the page', async () => {
+    registryAnswersFleetPerPackage(alertPage([], { producer: { state: 'stale' } }));
+    const session = await ClassificationSession.create({ baseUrl: BASE_URL, sourcePackages: LISTED });
+
+    for (const sourcePackage of ['calm-agent', 'suspicious-agent', 'any-package']) {
+      const result = await session.comply({ content: 'hello world', sourcePackage, useGuard: false });
+      expect(result.registrySignals?.status).toBe('partial');
+      expect(result.registrySignals?.supplyChainPage).toEqual({
+        reason: "the page's producer state is 'stale'",
+        alertsHeld: 0,
+        total: 0,
+        limit: 1000,
+        producerState: 'stale',
+      });
+    }
   });
 
   it('tells an unreachable Registry from a package absent from its index', async () => {

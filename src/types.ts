@@ -7,6 +7,7 @@ import type {
   RegistryCacheOptions,
   RegistryLookupResult,
   RegistrySourcePackage,
+  PartialSupplyChainPage,
 } from './registry';
 import type { NormalizationStep } from './normalize/types';
 import type { NanoMindAdapterOptions } from './classifier/guard-client/nanomind-adapter';
@@ -15,20 +16,30 @@ export type { RegistryCacheOptions, RegistrySourcePackage };
 /**
  * What the Registry cache had for a source package. Derived structurally
  * from `RegistryLookupResult['status']` so the two cannot drift.
- *   - 'hit':   the package has a fleet signal, from the fleet index or from
- *              the answer for it as a listed package, or has supply-chain
- *              alerts, whether or not the fleet index loaded.
- *   - 'miss':  the fleet index or the answer for the package as a listed
- *              package loaded, and the package has neither a fleet signal
- *              nor an alert. An answer that reports no fleet events is no
- *              fleet signal.
- *   - 'error': neither the fleet index nor an answer for the package has
- *              loaded (cache not warmed, the package not listed, or every
- *              fleet fetch for it so far failed) and the package has no
- *              supply-chain alert, or no cache was supplied to look the
- *              package up in.
- * A listed package is one in the cache's `sourcePackages` option or added
- * with `addSourcePackages()`.
+ *   - 'hit':     the package has supply-chain alerts, whether or not the
+ *                fleet index loaded, or has a fleet signal, from the fleet
+ *                index or from the answer for it as a listed package, and no
+ *                alert on a supply-chain alert page complete for it.
+ *   - 'miss':    the fleet index or the answer for the package as a listed
+ *                package loaded, and the package has neither a fleet signal
+ *                nor an alert. An answer that reports no fleet events is no
+ *                fleet signal.
+ *   - 'partial': the package has no alert on the supply-chain alert page the
+ *                cache holds, and that page is not complete for it: it
+ *                states no producer state or one that is not 'current', no
+ *                total or a total above the alerts it carries, or no
+ *                population or one that is neither every package nor this
+ *                one (`registrySignals.supplyChainPage` says which). A
+ *                package with a fleet signal is partial too while no page
+ *                has loaded.
+ *   - 'error':   neither the fleet index nor an answer for the package has
+ *                loaded (cache not warmed, the package not listed, or every
+ *                fleet fetch for it so far failed) and the package has no
+ *                supply-chain alert, or no cache was supplied to look the
+ *                package up in.
+ * 'miss' and 'error' are reported only where 'partial' is not. A listed
+ * package is one in the cache's `sourcePackages` option or added with
+ * `addSourcePackages()`.
  */
 export type RegistryLookupStatus = RegistryLookupResult['status'];
 
@@ -146,11 +157,11 @@ export interface ComplyOptions {
   useGuard?: boolean;
   /**
    * What to do when the Registry cannot vouch for `sourcePackage`: the lookup
-   * is a miss or an error (see `registrySignals.status`). Unset, the verdict
-   * is left as the classifiers set it. 'violation' raises CLEAN to VIOLATION;
-   * 'deny' sets DENY. Either appends a REGISTRY_UNKNOWN violation. With
-   * `sourcePackage` set and no `registryCache`, or set to an empty string, the
-   * lookup counts as an error. Empty content is looked up as well.
+   * is a miss, a partial or an error (see `registrySignals.status`). Unset,
+   * the verdict is left as the classifiers set it. 'violation' raises CLEAN to
+   * VIOLATION; 'deny' sets DENY. Either appends a REGISTRY_UNKNOWN violation.
+   * With `sourcePackage` set and no `registryCache`, or set to an empty
+   * string, the lookup counts as an error. Empty content is looked up as well.
    */
   onRegistryUnknown?: RegistryUnknownAction;
   /**
@@ -211,7 +222,9 @@ export interface ComplyResult {
      * Outcome of the Registry lookup. Always set when registrySignals is
      * present. Only 'hit' means the Registry had data for the package: on
      * 'miss' and 'error' the scores below are null, and the verdict reflects
-     * the lookup only when the caller set `onRegistryUnknown`.
+     * the lookup only when the caller set `onRegistryUnknown`. 'partial' is
+     * handled as 'miss' is, except that a fleet signal the package has still
+     * sets the scores and the threshold below.
      */
     status?: RegistryLookupStatus;
     fleetAnomalyScore: number | null;
@@ -222,6 +235,12 @@ export interface ComplyResult {
     thresholdDelta: number;
     supplyChainBlock: boolean;
     packageName?: string;
+    /**
+     * Set only when status is 'partial': the supply-chain alert page the
+     * cache holds, which has no alert for the package and is not complete for
+     * it, with the reason and the page's figures (alerts held and total).
+     */
+    supplyChainPage?: PartialSupplyChainPage;
   };
   /**
    * The input as received, byte-identical to the caller's `content`.

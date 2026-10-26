@@ -116,10 +116,12 @@ export type { DualLayerOptions } from './classifier/dual-layer';
  *
  * A package the Registry has no data for, or a Registry that could not be
  * reached, does not change the verdict by default: `registrySignals.status`
- * reports 'miss' or 'error' (AC-002). Set `onRegistryUnknown` to 'violation'
- * or 'deny' to have either one decide the verdict. For empty content, a
- * supplied Guard result is verified and the Registry step runs too, followed
- * by the policy pack, and an empty `sourcePackage` counts as a lookup error.
+ * reports 'miss' or 'error' (AC-002), and 'partial' for a package with no
+ * alert on a supply-chain alert page that is not complete for it. Set
+ * `onRegistryUnknown` to 'violation' or 'deny' to have any of them decide
+ * the verdict. For empty content, a supplied Guard result is verified and the
+ * Registry step runs too, followed by the policy pack, and an empty
+ * `sourcePackage` counts as a lookup error.
  *
  * `options.policyPack` names a built-in pack ('default' is the one there is);
  * a pack object goes on the second argument as `dualLayerOptions.policyPack`.

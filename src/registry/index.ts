@@ -33,10 +33,11 @@ import type {
   RegistrySourcePackage,
   FleetAnomalySignal,
   SupplyChainAlert,
+  PartialSupplyChainPage,
 } from './types';
 
 export type { RegistryIntelligence, RegistryLookupResult, FleetAnomalySignal, SupplyChainAlert };
-export type { RegistryCacheOptions, RegistrySourcePackage };
+export type { RegistryCacheOptions, RegistrySourcePackage, PartialSupplyChainPage };
 
 interface FleetAnomalyResponse {
   agents?: FleetAnomalySignal[];
@@ -44,9 +45,40 @@ interface FleetAnomalyResponse {
   [key: string]: unknown;
 }
 
+/**
+ * The Registry's answer to the supply-chain alert request. The fields beside
+ * the alerts are read as sent and checked before use.
+ */
 interface SupplyChainResponse {
   alerts: SupplyChainAlert[];
-  total: number;
+  /** The size of the population the alerts come from, counted before the limit cut. */
+  total?: unknown;
+  /** The most alerts a page carries. */
+  limit?: unknown;
+  /** What `total` counts: `name` and `packageType`, each null when the request set no such filter. */
+  population?: unknown;
+  /** The detector that writes the alerts: `state` is 'current' when its latest cycle is recent and complete. */
+  producer?: unknown;
+}
+
+/**
+ * What a page's total counts: every package (no name or type filter), the
+ * package with the lowercased `name` (a name and a type), another population
+ * (any other filter), or nothing the page states.
+ */
+type PagePopulation =
+  | { kind: 'every package' }
+  | { kind: 'package'; name: string }
+  | { kind: 'another' }
+  | { kind: 'unstated' };
+
+/** The supply-chain alert page the cache holds, as the page states itself. */
+interface HeldSupplyChainPage {
+  alertsHeld: number;
+  total: number | null;
+  limit: number | null;
+  producerState: string | null;
+  population: PagePopulation;
 }
 
 /**
@@ -76,6 +108,12 @@ export class RegistryIntelligenceCache {
    */
   private fleetIndex: Map<string, FleetAnomalySignal> = new Map();
   private supplyChainIndex: Map<string, SupplyChainAlert[]> = new Map();
+  /**
+   * The page supplyChainIndex was read from, as it states itself; null until
+   * a page loads. A package with no alert in the index has none only when this
+   * page is complete for it (supplyChainGap()).
+   */
+  private supplyChainPage: HeldSupplyChainPage | null = null;
   /** Answers to the fleet request for each listed package. */
   private packageFleet: Map<string, PackageFleetAnswer> = new Map();
   /** Fleet requests for listed packages that have not settled, by key. */
@@ -156,8 +194,13 @@ export class RegistryIntelligenceCache {
   /**
    * Look up Registry intelligence for a package.
    *
-   * Returns a typed result - callers MUST handle the 'miss' and 'error'
-   * cases as elevated risk, not as clean (AC-002).
+   * Returns a typed result - callers MUST handle the 'miss', 'partial' and
+   * 'error' cases as elevated risk, not as clean (AC-002).
+   *
+   * An alert for the package on the supply-chain alert page is a hit. No alert
+   * for it shows it has none only when the page is complete for it; otherwise
+   * the lookup is 'partial', with the page's figures, never a hit with no
+   * alerts.
    *
    * This method is intentionally synchronous after warm-start (cache read).
    * It does NOT trigger network I/O to preserve hot-path latency (AC-005).
@@ -176,6 +219,28 @@ export class RegistryIntelligenceCache {
     const answer = this.packageFleet.get(key);
     const fleetSignal = answer?.signal ?? this.fleetIndex.get(key) ?? null;
     const supplyAlerts = this.supplyChainIndex.get(key) ?? null;
+
+    // No alert for the package on a page that is not complete for it is no
+    // negative: the lookup is partial, whatever the fleet data. Before any
+    // page has loaded, a package with a fleet signal, which would otherwise be
+    // a hit with no alerts, is partial too; one without stays an error or a
+    // miss, as below.
+    if (supplyAlerts === null && (this.supplyChainPage !== null || fleetSignal !== null)) {
+      const reason = supplyChainGap(this.supplyChainPage, key);
+      if (reason !== null) {
+        return {
+          status: 'partial',
+          supplyChainPage: {
+            reason,
+            alertsHeld: this.supplyChainPage?.alertsHeld ?? 0,
+            total: this.supplyChainPage?.total ?? null,
+            limit: this.supplyChainPage?.limit ?? null,
+            producerState: this.supplyChainPage?.producerState ?? null,
+          },
+          fleetAnomalySignal: fleetSignal,
+        };
+      }
+    }
 
     // The supply-chain hard block needs only the alert list, so an alert for
     // the package is a hit whether or not the fleet index loaded. Without the
@@ -239,6 +304,7 @@ export class RegistryIntelligenceCache {
     this.cache.clear();
     this.fleetIndex.clear();
     this.supplyChainIndex.clear();
+    this.supplyChainPage = null;
     this.packageFleet.clear();
     this.lastFleetFetch = 0;
     this.lastSupplyChainFetch = 0;
@@ -380,6 +446,7 @@ export class RegistryIntelligenceCache {
         index.set(key, existing);
       }
       this.supplyChainIndex = index;
+      this.supplyChainPage = readSupplyChainPage(body, alerts.length);
       this.lastSupplyChainFetch = Date.now();
     } catch {
       // Network/timeout error - leave lastSupplyChainFetch unchanged
@@ -387,6 +454,72 @@ export class RegistryIntelligenceCache {
       clearTimeout(timer);
     }
   }
+}
+
+/** The page's own statement of what it answers for, read from the Registry's answer. */
+function readSupplyChainPage(body: SupplyChainResponse, alertsHeld: number): HeldSupplyChainPage {
+  const state = isRecord(body.producer) ? body.producer.state : undefined;
+  return {
+    alertsHeld,
+    total: isCount(body.total) ? body.total : null,
+    limit: isCount(body.limit) ? body.limit : null,
+    producerState: typeof state === 'string' ? state : null,
+    population: readPopulation(body.population),
+  };
+}
+
+/**
+ * What a page's `population` says its total counts. A filter the request did
+ * not set is null: no name and no type is every package, and a name with a
+ * type is that package.
+ */
+function readPopulation(population: unknown): PagePopulation {
+  if (!isRecord(population)) return { kind: 'unstated' };
+  const { name, packageType } = population;
+  const unset = (value: unknown): boolean => value === null || value === undefined;
+  if (unset(name) && unset(packageType)) return { kind: 'every package' };
+  if (typeof name === 'string' && name !== '' && typeof packageType === 'string' && packageType !== '') {
+    return { kind: 'package', name: name.toLowerCase() };
+  }
+  return { kind: 'another' };
+}
+
+/**
+ * Why `page` cannot show that the package whose lowercased name is `key` has
+ * no open supply-chain alert, or null when it can. A page can only when it is
+ * complete for the package: its producer state is 'current', its total is not
+ * above the alerts it carries, and its population is every package or that
+ * package.
+ */
+function supplyChainGap(page: HeldSupplyChainPage | null, key: string): string | null {
+  if (page === null) return 'no page has loaded';
+  const gaps: string[] = [];
+  if (page.total === null) {
+    gaps.push('the page states no total');
+  } else if (page.total > page.alertsHeld) {
+    gaps.push(`the page holds ${page.alertsHeld} of ${page.total} alerts`);
+  }
+  if (page.producerState === null) {
+    gaps.push('the page states no producer state');
+  } else if (page.producerState !== 'current') {
+    gaps.push(`the page's producer state is ${showString(page.producerState, "'")}`);
+  }
+  const { population } = page;
+  if (population.kind === 'unstated') {
+    gaps.push('the page states no population');
+  } else if (population.kind === 'another' || (population.kind === 'package' && population.name !== key)) {
+    gaps.push('the page counts another population');
+  }
+  return gaps.length > 0 ? gaps.join('; ') : null;
+}
+
+/** Whether `value` is a count: a whole number that is not negative. */
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** Whether `body` is a fleet signal for the package whose lowercased name is `key`. */

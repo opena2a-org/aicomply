@@ -11,6 +11,9 @@
  *     warm() could not request is rejected
  *   - addSourcePackages(): a package first seen after the cache was created
  *     is listed and requested as one in sourcePackages is
+ *   - a package with no alert on the supply-chain alert page has none only
+ *     when the page is complete for it; otherwise the lookup is partial, with
+ *     the page's figures, and never a hit with no alerts (AC-002)
  *   - AC-005: lookup() does no network I/O
  *   - cache TTL expiry
  *   - lookup before warm returns error
@@ -41,6 +44,41 @@ const SUPPLY_ALERT: SupplyChainAlert = {
   publishedAt: '2026-04-13T12:00:00Z',
 };
 
+/**
+ * The supply-chain alert page as the production Registry serves it: the
+ * alerts, the size of the population they come from (`total`), that
+ * population (no name or type filter: every package), the most alerts a page
+ * carries, and the state of the detector that writes the alerts. `overrides`
+ * replaces any of them.
+ */
+function alertPage(alerts: SupplyChainAlert[], overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    alerts,
+    total: alerts.length,
+    population: { name: null, packageType: null },
+    limit: 1000,
+    producer: { state: 'current' },
+    ...overrides,
+  };
+}
+
+/** `count` alerts, each for a package of its own, none of them example-agent. */
+function otherAlerts(count: number): SupplyChainAlert[] {
+  return Array.from({ length: count }, (_, i) => ({
+    ...SUPPLY_ALERT,
+    id: `other-${i}`,
+    name: `other-package-${i}`,
+  }));
+}
+
+/**
+ * A page cut from a larger population: 1,000 alerts, the limit, of 14,002.
+ * `rows` replaces the 1,000 alerts, which are for other packages.
+ */
+function cutPage(rows: SupplyChainAlert[] = otherAlerts(1000)): Record<string, unknown> {
+  return alertPage(rows, { total: 14002 });
+}
+
 // ---------------------------------------------------------------------------
 // Helpers to mock fetch
 // ---------------------------------------------------------------------------
@@ -58,7 +96,7 @@ function mockFetch(
     if (url.includes('intelligence/alerts')) {
       return Promise.resolve({
         ok: true,
-        json: () => Promise.resolve({ alerts: supplyAlerts, total: supplyAlerts.length }),
+        json: () => Promise.resolve(alertPage(supplyAlerts)),
       });
     }
     return Promise.resolve({ ok: false });
@@ -89,7 +127,7 @@ function mockFleetRefused(supplyAlerts: SupplyChainAlert[]): void {
     if (url.includes('intelligence/alerts')) {
       return Promise.resolve({
         ok: true,
-        json: () => Promise.resolve({ alerts: supplyAlerts, total: supplyAlerts.length }),
+        json: () => Promise.resolve(alertPage(supplyAlerts)),
       });
     }
     return Promise.resolve({ ok: false });
@@ -142,12 +180,14 @@ function asProduction(name: string, type: string): FleetAnswer {
 /**
  * Answer as the production Registry does: a fleet request that names a
  * package and a type gets `answer(name, type)`, and the supply-chain alert
- * list loads. The fleet request that names no package is refused with 400,
- * or, given `index`, answered with it as an older Registry did.
+ * request gets `page`: a list of alerts is served as a complete page of them,
+ * an object is served as it is, and null is answered with 503. The fleet
+ * request that names no package is refused with 400, or, given `index`,
+ * answered with it as an older Registry did.
  */
 function mockFleetPerPackage(
   answer: (name: string, type: string) => FleetAnswer,
-  supplyAlerts: SupplyChainAlert[] = [],
+  page: SupplyChainAlert[] | Record<string, unknown> | null = [],
   index?: FleetAnomalySignal[],
 ): void {
   global.fetch = jest.fn().mockImplementation((url: string) => {
@@ -170,9 +210,12 @@ function mockFleetPerPackage(
       });
     }
     if (pathname === '/api/v1/intelligence/alerts') {
+      if (page === null) {
+        return Promise.resolve({ ok: false, status: 503 });
+      }
       return Promise.resolve({
         ok: true,
-        json: () => Promise.resolve({ alerts: supplyAlerts, total: supplyAlerts.length }),
+        json: () => Promise.resolve(Array.isArray(page) ? alertPage(page) : page),
       });
     }
     return Promise.resolve({ ok: false });
@@ -682,6 +725,235 @@ describe('RegistryIntelligenceCache', () => {
       await Promise.all([cache.warm(), cache.warm(), cache.warm()]);
       // 2 endpoints, deduplicated to 1 concurrent round
       expect(callCount).toBe(2);
+    });
+  });
+
+  describe('a package with no alert on the page has none only when the page is complete for it', () => {
+    const listed: RegistryCacheOptions = {
+      sourcePackages: [
+        { name: 'example-agent', type: 'mcp_server' },
+        { name: 'quiet-agent', type: 'mcp_server' },
+      ],
+    };
+    const exampleSignal = expect.objectContaining({ name: 'example-agent', anomalyScore: 0.42 });
+
+    it('is partial, with both numbers, on a page that holds fewer alerts than its total', async () => {
+      mockFleetPerPackage(asProduction, cutPage());
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      const result = cache.lookup('example-agent');
+      expect(result).toEqual({
+        status: 'partial',
+        fleetAnomalySignal: exampleSignal,
+        supplyChainPage: {
+          reason: 'the page holds 1000 of 14002 alerts',
+          alertsHeld: 1000,
+          total: 14002,
+          limit: 1000,
+          producerState: 'current',
+        },
+      });
+      // Never a hit with an empty alert list.
+      expect(result.status === 'hit' && result.intelligence.supplyChainAlerts?.length === 0).toBe(false);
+    });
+
+    it.each([
+      ['listed with no fleet events', 'quiet-agent'],
+      ['not listed', 'unknown-pkg'],
+    ])('is partial on that page for a package %s as well', async (_case, name) => {
+      mockFleetPerPackage(asProduction, cutPage());
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      expect(cache.lookup(name)).toEqual({
+        status: 'partial',
+        fleetAnomalySignal: null,
+        supplyChainPage: expect.objectContaining({ alertsHeld: 1000, total: 14002 }),
+      });
+    });
+
+    it('is a hit with its alerts for a package that has one on that page', async () => {
+      mockFleetPerPackage(asProduction, cutPage([...otherAlerts(999), SUPPLY_ALERT]));
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      const result = cache.lookup('Example-Agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.supplyChainAlerts?.map(a => a.id)).toEqual(['alert-001']);
+      }
+    });
+
+    it("is partial on a page from a producer whose state is 'stale', and names the state", async () => {
+      mockFleetPerPackage(asProduction, alertPage([], { producer: { state: 'stale' } }));
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      expect(cache.lookup('example-agent')).toEqual({
+        status: 'partial',
+        fleetAnomalySignal: exampleSignal,
+        supplyChainPage: {
+          reason: "the page's producer state is 'stale'",
+          alertsHeld: 0,
+          total: 0,
+          limit: 1000,
+          producerState: 'stale',
+        },
+      });
+    });
+
+    it.each<[string, Record<string, unknown>, string]>([
+      ["a producer state of 'incomplete'", alertPage([], { producer: { state: 'incomplete' } }), "the page's producer state is 'incomplete'"],
+      ['no producer state', alertPage([], { producer: undefined }), 'the page states no producer state'],
+      ['a producer with no state', alertPage([], { producer: {} }), 'the page states no producer state'],
+      ['no total', alertPage([], { total: undefined }), 'the page states no total'],
+      ['a total that is not a count', alertPage([], { total: '0' }), 'the page states no total'],
+      [
+        'the population of another package',
+        alertPage([], { population: { name: 'other-package', packageType: 'mcp_server' } }),
+        'the page counts another population',
+      ],
+      [
+        'a population named without a type',
+        alertPage([], { population: { name: 'example-agent', packageType: null } }),
+        'the page counts another population',
+      ],
+      [
+        'the population of one type',
+        alertPage([], { population: { name: null, packageType: 'mcp_server' } }),
+        'the page counts another population',
+      ],
+      ['no population', alertPage([], { population: undefined }), 'the page states no population'],
+      [
+        'only the alerts and the total',
+        { alerts: [], total: 0 },
+        'the page states no producer state; the page states no population',
+      ],
+    ])('is partial on a page that states %s', async (_case, page, reason) => {
+      mockFleetPerPackage(asProduction, page);
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      expect(cache.lookup('example-agent')).toEqual({
+        status: 'partial',
+        fleetAnomalySignal: exampleSignal,
+        supplyChainPage: expect.objectContaining({ reason, alertsHeld: 0 }),
+      });
+    });
+
+    it('has none on a complete unfiltered page: its total is not above its alerts and its producer is current', async () => {
+      mockFleetPerPackage(asProduction, alertPage(otherAlerts(3)));
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      const result = cache.lookup('example-agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.fleetAnomalySignal?.anomalyScore).toBe(0.42);
+        expect(result.intelligence.supplyChainAlerts).toEqual([]);
+      }
+      expect(cache.lookup('quiet-agent')).toEqual({ status: 'miss' });
+      expect(cache.lookup('unknown-pkg')).toEqual({ status: 'error', reason: 'fleet anomaly signal not loaded' });
+    });
+
+    it("has none on the page for the package itself, and that page shows nothing about another package", async () => {
+      mockFleetPerPackage(
+        asProduction,
+        alertPage([], { population: { name: 'Example-Agent', packageType: 'mcp_server' } }),
+      );
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      const result = cache.lookup('example-agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.supplyChainAlerts).toEqual([]);
+      }
+      expect(cache.lookup('quiet-agent')).toEqual({
+        status: 'partial',
+        fleetAnomalySignal: null,
+        supplyChainPage: {
+          reason: 'the page counts another population',
+          alertsHeld: 0,
+          total: 0,
+          limit: 1000,
+          producerState: 'current',
+        },
+      });
+    });
+
+    it('is partial on the page for the package when that page holds fewer alerts than its total', async () => {
+      mockFleetPerPackage(
+        asProduction,
+        alertPage([], { population: { name: 'example-agent', packageType: 'mcp_server' }, total: 2 }),
+      );
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      expect(cache.lookup('example-agent')).toEqual({
+        status: 'partial',
+        fleetAnomalySignal: exampleSignal,
+        supplyChainPage: expect.objectContaining({ reason: 'the page holds 0 of 2 alerts', alertsHeld: 0, total: 2 }),
+      });
+    });
+
+    it('is partial for a package with a fleet signal while no page has loaded', async () => {
+      mockFleetPerPackage(asProduction, null);
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      expect(cache.lookup('example-agent')).toEqual({
+        status: 'partial',
+        fleetAnomalySignal: exampleSignal,
+        supplyChainPage: {
+          reason: 'no page has loaded',
+          alertsHeld: 0,
+          total: null,
+          limit: null,
+          producerState: null,
+        },
+      });
+      // Without a fleet signal the package stays a miss, as before.
+      expect(cache.lookup('quiet-agent')).toEqual({ status: 'miss' });
+    });
+
+    it('reads each page as it loads: complete after partial, then partial again', async () => {
+      const cache = new RegistryIntelligenceCache(listed);
+
+      mockFleetPerPackage(asProduction, cutPage());
+      await cache.warm();
+      expect(cache.lookup('example-agent').status).toBe('partial');
+
+      mockFleetPerPackage(asProduction, alertPage([]));
+      await cache.warm();
+      expect(cache.lookup('example-agent').status).toBe('hit');
+
+      mockFleetPerPackage(asProduction, cutPage());
+      await cache.warm();
+      expect(cache.lookup('example-agent').status).toBe('partial');
+    });
+
+    it('keeps the last page when a later alert request fails', async () => {
+      const cache = new RegistryIntelligenceCache(listed);
+
+      mockFleetPerPackage(asProduction, cutPage());
+      await cache.warm();
+      mockFleetPerPackage(asProduction, null);
+      await cache.warm();
+
+      expect(cache.lookup('example-agent')).toEqual(
+        expect.objectContaining({ status: 'partial', supplyChainPage: expect.objectContaining({ total: 14002 }) }),
+      );
+    });
+
+    it('forgets the page on clearCache()', async () => {
+      mockFleetPerPackage(asProduction, cutPage());
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+      cache.clearCache();
+
+      expect(cache.lookup('example-agent')).toEqual({ status: 'error', reason: 'registry cache not warmed' });
     });
   });
 });

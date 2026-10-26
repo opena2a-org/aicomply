@@ -38,7 +38,9 @@ export interface RegistryIntelligence {
   fleetAnomalySignal: FleetAnomalySignal | null;
   /**
    * Active supply-chain alerts for this package.
-   * Empty array = no active alerts. null = fetch failed (AC-002: treat as unknown).
+   * Empty array = no active alerts, on an alert page complete for the package
+   * (lookup() reports 'partial' instead on any other page).
+   * null = fetch failed (AC-002: treat as unknown).
    */
   supplyChainAlerts: SupplyChainAlert[] | null;
   fetchedAt: number;        // epoch ms
@@ -72,8 +74,38 @@ export interface RegistryCacheOptions {
   sourcePackages?: readonly RegistrySourcePackage[];
 }
 
+/**
+ * The supply-chain alert page the cache holds, when it cannot show that a
+ * package has no open alert. A page shows that only when it is complete for
+ * the package: its producer state is 'current', its `total` is not above the
+ * alerts it carries, and its population is every package (no name or type
+ * filter) or the package itself (its name and a type).
+ */
+export interface PartialSupplyChainPage {
+  /** Why the page is not complete for the package, e.g. 'the page holds 1000 of 14002 alerts'. */
+  reason: string;
+  /** Alerts the page carries; 0 when no page has loaded. */
+  alertsHeld: number;
+  /** Open alerts in the population the page counts, as the page states it; null when it states none. */
+  total: number | null;
+  /** The most alerts the page carries, as the page states it; null when it states none. */
+  limit: number | null;
+  /** The state of the detector that writes the alerts, as the page states it; null when it states none. */
+  producerState: string | null;
+}
+
 /** Result of a registry intelligence lookup (after AC-002 semantics applied). */
 export type RegistryLookupResult =
   | { status: 'hit'; intelligence: RegistryIntelligence }
   | { status: 'miss' }           // package not in fleet index
-  | { status: 'error'; reason: string };  // fetch failed
+  | { status: 'error'; reason: string }  // fetch failed
+  /**
+   * No alert for the package on the supply-chain alert page the cache holds,
+   * and that page is not complete for the package: unknown, never a hit with
+   * no alerts (AC-002). The package's fleet signal, when it has one, is kept.
+   */
+  | {
+      status: 'partial';
+      supplyChainPage: PartialSupplyChainPage;
+      fleetAnomalySignal: FleetAnomalySignal | null;
+    };
