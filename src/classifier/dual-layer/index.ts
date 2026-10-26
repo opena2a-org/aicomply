@@ -507,6 +507,10 @@ export function scanAllViews(norm: ScanNormalization): ClassifierResult {
  *     onRegistryUnknown: 'violation' raises CLEAN to VIOLATION, 'deny' sets
  *     DENY, and either appends a REGISTRY_UNKNOWN violation. Without it, a
  *     subsequent warm() + re-classify is the correct path.
+ *   - Partial (no alert for the package on a supply-chain alert page that is
+ *     not complete for it) => handled as a miss is, with the page's figures
+ *     in registrySignals.supplyChainPage. A fleet signal the package has still
+ *     applies the anomaly threshold, which only raises the verdict.
  */
 function applyRegistryL2<T extends ClassifiedResult>(
   base: T,
@@ -519,7 +523,7 @@ function applyRegistryL2<T extends ClassifiedResult>(
 
   if (lookup.status === 'error' || lookup.status === 'miss') {
     // AC-002: unknown is never reported as a hit. The status says which kind.
-    const registrySignals: ComplyResult['registrySignals'] = {
+    return applyUnknownAction(base, {
       status: lookup.status,
       fleetAnomalyScore: null,
       effectiveAnomalyScore: null,
@@ -527,25 +531,24 @@ function applyRegistryL2<T extends ClassifiedResult>(
       thresholdDelta: 0,
       supplyChainBlock: false,
       packageName,
-    };
-    if (onUnknown === undefined) {
-      return { ...base, registrySignals };
-    }
-    const unknownViolation: Violation = {
-      type: 'REGISTRY_UNKNOWN',
-      value: `status=${lookup.status}`,
-      start: 0,
-      end: 0,
-      confidence: 1.0,
-      classifier: 'regex',
-    };
-    return {
-      ...base,
-      // 'violation' never lowers a DENY the classifiers already reached.
-      verdict: onUnknown === 'deny' || base.verdict === 'DENY' ? 'DENY' : 'VIOLATION',
-      violations: [...base.violations, unknownViolation],
-      registrySignals,
-    };
+    }, onUnknown);
+  }
+
+  if (lookup.status === 'partial') {
+    // No alert on a page that is not complete for the package is no negative:
+    // unknown, as a miss is (AC-002), never a hit with no alerts.
+    const fleetScore = lookup.fleetAnomalySignal?.anomalyScore ?? null;
+    const fleet = applyFleetAnomaly(base, fleetScore, mult);
+    return applyUnknownAction({ ...base, verdict: fleet.verdict, violations: fleet.violations }, {
+      status: 'partial',
+      fleetAnomalyScore: fleetScore,
+      effectiveAnomalyScore: fleet.effectiveScore,
+      trustSensitivityMultiplier: mult,
+      thresholdDelta: fleet.thresholdDelta,
+      supplyChainBlock: false,
+      packageName,
+      supplyChainPage: lookup.supplyChainPage,
+    }, onUnknown);
   }
 
   const { intelligence } = lookup;
@@ -581,6 +584,32 @@ function applyRegistryL2<T extends ClassifiedResult>(
     };
   }
 
+  const fleet = applyFleetAnomaly(base, fleetScore, mult);
+  return {
+    ...base,
+    verdict: fleet.verdict,
+    violations: fleet.violations,
+    registrySignals: {
+      status: 'hit',
+      fleetAnomalyScore: fleetScore,
+      effectiveAnomalyScore: fleet.effectiveScore,
+      trustSensitivityMultiplier: mult,
+      thresholdDelta: fleet.thresholdDelta,
+      supplyChainBlock: false,
+      packageName,
+    },
+  };
+}
+
+/**
+ * The fleet anomaly threshold applied to `base`, given the package's raw
+ * anomaly score (null without a fleet signal). It only raises the verdict.
+ */
+function applyFleetAnomaly(
+  base: ClassifiedResult,
+  fleetScore: number | null,
+  mult: number,
+): Pick<ClassifiedResult, 'verdict' | 'violations'> & { effectiveScore: number | null; thresholdDelta: number } {
   // Apply trust-level sensitivity: scale the raw anomaly score by the multiplier
   // before comparing against the threshold. Higher-trust packages (tier 4) get a
   // grace margin; lower-trust packages (tier 1–2) are evaluated more strictly.
@@ -607,19 +636,37 @@ function applyRegistryL2<T extends ClassifiedResult>(
     });
   }
 
+  return { verdict: adjustedVerdict, violations, effectiveScore, thresholdDelta };
+}
+
+/**
+ * `result` with `registrySignals` for a lookup the Registry cannot vouch for
+ * (AC-002). The verdict is left alone unless the caller set
+ * onRegistryUnknown: 'violation' raises CLEAN to VIOLATION, 'deny' sets DENY,
+ * and either appends a REGISTRY_UNKNOWN violation naming the status.
+ */
+function applyUnknownAction<T extends ClassifiedResult>(
+  result: T,
+  registrySignals: NonNullable<ComplyResult['registrySignals']>,
+  onUnknown?: RegistryUnknownAction,
+): T {
+  if (onUnknown === undefined) {
+    return { ...result, registrySignals };
+  }
+  const unknownViolation: Violation = {
+    type: 'REGISTRY_UNKNOWN',
+    value: `status=${registrySignals.status}`,
+    start: 0,
+    end: 0,
+    confidence: 1.0,
+    classifier: 'regex',
+  };
   return {
-    ...base,
-    verdict: adjustedVerdict,
-    violations,
-    registrySignals: {
-      status: 'hit',
-      fleetAnomalyScore: fleetScore,
-      effectiveAnomalyScore: effectiveScore,
-      trustSensitivityMultiplier: mult,
-      thresholdDelta,
-      supplyChainBlock: false,
-      packageName,
-    },
+    ...result,
+    // 'violation' never lowers a DENY the classifiers already reached.
+    verdict: onUnknown === 'deny' || result.verdict === 'DENY' ? 'DENY' : 'VIOLATION',
+    violations: [...result.violations, unknownViolation],
+    registrySignals,
   };
 }
 
