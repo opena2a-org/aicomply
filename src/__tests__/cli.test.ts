@@ -2183,15 +2183,33 @@ require.extensions['.ts'] = (module, filename) => {
         ['SSN', 2],
       ]);
     }, 60_000);
+
+    // In 2.2.3 the Base64 candidate search and the bearer-token pattern each
+    // ended with {20,}, a counted repeat with no upper bound, and on Node 26.12
+    // each threw "Maximum call stack size exceeded" on this input. The search
+    // runs first, so the scan ended with that message, nothing on stdout and
+    // exit code 2.
+    it('reports Bearer and 10000000 copies of the letter a from stdin', async () => {
+      pipeRepeated(Buffer.from('Bearer '), Buffer.alloc(2 ** 20, 'a'), 10_000_007);
+      const cap = capture();
+      const code = await run(['scan', '--quiet']);
+      cap.restore();
+      expect({ code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({
+        code: 1,
+        out: 'VIOLATION\n',
+        err: '',
+      });
+    }, 60_000);
   });
 
   // The README's line for a git hook or a CI step that scans the staged
   // changes, run as written in a scratch git repository: as an executable
   // /bin/sh script, the form a hook takes and whose exit status git reads,
   // and under `bash --noprofile --norc -eo pipefail -c`, the shell a GitHub
-  // Actions step runs. `npx @opena2a/aicomply` runs this tree's CLI. The line
-  // passes on 0 only: 0 when nothing is staged or the staged change is CLEAN,
-  // 1 when it is flagged.
+  // Actions step runs. `npx @opena2a/aicomply` runs this tree's CLI, except
+  // where a stand-in stops with an error as a scan can. The line passes on 0
+  // only: 0 when nothing is staged or the staged change is CLEAN, 1 when it is
+  // flagged, and 2 when the scan stops with an error before its verdict.
   describe('the README staged-diff gate line', () => {
     const posixIt = process.platform === 'win32' ? it.skip : it;
     const GATE = readFileSync(join(__dirname, '..', '..', 'README.md'), 'utf8')
@@ -2237,11 +2255,11 @@ require.extensions['.ts'] = (module, filename) => {
     }
 
     /** The exit status, stdout and stderr of the line in `repo`, in each shell form. */
-    function gate(repo: string): Record<'sh' | 'bash', [number | null, string, string]> {
-      const sh = spawnSync(script, [], { cwd: repo, env: gitEnv, encoding: 'utf8' });
+    function gate(repo: string, env: NodeJS.ProcessEnv = gitEnv): Record<'sh' | 'bash', [number | null, string, string]> {
+      const sh = spawnSync(script, [], { cwd: repo, env, encoding: 'utf8' });
       const bash = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', '-c', String(GATE)], {
         cwd: repo,
-        env: gitEnv,
+        env,
         encoding: 'utf8',
       });
       return { sh: [sh.status, sh.stdout, sh.stderr], bash: [bash.status, bash.stdout, bash.stderr] };
@@ -2266,6 +2284,31 @@ require.extensions['.ts'] = (module, filename) => {
       expect(gate(repository('gate-flagged', 'Customer SSN 078-05-1120 on file\n'))).toEqual({
         sh: [1, 'VIOLATION\n', ''],
         bash: [1, 'VIOLATION\n', ''],
+      });
+    }, 60_000);
+
+    // A scan that stops with an error before it reaches a verdict exits 2, as
+    // 2.2.3 did with "Maximum call stack size exceeded" on `Bearer ` followed
+    // by 10000000 copies of the letter a. With something staged the line runs
+    // the scan, so it exits 2 and does not pass. The stand-in for npx reads
+    // the diff, prints that error and exits 2.
+    posixIt('exits 2 when something is staged and the scan stops with an error', () => {
+      const bin = join(dir, 'gate-bin-error');
+      mkdirSync(bin);
+      writeFileSync(
+        join(bin, 'npx'),
+        '#!/bin/sh\n' +
+          '[ "$*" = "@opena2a/aicomply scan -q" ] || { echo "npx stand-in: unexpected arguments: $*" >&2; exit 127; }\n' +
+          'cat > /dev/null\n' +
+          'echo "aicomply: Maximum call stack size exceeded" >&2\n' +
+          'exit 2\n',
+      );
+      chmodSync(join(bin, 'npx'), 0o755);
+      const env = { ...gitEnv, PATH: `${bin}:${process.env.PATH}` };
+      const error = 'aicomply: Maximum call stack size exceeded\n';
+      expect(gate(repository('gate-scan-error', 'nothing sensitive in this line\n'), env)).toEqual({
+        sh: [2, '', error],
+        bash: [2, '', error],
       });
     }, 60_000);
 
