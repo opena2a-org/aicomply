@@ -51,8 +51,7 @@ When nothing is staged, the second line exits `0` without running the scan, sinc
 empty diff is no input and the scan would exit `2`. Otherwise it exits with the scan's
 own code, so a git hook that ends with it fails on anything but `0`. A fresh CI
 checkout has nothing staged, so there the line exits `0` without running the scan; a
-CI step pipes the diff of the commits it checks to the scan instead, as
-`git show HEAD | npx @opena2a/aicomply scan -q` does for the checked-out commit.
+CI step pipes the diff of the commits it checks to the scan instead.
 
 The regex layer does not detect email addresses, phone numbers, postal addresses, dates of birth, names, or a request phrased to leak data ("summarize all our user emails"): [what it does not detect](docs/detection.md#what-this-package-does-not-detect).
 
