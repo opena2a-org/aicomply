@@ -50,13 +50,17 @@ posture - not a complete control.
 - Session vault key isolation (AES-256-GCM, keys never persisted to disk)
 - Registry intelligence cache integrity (a cache miss, or a fleet index that never
   loaded, is reported as `registrySignals.status` `miss` or `error`, never as a
-  `hit`; it changes the verdict only when the caller sets `onRegistryUnknown` -
-  contract AC-002. A package with a supply-chain alert is a `hit` and is
-  blocked whether or not the fleet index loaded. A fleet answer that reports
-  no events for a listed package (one in `sourcePackages` or added with
-  `addSourcePackages()`) counts as no fleet data, so without an alert the
-  package is a `miss`, not a `hit`: the Registry answers a package it has no
-  record of the same way)
+  `hit`. A package with no alert on a supply-chain alert page that is not
+  complete for it, or with a fleet signal before any alert page has loaded, is
+  reported as `partial` instead, never as a `hit` with no alerts. The status
+  changes the verdict only when the caller sets `onRegistryUnknown` - contract
+  AC-002 - though on `partial` a fleet signal the package has still applies
+  the fleet anomaly threshold. A package with a supply-chain alert is a `hit`
+  and is blocked whether or not the fleet index loaded. A fleet answer that
+  reports no events for a listed package (one in `sourcePackages` or added
+  with `addSourcePackages()`) counts as no fleet data, so without an alert
+  the package is a `miss` or `partial`, not a `hit`: the Registry answers a
+  package it has no record of the same way)
 
 ### Adversarial-mutation handling (covered in 1.0)
 
@@ -198,27 +202,38 @@ regex-only.
   Registry endpoint. A cache miss or an unreachable Registry does not
   fail closed by default: the verdict stays as the classifiers set it, so clean
   content from a package the Registry has no data for is still `CLEAN`.
-  `registrySignals.status` says which case it was: `miss` when the fleet
-  index or the package's own fleet answer loaded and neither has a fleet
-  signal or an alert for the package, `error` when neither has loaded (the
+  `registrySignals.status` says which case it was: `partial` when the
+  package has no alert on the supply-chain alert page the cache holds and
+  that page is not complete for it (it states no producer state or one that
+  is not `current`, no total or a total above the alerts it carries, or no
+  population or one that is neither every package nor this package by name
+  and type; `registrySignals.supplyChainPage` says which), and otherwise
+  `miss` when the fleet index or the package's own fleet answer loaded and
+  neither has a fleet signal or an alert for the package, `error` when
+  neither has loaded (the
   cache was not warmed, the package is not listed in `sourcePackages` or
   through `addSourcePackages()`, or every fleet fetch for it so far
-  failed) and the package has no supply-chain alert. Pass
+  failed) and the package has no supply-chain alert. On `partial`, a fleet
+  signal the package has still applies the fleet anomaly threshold. Pass
   `onRegistryUnknown: 'violation'` or `'deny'` to `comply()`
-  to fail closed on both. A failed supply-chain alert fetch is not
-  reported on its own: when the fleet index or the package's fleet answer
-  loaded, the status is `hit` or `miss` from the data that did load. A
-  failed fleet fetch does not stop the hard block: a package with an
-  alert in a loaded alert list is a `hit` and the verdict is `DENY`. The
+  to fail closed on all three. A failed supply-chain alert fetch has no
+  status of its own. Before any alert page has loaded, a package with a
+  fleet signal is `partial` (`registrySignals.supplyChainPage.reason` is
+  `no page has loaded`), and one without is `miss` or `error` from the
+  fleet data that did load. A failed fleet fetch does not stop the hard
+  block: a package with an alert in a loaded alert list is a `hit` and the
+  verdict is `DENY`. The
   production Registry answers the fleet index request, which names no
   package, with HTTP 400 (checked 2026-10-18), so the fleet index does
   not load from it. It answers the fleet request that names a package and
   its type, which the cache sends for each listed package when it warms,
   and for a package passed to `addSourcePackages()` when that call lists
   it. Against it, the fleet anomaly threshold applies only to a listed
-  package the Registry reports fleet events for, a listed package it
-  reports none for is `miss`, and a package with no alert that is not
-  listed is `error`.
+  package the Registry reports fleet events for. Its supply-chain alert
+  page is not complete: the page's `total` is above the alerts it carries
+  (checked 2026-10-26). So against it, a package with an alert on that page
+  is a `hit` and the verdict is `DENY`, and a package with no alert on it
+  is `partial`, listed or not.
 - **NanoMind-Guard semantic classifier.** The model has shipped
   (`nanomind-security-classifier` tme-v0.5.0, served by `@nanomind/daemon`
   over HTTP), but the Guard is a preview: the current model over-flags
@@ -310,7 +325,7 @@ if affected:
 
 | ID      | Contract |
 |---------|----------|
-| AC-002  | Cache miss or error reported as `registrySignals.status`, never as a hit; fails closed only with `onRegistryUnknown` |
+| AC-002  | Cache miss or error, or no alert on an alert page not complete for the package, reported as `registrySignals.status` (`miss`, `error`, `partial`), never as a hit; fails closed only with `onRegistryUnknown` |
 | AC-005  | No Registry network I/O in the classification hot path. The Guard loopback request is separate; see known limitation 5 |
 | CR-001  | Parse-to-deny on invalid Guard signature |
 | D7      | `@noble/post-quantum` for hybrid signing, not FIPS-validated |

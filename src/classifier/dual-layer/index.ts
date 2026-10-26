@@ -15,6 +15,10 @@
  *   - Any active supply-chain alert on the source package => hard block (DENY)
  *   - Cache miss / error => reported as registrySignals.status, never as a
  *     hit; changes the verdict only when the caller sets onRegistryUnknown
+ *   - Partial (no alert for the package on a supply-chain alert page that is
+ *     not complete for it, or a fleet signal before any page has loaded) =>
+ *     handled as a miss is, except that a fleet signal the package has still
+ *     applies the anomaly threshold above
  */
 
 import { classifyWithRegex, toRegexResult } from '../regex';

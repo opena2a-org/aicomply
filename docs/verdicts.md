@@ -4,7 +4,7 @@
 
 - **`CLEAN`**: no findings from the layers that ran (`result.layers` lists them). This states what was checked, not that the content is safe: an input the layers do not detect is `CLEAN` too (see [What this package does NOT detect](detection.md#what-this-package-does-not-detect)). On high-stakes paths, treat it as advisory ([hardening checklist](../SECURITY.md#hardening-checklist-for-consumers))
 - **`VIOLATION`**: one or more findings; the `violations` array is the audit trail. A pattern the regex engine could not run on the content is a finding as well, `PATTERN_NOT_EVALUATED:<id>`, and its id is listed in `result.unevaluatedPatterns`, so such content is never `CLEAN`
-- **`DENY`**: hard block (a policy pack triggered, supply-chain Registry said the source package is untrusted, or `onRegistryUnknown: 'deny'` met a package the Registry had no data for); treat as fatal
+- **`DENY`**: hard block (a policy pack triggered, supply-chain Registry said the source package is untrusted, or `onRegistryUnknown: 'deny'` met a Registry lookup of `miss`, `partial` or `error` for the source package); treat as fatal
 
 ## Inspecting per-classifier results
 
