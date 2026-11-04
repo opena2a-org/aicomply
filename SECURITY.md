@@ -55,7 +55,15 @@ posture - not a complete control.
   reported as `partial` instead, never as a `hit` with no alerts. The status
   changes the verdict only when the caller sets `onRegistryUnknown` - contract
   AC-002 - though on `partial` a fleet signal the package has still applies
-  the fleet anomaly threshold. A package with a supply-chain alert is a `hit`
+  the fleet anomaly threshold. A listed package (one in `sourcePackages` or
+  added with `addSourcePackages()`) is not `partial` once the cache holds an
+  answer, complete for it, to each request the cache sent for the package's
+  own supply-chain alerts: with no alert on those answers and none for its
+  name and type on the unfiltered alert page, it is then a `hit` with no
+  alerts when it has a fleet signal, a status `onRegistryUnknown` does not
+  act on, and otherwise a `miss`, or an `error` while neither the fleet
+  index nor a fleet answer for it has loaded.
+  A package with a supply-chain alert is a `hit`
   and is blocked whether or not the fleet index loaded. A fleet answer that
   reports no events for a listed package (one in `sourcePackages` or added
   with `addSourcePackages()`) counts as no fleet data, so without an alert
@@ -231,9 +239,23 @@ regex-only.
   it. Against it, the fleet anomaly threshold applies only to a listed
   package the Registry reports fleet events for. Its supply-chain alert
   page is not complete: the page's `total` is above the alerts it carries
-  (checked 2026-10-26). So against it, a package with an alert on that page
-  is a `hit` and the verdict is `DENY`, and a package with no alert on it
-  is `partial`, listed or not.
+  (checked 2026-10-26). So against it, a package that is not listed is a
+  `hit` and the verdict is `DENY` when that page holds an alert for its
+  name, and `partial` when it holds none. For a listed package, the cache
+  also sends, at the same times as its fleet request, the supply-chain alert
+  request that names the package and its type, and sends it once more with
+  the name lower-cased when that differs. A listed package is a `hit` and
+  the verdict is `DENY` when an answer whose population names the package
+  carries an alert, when that page holds an alert for its name and type, or
+  when that page holds one for its name with another type while the cache
+  does not hold an answer, complete for the package, to each of those
+  requests. Without such an alert, once the cache holds an answer, complete
+  for it, to each of those requests, a listed package is a `hit` with no
+  alerts when it has a fleet signal, and otherwise a `miss`, or an `error`
+  while neither the fleet index nor a fleet answer for it has loaded; while
+  the cache holds an answer that is not complete for it, the package is
+  `partial`, with that answer's reason and figures; otherwise it is
+  `partial` from that page, as a package that is not listed is.
 - **NanoMind-Guard semantic classifier.** The model has shipped
   (`nanomind-security-classifier` tme-v0.5.0, served by `@nanomind/daemon`
   over HTTP), but the Guard is a preview: the current model over-flags
