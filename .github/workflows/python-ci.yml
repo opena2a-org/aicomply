@@ -22,7 +22,8 @@ on:
 jobs:
   test:
     name: Lint, type-check, test, parity
-    runs-on: ubuntu-latest
+    # pinned: ubuntu-latest moved to 26.04, which has no Python 3.9 build (2026-11-04)
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: python
