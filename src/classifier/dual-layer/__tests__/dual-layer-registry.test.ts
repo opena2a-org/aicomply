@@ -568,3 +568,110 @@ describe('Registry L2: a partial alert page', () => {
     expect(result.registrySignals?.supplyChainPage).toBeUndefined();
   });
 });
+
+describe("Registry L2: a listed package's own alert answer, read by name and type when the cache warms", () => {
+  const REGISTRY_URL = 'https://registry.invalid';
+  const sourcePackages = [
+    { name: 'calm-agent', type: 'mcp_server' },
+    { name: 'quiet-agent', type: 'mcp_server' },
+  ];
+
+  /**
+   * Answer every Registry request in process, as the production Registry
+   * does; no request leaves the process. The anomaly-signal request that
+   * names no package is refused with 400, and the one that names a package
+   * and a type gets an anomaly score of 0.1 for calm-agent and no events for
+   * any other package. The unfiltered alert request gets the measured page:
+   * 1,000 alerts for other packages, of a total of 14,002. The alert request
+   * that names a package and a type gets a complete answer for that package,
+   * carrying `own(name)`.
+   */
+  function registryInProcess(own: (name: string) => SupplyChainAlert[]): void {
+    jest.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      const name = url.searchParams.get('name');
+      if (url.origin !== REGISTRY_URL) {
+        throw new TypeError('fetch failed');
+      }
+      if (url.pathname === '/api/v1/registry/fleet/anomaly-signal') {
+        const type = url.searchParams.get('type');
+        if (!name || !type) {
+          return new Response(JSON.stringify({ error: 'name and type query params are required' }), { status: 400 });
+        }
+        const calm = name === 'calm-agent';
+        return new Response(JSON.stringify({
+          name,
+          type,
+          anomalyScore: calm ? 0.1 : 0,
+          windowHours: 24,
+          eventCount: calm ? 3 : 0,
+          lastSeenAt: calm ? '2026-10-18T00:00:00Z' : null,
+          formulaVersion: 'v1',
+          stale: false,
+        }));
+      }
+      if (url.pathname === '/api/v1/intelligence/alerts') {
+        const packageType = url.searchParams.get('packageType');
+        if (name && packageType) {
+          const alerts = own(name);
+          return new Response(JSON.stringify({
+            alerts,
+            total: alerts.length,
+            population: { name, packageType },
+            limit: 1000,
+            producer: { state: 'current' },
+          }));
+        }
+        const alerts = Array.from({ length: 1000 }, (_, i) => ({ ...ALERT, id: `other-${i}`, name: `other-package-${i}` }));
+        return new Response(JSON.stringify({
+          alerts,
+          total: 14002,
+          population: { name: null, packageType: null },
+          limit: 1000,
+          producer: { state: 'current' },
+        }));
+      }
+      throw new TypeError('fetch failed');
+    });
+  }
+
+  it('blocks a listed package absent from the measured page whose own answer carries one alert row, under the rule in force: any active supply-chain alert on the source package is a hard block (DENY)', async () => {
+    const own: SupplyChainAlert = { ...ALERT, id: 'sca-own', name: 'calm-agent', type: 'mcp_server' };
+    registryInProcess(name => (name === 'calm-agent' ? [own] : []));
+    const cache = new RegistryIntelligenceCache({ baseUrl: REGISTRY_URL, sourcePackages });
+    await cache.warm();
+
+    const result = await classifyDualLayer(SAFE_CONTENT, { registryCache: cache, sourcePackage: 'calm-agent' });
+
+    expect(result.verdict).toBe('DENY');
+    expect(result.violations.map(v => [v.type, v.value])).toEqual([['SUPPLY_CHAIN_ALERT', 'sca-own']]);
+    expect(result.registrySignals?.status).toBe('hit');
+    expect(result.registrySignals?.supplyChainBlock).toBe(true);
+    expect(result.registrySignals?.supplyChainPage).toBeUndefined();
+  });
+
+  it('takes the negative from a complete own answer with a total of 0, and adds no REGISTRY_UNKNOWN', async () => {
+    registryInProcess(() => []);
+    const cache = new RegistryIntelligenceCache({ baseUrl: REGISTRY_URL, sourcePackages });
+    await cache.warm();
+
+    const calm = await classifyDualLayer(SAFE_CONTENT, {
+      registryCache: cache,
+      sourcePackage: 'calm-agent',
+      onRegistryUnknown: 'deny',
+    });
+    const quiet = await classifyDualLayer(SAFE_CONTENT, { registryCache: cache, sourcePackage: 'quiet-agent' });
+
+    // A hit with no alert and an anomaly score of 0.1: nothing for 'deny' to act on.
+    expect(calm.verdict).toBe('CLEAN');
+    expect(calm.violations).toEqual([]);
+    expect(calm.registrySignals?.status).toBe('hit');
+    expect(calm.registrySignals?.fleetAnomalyScore).toBe(0.1);
+    expect(calm.registrySignals?.supplyChainBlock).toBe(false);
+    expect(calm.registrySignals?.supplyChainPage).toBeUndefined();
+    // No anomaly events for the package: a miss, which leaves the verdict as classified.
+    expect(quiet.verdict).toBe('CLEAN');
+    expect(quiet.registrySignals?.status).toBe('miss');
+    expect(quiet.registrySignals?.supplyChainPage).toBeUndefined();
+  });
+});

@@ -368,9 +368,14 @@ describe('comply(): a package the Registry cannot vouch for', () => {
    * type gets that package's record (fleet events for suspicious-agent, with
    * an anomaly score above 0.30, and for calm-agent, with one below it; none
    * for any other package), and the alert request gets `page`, by default a
-   * complete page with no alerts. Every other URL refuses.
+   * complete page with no alerts. Given `own`, the alert request that names a
+   * package and a type gets a complete answer for that package, carrying
+   * `own(name)`. Every other URL refuses.
    */
-  function registryAnswersFleetPerPackage(page: Record<string, unknown> = alertPage([])): void {
+  function registryAnswersFleetPerPackage(
+    page: Record<string, unknown> = alertPage([]),
+    own?: (name: string) => unknown[],
+  ): void {
     jest.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = new URL(String(input));
       if (`${url.origin}${url.pathname}` === `${BASE_URL}/api/v1/registry/fleet/anomaly-signal`) {
@@ -397,6 +402,11 @@ describe('comply(): a package the Registry cannot vouch for', () => {
       }
       if (url.href === `${BASE_URL}/api/v1/intelligence/alerts?type=supply_chain`) {
         return new Response(JSON.stringify(page));
+      }
+      const name = url.searchParams.get('name');
+      const packageType = url.searchParams.get('packageType');
+      if (own && `${url.origin}${url.pathname}` === `${BASE_URL}/api/v1/intelligence/alerts` && name && packageType) {
+        return new Response(JSON.stringify(alertPage(own(name), { population: { name, packageType } })));
       }
       throw new TypeError('fetch failed');
     });
@@ -589,6 +599,41 @@ describe('comply(): a package the Registry cannot vouch for', () => {
         producerState: 'stale',
       });
     }
+  });
+
+  it("decides a listed package by its own alert answer, read by name and type when the session is created, and comply() sends no request", async () => {
+    registryAnswersFleetPerPackage(cutPage(), name => (name === 'suspicious-agent' ? [alertFor('suspicious-agent', 'sca-own')] : []));
+    const session = await ClassificationSession.create({ baseUrl: BASE_URL, sourcePackages: LISTED });
+    const calls = (globalThis.fetch as jest.Mock).mock.calls;
+    const fetched = calls.length;
+
+    const blocked = await session.comply({ content: 'hello world', sourcePackage: 'suspicious-agent', useGuard: false });
+    const calm = await session.comply({
+      content: 'hello world',
+      sourcePackage: 'calm-agent',
+      useGuard: false,
+      onRegistryUnknown: 'deny',
+    });
+    const unlisted = await session.comply({ content: 'hello world', sourcePackage: 'any-package', useGuard: false });
+
+    // Absent from the measured page, the listed package with an alert on its own answer is blocked.
+    expect(blocked.verdict).toBe('DENY');
+    expect(blocked.registrySignals?.status).toBe('hit');
+    expect(blocked.registrySignals?.supplyChainBlock).toBe(true);
+    expect(blocked.violations.map(v => [v.type, v.value])).toEqual([['SUPPLY_CHAIN_ALERT', 'sca-own']]);
+    // Its own answer with a total of 0 is the negative: a hit, so 'deny' adds nothing.
+    expect(calm.verdict).toBe('CLEAN');
+    expect(calm.registrySignals?.status).toBe('hit');
+    expect(calm.registrySignals?.supplyChainBlock).toBe(false);
+    expect(calm.violations).toEqual([]);
+    // A package that is not listed keeps the page's answer.
+    expect(unlisted.registrySignals?.status).toBe('partial');
+    expect(unlisted.registrySignals?.supplyChainPage?.reason).toBe('the page holds 1000 of 14002 alerts');
+    // create() sent six requests: the anomaly-signal index, the unfiltered
+    // alert page, and the anomaly-signal and alert request of each listed
+    // package. comply() sent none (AC-005).
+    expect(fetched).toBe(6);
+    expect(calls).toHaveLength(fetched);
   });
 
   it('tells an unreachable Registry from a package absent from its index', async () => {

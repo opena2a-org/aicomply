@@ -47,8 +47,9 @@ export interface RegistryIntelligence {
 }
 
 /**
- * A package whose fleet anomaly signal warm() requests by name and type, as
- * listed in the sourcePackages option or passed to addSourcePackages().
+ * A package whose fleet anomaly signal and supply-chain alerts warm()
+ * requests by name and type, as listed in the sourcePackages option or passed
+ * to addSourcePackages().
  */
 export interface RegistrySourcePackage {
   /** The name comply() is given as `sourcePackage`. */
@@ -102,7 +103,9 @@ export type RegistryLookupResult =
   /**
    * No alert for the package on the supply-chain alert page the cache holds,
    * and that page is not complete for the package: unknown, never a hit with
-   * no alerts (AC-002). The package's fleet signal, when it has one, is kept.
+   * no alerts (AC-002). For a listed package, the page is the answer to its
+   * own alert request when the cache holds one that is not complete for it.
+   * The package's fleet signal, when it has one, is kept.
    */
   | {
       status: 'partial';

@@ -23,6 +23,14 @@
  * answers 200 with that package's signal; warm() sends it for each listed
  * package: one in the sourcePackages option, or one added later with
  * addSourcePackages(), which sends it when it lists the package.
+ *
+ * Beside it, warm() and addSourcePackages() send the supply-chain alert
+ * request that names the package,
+ *   GET /api/v1/intelligence/alerts?type=supply_chain&name=<name>&packageType=<type>
+ * with the name and type of its fleet request, and once more with the name
+ * lower-cased when that differs, since the route matches the name exactly.
+ * That answer, held per package, decides a listed package's supply-chain
+ * result, as lookup() states.
  */
 
 import { showString } from '../show-string';
@@ -90,14 +98,35 @@ interface PackageFleetAnswer {
   fetchedAt: number;
 }
 
+/**
+ * The Registry's answer to the supply-chain alert request that names a listed
+ * package and its type: the alerts it carries, and its own statement of what
+ * it answers for, read as a page's is.
+ */
+interface PackageAlertAnswer {
+  page: HeldSupplyChainPage;
+  alerts: SupplyChainAlert[];
+  fetchedAt: number;
+}
+
+/**
+ * What the answers held for a listed package say: its alerts (none is the
+ * negative only when every answer is complete for it), or that it is partial,
+ * with the reason and the figures of the answer that is not complete.
+ */
+type PackageAlertResult =
+  | { kind: 'alerts'; alerts: SupplyChainAlert[]; fetchedAt: number }
+  | { kind: 'partial'; supplyChainPage: PartialSupplyChainPage };
+
 export class RegistryIntelligenceCache {
   private readonly baseUrl: string;
   private readonly cacheTtlMs: number;
   private readonly timeoutMs: number;
   /**
-   * The listed packages, whose fleet signal warm() requests: those in the
-   * sourcePackages option and those added with addSourcePackages(). Keyed by
-   * package name (lowercased), as lookup() matches names.
+   * The listed packages, whose fleet signal and supply-chain alerts warm()
+   * requests: those in the sourcePackages option and those added with
+   * addSourcePackages(). Keyed by package name (lowercased), as lookup()
+   * matches names.
    */
   private readonly sourcePackages = new Map<string, RegistrySourcePackage>();
   private readonly cache = new Map<string, RegistryIntelligence>();
@@ -118,6 +147,13 @@ export class RegistryIntelligenceCache {
   private packageFleet: Map<string, PackageFleetAnswer> = new Map();
   /** Fleet requests for listed packages that have not settled, by key. */
   private readonly packageRequests = new Map<string, Promise<void>>();
+  /**
+   * Answers to the supply-chain alert request for each listed package, by the
+   * name the request sent (alertRequestNames()).
+   */
+  private packageAlerts: Map<string, PackageAlertAnswer> = new Map();
+  /** Alert requests for listed packages that have not settled, by the name sent. */
+  private readonly packageAlertRequests = new Map<string, Promise<void>>();
   private lastFleetFetch = 0;
   private lastSupplyChainFetch = 0;
   private fetchInProgress: Promise<void> | null = null;
@@ -134,8 +170,8 @@ export class RegistryIntelligenceCache {
   }
 
   /**
-   * Warm the cache by fetching both endpoints, and the fleet signal of each
-   * listed package.
+   * Warm the cache by fetching both endpoints, and the fleet signal and the
+   * supply-chain alerts of each listed package.
    *
    * Call this once before entering the classification hot path (AC-005).
    * Resolves when every fetch completes (or fails gracefully).
@@ -152,10 +188,11 @@ export class RegistryIntelligenceCache {
 
   /**
    * List packages first seen after the cache was created, and request the
-   * fleet signal of each by name and type, as warm() does for the
-   * sourcePackages option; warm() requests them from then on. Resolves once
-   * each request has been answered or has failed, so lookup() then reports
-   * the packages as it reports those listed in the option.
+   * fleet signal and the supply-chain alerts of each by name and type, as
+   * warm() does for the sourcePackages option; warm() requests them from then
+   * on. Resolves once each request has been answered or has failed, so
+   * lookup() then reports the packages as it reports those listed in the
+   * option.
    *
    * A package listed already, in the option or by an earlier call, is not
    * requested again; if a request for it is in flight, the call waits for
@@ -180,13 +217,19 @@ export class RegistryIntelligenceCache {
     const requests: Promise<void>[] = [];
     for (const pkg of packages) {
       const key = pkg.name.toLowerCase();
-      if (!this.sourcePackages.has(key)) {
+      const listed = this.sourcePackages.get(key);
+      if (listed === undefined) {
         this.sourcePackages.set(key, pkg);
-        requests.push(this.requestPackageFleet(key, pkg));
+        requests.push(...this.requestPackage(key, pkg));
         continue;
       }
-      const inFlight = this.packageRequests.get(key);
-      if (inFlight !== undefined) requests.push(inFlight);
+      const inFlight = [
+        this.packageRequests.get(key),
+        ...alertRequestNames(listed).map(name => this.packageAlertRequests.get(name)),
+      ];
+      for (const request of inFlight) {
+        if (request !== undefined) requests.push(request);
+      }
     }
     await Promise.allSettled(requests);
   }
@@ -201,6 +244,13 @@ export class RegistryIntelligenceCache {
    * for it shows it has none only when the page is complete for it; otherwise
    * the lookup is 'partial', with the page's figures, never a hit with no
    * alerts.
+   *
+   * For a listed package, the answer to its own alert request, read by name
+   * and type when the cache warmed, decides instead, once the cache holds one
+   * (packageAlertResult()): the alerts on it stand, with those the page holds
+   * for the package; none is the negative only when every answer for the
+   * package is complete for it, and the lookup is 'partial', with the reason,
+   * when one is not.
    *
    * This method is intentionally synchronous after warm-start (cache read).
    * It does NOT trigger network I/O to preserve hot-path latency (AC-005).
@@ -218,6 +268,32 @@ export class RegistryIntelligenceCache {
     // events leaves a signal from the fleet index in place.
     const answer = this.packageFleet.get(key);
     const fleetSignal = answer?.signal ?? this.fleetIndex.get(key) ?? null;
+
+    const listed = this.sourcePackages.get(key);
+    const own = listed === undefined ? null : this.packageAlertResult(key, listed);
+    if (own !== null) {
+      if (own.kind === 'partial') {
+        return { status: 'partial', supplyChainPage: own.supplyChainPage, fleetAnomalySignal: fleetSignal };
+      }
+      if (own.alerts.length === 0) {
+        // The negative: answers complete for the package hold no alert for
+        // it. Without the fleet data for it, the package is still an error,
+        // as below (AC-002).
+        if (this.lastFleetFetch === 0 && answer === undefined) {
+          return { status: 'error', reason: 'fleet anomaly signal not loaded' };
+        }
+        if (fleetSignal === null) {
+          return { status: 'miss' };
+        }
+      }
+      return this.hit(key, {
+        packageName,
+        fleetAnomalySignal: fleetSignal,
+        supplyChainAlerts: own.alerts,
+        fetchedAt: Math.max(this.lastFleetFetch, this.lastSupplyChainFetch, answer?.fetchedAt ?? 0, own.fetchedAt),
+      });
+    }
+
     const supplyAlerts = this.supplyChainIndex.get(key) ?? null;
 
     // No alert for the package on a page that is not complete for it is no
@@ -258,14 +334,12 @@ export class RegistryIntelligenceCache {
       return { status: 'miss' };
     }
 
-    const intel: RegistryIntelligence = {
+    return this.hit(key, {
       packageName,
       fleetAnomalySignal: fleetSignal,
       supplyChainAlerts: supplyAlerts ?? [],
       fetchedAt: Math.max(this.lastFleetFetch, this.lastSupplyChainFetch, answer?.fetchedAt ?? 0),
-    };
-    this.cache.set(key, intel);
-    return { status: 'hit', intelligence: intel };
+    });
   }
 
   /**
@@ -306,8 +380,58 @@ export class RegistryIntelligenceCache {
     this.supplyChainIndex.clear();
     this.supplyChainPage = null;
     this.packageFleet.clear();
+    this.packageAlerts.clear();
     this.lastFleetFetch = 0;
     this.lastSupplyChainFetch = 0;
+  }
+
+  /** Cache a hit for the package whose lowercased name is `key`, and return it. */
+  private hit(key: string, intel: RegistryIntelligence): RegistryLookupResult {
+    this.cache.set(key, intel);
+    return { status: 'hit', intelligence: intel };
+  }
+
+  /**
+   * What the answers to the alert requests of a listed package say, or null
+   * while the cache holds none of them, or none it can use: the page then
+   * decides, as for a package that is not listed.
+   *
+   * Alerts on an answer for the package stand whatever its state, as alerts
+   * on any page do. When every answer is complete for the package
+   * (supplyChainGap(): producer state 'current', a total not above the alerts
+   * it carries, and the package's population), its alerts, with those the
+   * page holds for the package's name compared without case and its type, are
+   * the package's alerts, and none is the negative. Otherwise the alerts on
+   * the answers and on the page for the name stand; with none, an answer that
+   * is not complete makes the package partial, with its reason and figures.
+   * An answer for another population is not the package's: its alerts are
+   * not taken.
+   */
+  private packageAlertResult(key: string, pkg: RegistrySourcePackage): PackageAlertResult | null {
+    const held = alertRequestNames(pkg).map(name => this.packageAlerts.get(name));
+    if (held.every(answer => answer === undefined)) return null;
+    const own = held.filter(
+      (answer): answer is PackageAlertAnswer => answer !== undefined && isPackagePopulation(answer.page.population, key),
+    );
+    const ownAlerts = own.flatMap(answer => answer.alerts);
+    const pageAlerts = this.supplyChainIndex.get(key) ?? [];
+    const fetchedAt = Math.max(0, ...own.map(answer => answer.fetchedAt));
+
+    if (held.every(answer => answer !== undefined && supplyChainGap(answer.page, key) === null)) {
+      const alerts = uniteById([...ownAlerts, ...pageAlerts.filter(alert => alert.type === pkg.type)]);
+      return { kind: 'alerts', alerts, fetchedAt };
+    }
+    const alerts = uniteById([...ownAlerts, ...pageAlerts]);
+    if (alerts.length > 0) return { kind: 'alerts', alerts, fetchedAt };
+    for (const answer of held) {
+      if (answer === undefined) continue;
+      const reason = supplyChainGap(answer.page, key);
+      if (reason !== null) {
+        const { alertsHeld, total, limit, producerState } = answer.page;
+        return { kind: 'partial', supplyChainPage: { reason, alertsHeld, total, limit, producerState } };
+      }
+    }
+    return null;
   }
 
   // ---------------------------------------------------------------------------
@@ -337,10 +461,39 @@ export class RegistryIntelligenceCache {
     await Promise.allSettled([
       this._fetchFleet(),
       this._fetchSupplyChain(),
-      ...Array.from(this.sourcePackages, ([key, pkg]) => this.requestPackageFleet(key, pkg)),
+      ...Array.from(this.sourcePackages, ([key, pkg]) => this.requestPackage(key, pkg)).flat(),
     ]);
     // Invalidate per-package cache entries so next lookup() rebuilds them
     this.cache.clear();
+  }
+
+  /**
+   * Request the fleet signal and the supply-chain alerts of a listed package,
+   * or join the requests for them that are in flight.
+   */
+  private requestPackage(key: string, pkg: RegistrySourcePackage): Promise<void>[] {
+    return [
+      this.requestPackageFleet(key, pkg),
+      ...alertRequestNames(pkg).map(name => this.requestPackageAlerts(key, name, pkg.type)),
+    ];
+  }
+
+  /**
+   * Request the supply-chain alerts of a listed package by `name` and its
+   * type, or join the request for them that is in flight. Once the request
+   * settles, the package's cached lookup() result is dropped, so the next
+   * lookup() rebuilds it from what loaded.
+   */
+  private requestPackageAlerts(key: string, name: string, type: string): Promise<void> {
+    let request = this.packageAlertRequests.get(name);
+    if (request === undefined) {
+      request = this._fetchPackageAlerts(name, type).finally(() => {
+        this.packageAlertRequests.delete(name);
+        this.cache.delete(key);
+      });
+      this.packageAlertRequests.set(name, request);
+    }
+    return request;
   }
 
   /**
@@ -418,6 +571,39 @@ export class RegistryIntelligenceCache {
       });
     } catch {
       // Network/timeout error - keep the last answer for the package
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Request the supply-chain alerts filed under `name` and the package type
+   * `type`. The route takes no limit for this request, so none is sent.
+   */
+  private async _fetchPackageAlerts(name: string, type: string): Promise<void> {
+    const query = new URLSearchParams({ type: 'supply_chain', name, packageType: type });
+    const url = `${this.baseUrl}/api/v1/intelligence/alerts?${query}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) {
+        return; // keep the last answer for the name, if there is one
+      }
+
+      const body: unknown = await res.json();
+      // An answer whose population names no package, as the unfiltered page
+      // from a cache that ignores the query, is no answer for this one.
+      if (!isPackageAlertAnswer(body)) {
+        return;
+      }
+      this.packageAlerts.set(name, {
+        page: readSupplyChainPage(body, body.alerts.length),
+        alerts: body.alerts,
+        fetchedAt: Date.now(),
+      });
+    } catch {
+      // Network/timeout error - keep the last answer for the name
     } finally {
       clearTimeout(timer);
     }
@@ -532,6 +718,51 @@ function isFleetAnswerFor(body: unknown, key: string): body is FleetAnomalySigna
     Number.isFinite(anomalyScore) &&
     Number.isFinite(eventCount)
   );
+}
+
+/**
+ * The names the supply-chain alert request for a listed package is sent
+ * with: the name as listed and, when that differs, the name lower-cased. The
+ * route matches the name exactly, and lookup() matches it without case.
+ */
+function alertRequestNames(pkg: RegistrySourcePackage): string[] {
+  const lower = pkg.name.toLowerCase();
+  return lower === pkg.name ? [pkg.name] : [pkg.name, lower];
+}
+
+/**
+ * Whether `body` answers the alert request that names a package: an alert
+ * list whose rows each carry an id and a name, and a population that names a
+ * package. One whose population names none, as the unfiltered page does, is
+ * not; one that names another package is, and lookup() takes nothing from it
+ * for this one (supplyChainGap()).
+ */
+function isPackageAlertAnswer(body: unknown): body is SupplyChainResponse {
+  if (!isRecord(body) || !Array.isArray(body.alerts)) return false;
+  const rows: unknown[] = body.alerts;
+  if (!rows.every(row => isRecord(row) && typeof row.id === 'string' && typeof row.name === 'string')) {
+    return false;
+  }
+  return isRecord(body.population) && typeof body.population.name === 'string' && body.population.name !== '';
+}
+
+/** Whether `population` is that of the package whose lowercased name is `key`. */
+function isPackagePopulation(population: PagePopulation, key: string): boolean {
+  return population.kind === 'package' && population.name === key;
+}
+
+/** `alerts` with each id once, in the order first seen. */
+function uniteById(alerts: readonly SupplyChainAlert[]): SupplyChainAlert[] {
+  const seen = new Set<string>();
+  const united: SupplyChainAlert[] = [];
+  for (const alert of alerts) {
+    if (typeof alert.id === 'string') {
+      if (seen.has(alert.id)) continue;
+      seen.add(alert.id);
+    }
+    united.push(alert);
+  }
+  return united;
 }
 
 /**
