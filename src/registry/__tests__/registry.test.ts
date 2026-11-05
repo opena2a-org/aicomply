@@ -79,6 +79,31 @@ function cutPage(rows: SupplyChainAlert[] = otherAlerts(1000)): Record<string, u
   return alertPage(rows, { total: 14002 });
 }
 
+/** The supply-chain alert request that names no package: the unfiltered page. */
+const ALERTS_URL = 'https://api.oa2a.org/api/v1/intelligence/alerts?type=supply_chain';
+
+/** A Registry answer to the alert request for one package: the HTTP status and the JSON body. */
+interface AlertAnswer {
+  status: number;
+  body: unknown;
+}
+
+/**
+ * The Registry's answer to the alert request for one package by name and
+ * type, as it serves it: the alerts filed under that name and type, `total`
+ * their count, the population it counts (that name and type), the most alerts
+ * a page carries, and the state of the detector. `overrides` replaces any of
+ * them.
+ */
+function packageAnswer(
+  name: string,
+  packageType: string,
+  alerts: SupplyChainAlert[],
+  overrides: Record<string, unknown> = {},
+): AlertAnswer {
+  return { status: 200, body: alertPage(alerts, { population: { name, packageType }, ...overrides }) };
+}
+
 // ---------------------------------------------------------------------------
 // Helpers to mock fetch
 // ---------------------------------------------------------------------------
@@ -183,12 +208,17 @@ function asProduction(name: string, type: string): FleetAnswer {
  * request gets `page`: a list of alerts is served as a complete page of them,
  * an object is served as it is, and null is answered with 503. The fleet
  * request that names no package is refused with 400, or, given `index`,
- * answered with it as an older Registry did.
+ * answered with it as an older Registry did. Given `packageAlerts`, the alert
+ * request that names a package and a type gets `packageAlerts(name,
+ * packageType)`, and a null from it fails that request on the network;
+ * without it, that request gets `page`, as from a cache that ignores the
+ * query.
  */
 function mockFleetPerPackage(
   answer: (name: string, type: string) => FleetAnswer,
   page: SupplyChainAlert[] | Record<string, unknown> | null = [],
   index?: FleetAnomalySignal[],
+  packageAlerts?: (name: string, packageType: string) => AlertAnswer | null,
 ): void {
   global.fetch = jest.fn().mockImplementation((url: string) => {
     const { pathname, searchParams } = new URL(url);
@@ -210,6 +240,19 @@ function mockFleetPerPackage(
       });
     }
     if (pathname === '/api/v1/intelligence/alerts') {
+      const name = searchParams.get('name');
+      const packageType = searchParams.get('packageType');
+      if (packageAlerts && name && packageType) {
+        const reply = packageAlerts(name, packageType);
+        if (reply === null) {
+          return Promise.reject(new TypeError('fetch failed'));
+        }
+        return Promise.resolve({
+          ok: reply.status >= 200 && reply.status < 300,
+          status: reply.status,
+          json: () => Promise.resolve(reply.body),
+        });
+      }
       if (page === null) {
         return Promise.resolve({ ok: false, status: 503 });
       }
@@ -361,12 +404,14 @@ describe('RegistryIntelligenceCache', () => {
       await cache.warm();
 
       const urls = (global.fetch as jest.Mock).mock.calls.map(([url]) => url);
-      expect(urls).toHaveLength(4);
+      expect(urls).toHaveLength(6);
       expect(urls).toEqual(expect.arrayContaining([
         FLEET_URL,
         `${FLEET_URL}?name=example-agent&type=mcp_server`,
         `${FLEET_URL}?name=%40scope%2Ftool&type=ai_tool`,
         'https://api.oa2a.org/api/v1/intelligence/alerts?type=supply_chain',
+        `${ALERTS_URL}&name=example-agent&packageType=mcp_server`,
+        `${ALERTS_URL}&name=%40scope%2Ftool&packageType=ai_tool`,
       ]));
     });
 
@@ -494,11 +539,46 @@ describe('RegistryIntelligenceCache', () => {
       });
       await cache.warm();
       const fetched = (global.fetch as jest.Mock).mock.calls.length;
+      // warm() sent six requests: the fleet index, the unfiltered alert page,
+      // and the fleet request and the alert request of each listed package.
+      expect(fetched).toBe(6);
+      expect((global.fetch as jest.Mock).mock.calls.map(([url]) => String(url)).sort()).toEqual([
+        FLEET_URL,
+        `${FLEET_URL}?name=example-agent&type=mcp_server`,
+        `${FLEET_URL}?name=quiet-agent&type=mcp_server`,
+        ALERTS_URL,
+        `${ALERTS_URL}&name=example-agent&packageType=mcp_server`,
+        `${ALERTS_URL}&name=quiet-agent&packageType=mcp_server`,
+      ].sort());
 
       expect(cache.lookup('example-agent').status).toBe('hit');
       expect(cache.lookup('quiet-agent').status).toBe('miss');
       expect(cache.lookup('unknown-pkg').status).toBe('error');
       expect((global.fetch as jest.Mock).mock.calls.length).toBe(fetched);
+
+      // A listed name with an upper-case letter adds one request: its alert
+      // request again, with the name lower-cased. lookup() still sends none.
+      mockFleetPerPackage(asProduction);
+      const mixed = new RegistryIntelligenceCache({
+        cacheTtlMs: 0,
+        sourcePackages: [
+          { name: 'Example-Agent', type: 'mcp_server' },
+          { name: 'quiet-agent', type: 'mcp_server' },
+        ],
+      });
+      await mixed.warm();
+      const mixedUrls = (global.fetch as jest.Mock).mock.calls.map(([url]) => String(url));
+      expect(mixedUrls).toHaveLength(fetched + 1);
+      expect(mixedUrls).toEqual(expect.arrayContaining([
+        `${ALERTS_URL}&name=Example-Agent&packageType=mcp_server`,
+        `${ALERTS_URL}&name=example-agent&packageType=mcp_server`,
+      ]));
+
+      // The Registry reports no events for the name as listed, so it is a miss.
+      expect(mixed.lookup('Example-Agent').status).toBe('miss');
+      expect(mixed.lookup('quiet-agent').status).toBe('miss');
+      expect(mixed.lookup('unknown-pkg').status).toBe('error');
+      expect((global.fetch as jest.Mock).mock.calls).toHaveLength(fetched + 1);
     });
 
     it('refreshIfStale() fetches again once a listed answer is past the TTL, not while it is within it', async () => {
@@ -559,7 +639,9 @@ describe('RegistryIntelligenceCache', () => {
 
       expect(calls.slice(fetched).map(([url]) => url)).toEqual([
         `${FLEET_URL}?name=example-agent&type=mcp_server`,
+        `${ALERTS_URL}&name=example-agent&packageType=mcp_server`,
         `${FLEET_URL}?name=quiet-agent&type=mcp_server`,
+        `${ALERTS_URL}&name=quiet-agent&packageType=mcp_server`,
       ]);
       const result = cache.lookup('Example-Agent');
       expect(result.status).toBe('hit');
@@ -568,7 +650,7 @@ describe('RegistryIntelligenceCache', () => {
       }
       expect(cache.lookup('quiet-agent')).toEqual({ status: 'miss' });
       // lookup() made no request (AC-005).
-      expect(calls).toHaveLength(fetched + 2);
+      expect(calls).toHaveLength(fetched + 4);
     });
 
     it('requests an added package again when the cache warms later', async () => {
@@ -576,16 +658,20 @@ describe('RegistryIntelligenceCache', () => {
       const cache = new RegistryIntelligenceCache();
       await cache.addSourcePackages([{ name: '@scope/tool', type: 'ai_tool' }]);
       const calls = (global.fetch as jest.Mock).mock.calls;
-      expect(calls.map(([url]) => url)).toEqual([`${FLEET_URL}?name=%40scope%2Ftool&type=ai_tool`]);
+      expect(calls.map(([url]) => url)).toEqual([
+        `${FLEET_URL}?name=%40scope%2Ftool&type=ai_tool`,
+        `${ALERTS_URL}&name=%40scope%2Ftool&packageType=ai_tool`,
+      ]);
 
       await cache.warm();
 
-      expect(calls.slice(1).map(([url]) => url)).toEqual(expect.arrayContaining([
+      expect(calls.slice(2).map(([url]) => url)).toEqual(expect.arrayContaining([
         FLEET_URL,
         `${FLEET_URL}?name=%40scope%2Ftool&type=ai_tool`,
         'https://api.oa2a.org/api/v1/intelligence/alerts?type=supply_chain',
+        `${ALERTS_URL}&name=%40scope%2Ftool&packageType=ai_tool`,
       ]));
-      expect(calls).toHaveLength(4);
+      expect(calls).toHaveLength(6);
     });
 
     it('does not request a package listed already, and waits for a request for it that is in flight', async () => {
@@ -602,10 +688,10 @@ describe('RegistryIntelligenceCache', () => {
 
       const first = cache.addSourcePackages([{ name: 'example-agent', type: 'mcp_server' }]);
       await cache.addSourcePackages([{ name: 'example-agent', type: 'mcp_server' }]);
-      // The second call resolved after the answer the first one requested.
+      // The second call resolved after the answers the first one requested.
       expect(cache.lookup('example-agent').status).toBe('hit');
       await first;
-      expect(calls).toHaveLength(fetched + 1);
+      expect(calls).toHaveLength(fetched + 2);
     });
 
     it('resolves when the request for an added package fails, which lookup() reports as error', async () => {
@@ -633,7 +719,8 @@ describe('RegistryIntelligenceCache', () => {
 
       const urls = calls.map(([url]) => url);
       expect(urls.filter(url => url === `${FLEET_URL}?name=example-agent&type=mcp_server`)).toHaveLength(1);
-      expect(urls).toHaveLength(3);
+      expect(urls.filter(url => url === `${ALERTS_URL}&name=example-agent&packageType=mcp_server`)).toHaveLength(1);
+      expect(urls).toHaveLength(4);
       expect(cache.lookup('example-agent').status).toBe('hit');
     });
 
@@ -954,6 +1041,229 @@ describe('RegistryIntelligenceCache', () => {
       cache.clearCache();
 
       expect(cache.lookup('example-agent')).toEqual({ status: 'error', reason: 'registry cache not warmed' });
+    });
+  });
+
+  describe("a listed package's own alert answer, read by name and type when the cache warms, decides its result", () => {
+    const FLEET_URL = 'https://api.oa2a.org/api/v1/registry/fleet/anomaly-signal';
+    const listed: RegistryCacheOptions = {
+      sourcePackages: [
+        { name: 'example-agent', type: 'mcp_server' },
+        { name: 'quiet-agent', type: 'mcp_server' },
+      ],
+    };
+    const exampleSignal = expect.objectContaining({ name: 'example-agent', anomalyScore: 0.42 });
+    /** The figures of the measured page (1,000 alerts of 14,002), which holds no alert for a listed package. */
+    const MEASURED = {
+      reason: 'the page holds 1000 of 14002 alerts',
+      alertsHeld: 1000,
+      total: 14002,
+      limit: 1000,
+      producerState: 'current',
+    };
+    /** A complete answer for each package: SUPPLY_ALERT for example-agent, no alert for any other. */
+    const ownAlert = (name: string, packageType: string): AlertAnswer =>
+      packageAnswer(name, packageType, name === 'example-agent' ? [SUPPLY_ALERT] : []);
+    /** A complete answer with a total of 0 for each package. */
+    const noAlert = (name: string, packageType: string): AlertAnswer => packageAnswer(name, packageType, []);
+
+    it('is a hit with the alert row of its own answer while it is absent from the measured page', async () => {
+      mockFleetPerPackage(asProduction, cutPage(), undefined, ownAlert);
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      const result = cache.lookup('example-agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.supplyChainAlerts).toEqual([SUPPLY_ALERT]);
+        expect(result.intelligence.fleetAnomalySignal).toEqual(exampleSignal);
+      }
+      // A package that is not listed keeps the page's answer: absent from that page, it is partial.
+      expect(cache.lookup('unknown-pkg')).toEqual({ status: 'partial', fleetAnomalySignal: null, supplyChainPage: MEASURED });
+    });
+
+    it('takes the negative from its own complete answer with a total of 0: a miss without anomaly events, a hit with no alerts beside an anomaly signal', async () => {
+      mockFleetPerPackage(asProduction, cutPage(), undefined, noAlert);
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      expect(cache.lookup('quiet-agent')).toEqual({ status: 'miss' });
+      const result = cache.lookup('example-agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.supplyChainAlerts).toEqual([]);
+        expect(result.intelligence.fleetAnomalySignal).toEqual(exampleSignal);
+      }
+    });
+
+    it.each<[string, AlertAnswer | null]>([
+      ['answered with 500', { status: 500, body: { error: 'Failed to retrieve supply chain alerts' } }],
+      ['answered with 429', { status: 429, body: { error: 'Rate limit exceeded' } }],
+      ['not answered', null],
+      ['answered with a body that is no alert page', { status: 200, body: { error: 'unexpected' } }],
+      ['answered with the unfiltered page, as from a cache that ignores the query', { status: 200, body: cutPage() }],
+    ])('is partial with the page figures, as before, when its own request is %s', async (_label, reply) => {
+      mockFleetPerPackage(asProduction, cutPage(), undefined, () => reply);
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      expect(cache.lookup('example-agent')).toEqual({ status: 'partial', fleetAnomalySignal: exampleSignal, supplyChainPage: MEASURED });
+      expect(cache.lookup('quiet-agent')).toEqual({ status: 'partial', fleetAnomalySignal: null, supplyChainPage: MEASURED });
+    });
+
+    it.each<[string, (name: string, packageType: string) => AlertAnswer, Record<string, unknown>]>([
+      [
+        "a producer state of 'stale'",
+        (name, packageType) => packageAnswer(name, packageType, [], { producer: { state: 'stale' } }),
+        { reason: "the page's producer state is 'stale'", alertsHeld: 0, total: 0, limit: 1000, producerState: 'stale' },
+      ],
+      [
+        'the population of another package, even with a row that names this one',
+        (_name, packageType) => packageAnswer('other-package', packageType, [{ ...SUPPLY_ALERT, id: 'misfiled' }]),
+        { reason: 'the page counts another population', alertsHeld: 1, total: 1, limit: 1000, producerState: 'current' },
+      ],
+      [
+        'a total above the alerts it carries',
+        (name, packageType) => packageAnswer(name, packageType, [], { total: 2 }),
+        { reason: 'the page holds 0 of 2 alerts', alertsHeld: 0, total: 2, limit: 1000, producerState: 'current' },
+      ],
+    ])('is partial, with the reason, when its own answer states %s', async (_label, own, supplyChainPage) => {
+      mockFleetPerPackage(asProduction, cutPage(), undefined, own);
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      expect(cache.lookup('example-agent')).toEqual({ status: 'partial', fleetAnomalySignal: exampleSignal, supplyChainPage });
+    });
+
+    it.each<[string, Record<string, unknown>]>([
+      ["a producer state of 'stale'", { producer: { state: 'stale' } }],
+      ['a total above the alerts it carries', { total: 5 }],
+    ])('is a hit with the alert row of its own answer when that answer states %s', async (_label, overrides) => {
+      mockFleetPerPackage(asProduction, cutPage(), undefined, (name, packageType) =>
+        packageAnswer(name, packageType, name === 'example-agent' ? [SUPPLY_ALERT] : [], overrides));
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      const result = cache.lookup('example-agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.supplyChainAlerts).toEqual([SUPPLY_ALERT]);
+      }
+    });
+
+    it('is a hit with a row the page holds for its name in another case and its type, beside its own answer of a total of 0', async () => {
+      const otherCase: SupplyChainAlert = { ...SUPPLY_ALERT, id: 'alert-case', name: 'Example-Agent' };
+      mockFleetPerPackage(asProduction, cutPage([...otherAlerts(999), otherCase]), undefined, noAlert);
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      const result = cache.lookup('example-agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.supplyChainAlerts).toEqual([otherCase]);
+      }
+
+      // A row on both is counted once, by id.
+      mockFleetPerPackage(asProduction, cutPage([...otherAlerts(998), SUPPLY_ALERT, otherCase]), undefined, ownAlert);
+      await cache.warm();
+      const united = cache.lookup('example-agent');
+      expect(united.status).toBe('hit');
+      if (united.status === 'hit') {
+        expect(united.intelligence.supplyChainAlerts).toEqual([SUPPLY_ALERT, otherCase]);
+      }
+    });
+
+    it('takes no row the page holds for its name with another type once its own answer is complete', async () => {
+      const otherType: SupplyChainAlert = { ...SUPPLY_ALERT, id: 'alert-library', type: 'library' };
+      mockFleetPerPackage(asProduction, cutPage([...otherAlerts(999), otherType]), undefined, noAlert);
+      const cache = new RegistryIntelligenceCache(listed);
+      await cache.warm();
+
+      const result = cache.lookup('example-agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.supplyChainAlerts).toEqual([]);
+      }
+    });
+
+    it('reads its own answer again each time the cache warms, keeps the last one when a later request fails, and forgets it on clearCache()', async () => {
+      const cache = new RegistryIntelligenceCache(listed);
+      const alertsOf = (name: string) => {
+        const result = cache.lookup(name);
+        return result.status === 'hit' ? result.intelligence.supplyChainAlerts : result.status;
+      };
+
+      mockFleetPerPackage(asProduction, cutPage(), undefined, ownAlert);
+      await cache.warm();
+      expect(alertsOf('example-agent')).toEqual([SUPPLY_ALERT]);
+
+      mockFleetPerPackage(asProduction, cutPage(), undefined, noAlert);
+      await cache.warm();
+      expect(alertsOf('example-agent')).toEqual([]);
+
+      mockFleetPerPackage(asProduction, cutPage(), undefined, () => null);
+      await cache.warm();
+      expect(alertsOf('example-agent')).toEqual([]);
+      expect(cache.lookup('quiet-agent')).toEqual({ status: 'miss' });
+
+      cache.clearCache();
+      expect(cache.lookup('example-agent')).toEqual({ status: 'error', reason: 'registry cache not warmed' });
+    });
+
+    it('sends the alert request of a package added with addSourcePackages() once, and none for a package listed already', async () => {
+      mockFleetPerPackage(asProduction, cutPage(), undefined, ownAlert);
+      const cache = new RegistryIntelligenceCache({ sourcePackages: [{ name: 'quiet-agent', type: 'mcp_server' }] });
+      await cache.warm();
+      const calls = (global.fetch as jest.Mock).mock.calls;
+      const fetched = calls.length;
+
+      await cache.addSourcePackages([
+        { name: 'example-agent', type: 'mcp_server' },
+        { name: 'Quiet-Agent', type: 'mcp_server' },
+      ]);
+      await cache.addSourcePackages([{ name: 'example-agent', type: 'mcp_server' }]);
+
+      expect(calls.slice(fetched).map(([url]) => String(url))).toEqual([
+        `${FLEET_URL}?name=example-agent&type=mcp_server`,
+        `${ALERTS_URL}&name=example-agent&packageType=mcp_server`,
+      ]);
+      const result = cache.lookup('example-agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.supplyChainAlerts).toEqual([SUPPLY_ALERT]);
+      }
+      expect(cache.lookup('quiet-agent')).toEqual({ status: 'miss' });
+      // lookup() sent none (AC-005).
+      expect(calls).toHaveLength(fetched + 2);
+    });
+
+    it('reads a listed name with an upper-case letter as listed and lower-cased, and takes a negative only from both answers', async () => {
+      const filedLower: SupplyChainAlert = { ...SUPPLY_ALERT, id: 'alert-lower' };
+      const mixedCase: RegistryCacheOptions = { sourcePackages: [{ name: 'Example-Agent', type: 'mcp_server' }] };
+
+      // A row filed under the lower-cased name stands.
+      mockFleetPerPackage(asProduction, cutPage(), undefined, (name, packageType) =>
+        packageAnswer(name, packageType, name === 'example-agent' ? [filedLower] : []));
+      const cache = new RegistryIntelligenceCache(mixedCase);
+      await cache.warm();
+      const result = cache.lookup('Example-Agent');
+      expect(result.status).toBe('hit');
+      if (result.status === 'hit') {
+        expect(result.intelligence.supplyChainAlerts).toEqual([filedLower]);
+      }
+
+      // Both answers complete with a total of 0: the negative. The Registry
+      // reports no anomaly events for the name as listed, so it is a miss.
+      mockFleetPerPackage(asProduction, cutPage(), undefined, noAlert);
+      await cache.warm();
+      expect(cache.lookup('Example-Agent')).toEqual({ status: 'miss' });
+
+      // Without the answer under the lower-cased name: partial, with the page figures.
+      mockFleetPerPackage(asProduction, cutPage(), undefined, (name, packageType) =>
+        name === 'example-agent' ? null : packageAnswer(name, packageType, []));
+      const fresh = new RegistryIntelligenceCache(mixedCase);
+      await fresh.warm();
+      expect(fresh.lookup('Example-Agent')).toEqual({ status: 'partial', fleetAnomalySignal: null, supplyChainPage: MEASURED });
     });
   });
 });
