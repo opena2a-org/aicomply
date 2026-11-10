@@ -36,6 +36,7 @@
     "STATUS.md"
   ],
   "scripts": {
+    "prepack": "node scripts/pack-gate.mjs",
     "build": "tsc -p tsconfig.build.json",
     "test": "jest",
     "lint": "tsc --noEmit",

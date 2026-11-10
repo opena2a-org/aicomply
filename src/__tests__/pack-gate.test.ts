@@ -1,0 +1,128 @@
+// The pack gate is this package's prepack script, so `npm pack` and
+// `npm publish` both run it. This suite runs the same command, with the same
+// arguments, in two scratch packages in one run: one planted with one line per
+// expression the gate refuses, which must be refused with exactly those three
+// hits, and one carrying near misses, which must pass. Every planted line is
+// assembled at run time from fragments, so no line of this file carries a
+// shape the gate refuses.
+import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
+
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const GATE_COMMAND = 'node scripts/pack-gate.mjs';
+// The command and the module it imports the expressions from.
+const GATE_FILES = ['pack-gate.mjs', 'pack-gate-expressions.mjs'];
+
+const scratchRoots: string[] = [];
+afterAll(() => {
+  for (const root of scratchRoots) fs.rmSync(root, { recursive: true, force: true });
+});
+
+function makeTemp(prefix: string): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  scratchRoots.push(root);
+  return root;
+}
+
+const glue = (...parts: string[]): string => parts.join('');
+const MEASURE = glue('F', '1');
+
+// One file per expression: a bracketed role tag, a vendor named as the
+// reviewer, and an accuracy figure in a table with no withdrawal notice.
+const PLANTED: Record<string, string> = {
+  'role.txt': `${glue('[', 'CHI', 'EF-', 'XX]')} planted\n`,
+  'vendor.txt': `${glue('reviewed', ' by ', 'Cla', 'ude')}\n`,
+  'figures.md': [`| Configuration | ${MEASURE} |`, '|---|---|', `| planted | ${glue('82', '.9', '%')} |`, ''].join('\n'),
+};
+
+// Near misses the gate must pass: an expanded abbreviation, a vendor-named
+// crawler as the object of a sentence, a recall figure beside a withdrawn cell,
+// and an accuracy figure in a file that states the withdrawal at its top.
+const CLEAN: Record<string, string> = {
+  'near-misses.txt': ['certificate authority (CA)', 'the ClaudeBot crawler, named as the object of a sentence', ''].join('\n'),
+  'recall.md': [`| Scanner | Recall | ${MEASURE} |`, '|---|---|---|', `| planted | ${glue('71', '.1', '%')} | withdrawn |`, ''].join('\n'),
+  'notice.md': [
+    `${MEASURE} and precision on this corpus are withdrawn.`,
+    '',
+    `| Configuration | ${MEASURE} |`,
+    '|---|---|',
+    `| planted | ${glue('82', '.9', '%')} |`,
+    '',
+  ].join('\n'),
+};
+
+function prepackOf(root: string): unknown {
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  return manifest.scripts?.prepack;
+}
+
+// A scratch package carrying `files`, whose prepack script is this
+// repository's prepack script verbatim, beside a copy of the gate it runs.
+function scratchPackage(name: string, files: Record<string, string>): string {
+  const root = makeTemp(`pack-gate-${name}-`);
+  const prepack = prepackOf(REPO_ROOT);
+  const manifest = {
+    name: `pack-gate-${name}`,
+    version: '0.0.0',
+    files: Object.keys(files),
+    scripts: prepack === undefined ? {} : { prepack },
+  };
+  fs.writeFileSync(path.join(root, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  for (const [rel, content] of Object.entries(files)) fs.writeFileSync(path.join(root, rel), content);
+  fs.mkdirSync(path.join(root, 'scripts'));
+  for (const gateFile of GATE_FILES) {
+    const source = path.join(REPO_ROOT, 'scripts', gateFile);
+    if (fs.existsSync(source)) fs.copyFileSync(source, path.join(root, 'scripts', gateFile));
+  }
+  return root;
+}
+
+// `npm pack --dry-run --json` in `cwd`, which runs the prepack script. The npm
+// is the one running this suite when an npm run started it, else the one on
+// the PATH; the calling run's npm_config_ variables are not passed on.
+function dryRunPack(cwd: string): { status: number | null; stdout: string; stderr: string } {
+  const execpath = process.env.npm_execpath;
+  const viaCli = execpath !== undefined && path.basename(execpath) === 'npm-cli.js' && fs.existsSync(execpath);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^npm_config_/i.test(key)));
+  const args = ['pack', '--dry-run', '--json'];
+  const run = spawnSync(viaCli ? process.execPath : 'npm', viaCli ? [execpath as string, ...args] : args, {
+    cwd,
+    env,
+    encoding: 'utf8',
+  });
+  return { status: run.status, stdout: run.stdout, stderr: run.stderr };
+}
+
+// The refusal lines of a gate run: `<file>:<line>: <expression>: <guidance>`.
+const refusals = (stderr: string): string[] =>
+  stderr
+    .split('\n')
+    .map((line) => /^([^\s:]+):(\d+): (PATTERN|VENDOR|FIGURES): \S/.exec(line))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => `${match[1]}:${match[2]} ${match[3]}`);
+
+describe('the pack gate refuses a planted pack and passes a clean one', () => {
+  it('the prepack script is the gate command, so npm pack, npm publish and this suite run the same arguments', () => {
+    expect(prepackOf(REPO_ROOT)).toBe(GATE_COMMAND);
+  });
+
+  it(
+    'a scratch pack planted with one line per expression is refused with exactly three hits, and a clean scratch pack passes, in one run',
+    () => {
+      const planted = dryRunPack(scratchPackage('planted', PLANTED));
+      expect(planted.status).not.toBe(0);
+      expect(refusals(planted.stderr).sort()).toEqual(['figures.md:3 FIGURES', 'role.txt:1 PATTERN', 'vendor.txt:1 VENDOR']);
+
+      const clean = dryRunPack(scratchPackage('clean', CLEAN));
+      expect(clean.stderr).not.toMatch(/: (PATTERN|VENDOR|FIGURES): /);
+      expect(clean.status).toBe(0);
+      expect(refusals(clean.stderr)).toEqual([]);
+      expect(clean.stderr).toMatch(/pack gate: pack-gate-clean: \d+ packed files read, 0 skipped, 0 hits/);
+      // The gate writes nothing to standard output, so the JSON npm prints parses.
+      expect(JSON.parse(clean.stdout)[0].name).toBe('pack-gate-clean');
+    },
+    120_000,
+  );
+});
