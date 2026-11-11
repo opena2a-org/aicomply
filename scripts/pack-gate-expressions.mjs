@@ -7,12 +7,12 @@
 // pack gate.
 
 // The first expression's inline case-modifier group compiles on Node 23 or
-// newer only. An older runtime refuses here, with that reason, instead of
-// failing on the expression below with a bare syntax error.
+// newer only. An older runtime throws here, with that reason, instead of
+// failing on the expression below with a bare syntax error. The pack gate
+// imports this module inside its error handling, so there the reason becomes
+// its could-not-run refusal (exit 2).
 if (Number(process.versions.node.split('.')[0]) < 23) {
-  throw new Error(
-    `pack gate: Node ${process.versions.node} cannot compile the first expression, which needs Node 23 or newer; the pack is refused`,
-  );
+  throw new Error(`Node ${process.versions.node} cannot compile the first expression, which needs Node 23 or newer`);
 }
 
 // The first two expressions are the ones the scanner repository's tree gate
