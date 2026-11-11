@@ -2,13 +2,17 @@
 // `npm publish` both run it. This suite runs the same command, with the same
 // arguments, in two scratch packages in one run: one planted with one line per
 // expression the gate refuses, which must be refused with exactly those three
-// hits, and one carrying near misses, which must pass. Every planted line is
-// assembled at run time from fragments, so no line of this file carries a
-// shape the gate refuses.
+// hits, and one carrying near misses, which must pass. A third test runs the
+// third expression's line function on the recall near miss alone, which must
+// pass, and with one more row carrying a percentage under the F1 column, which
+// must be refused on that row, so the near miss passes on the column rule and
+// not on a withdrawal notice. Every planted line is assembled at run time from
+// fragments, so no line of this file carries a shape the gate refuses.
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { pathToFileURL } from 'node:url';
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const GATE_COMMAND = 'node scripts/pack-gate.mjs';
@@ -38,11 +42,13 @@ const PLANTED: Record<string, string> = {
 };
 
 // Near misses the gate must pass: an expanded abbreviation, a vendor-named
-// crawler as the object of a sentence, a recall figure beside a withdrawn cell,
-// and an accuracy figure in a file that states the withdrawal at its top.
+// crawler as the object of a sentence, a recall figure beside an F1 cell that
+// carries no figure, in a file with no withdrawal notice, so the column rule
+// decides it, and an accuracy figure in a file that states the withdrawal at
+// its top.
 const CLEAN: Record<string, string> = {
   'near-misses.txt': ['certificate authority (CA)', 'the ClaudeBot crawler, named as the object of a sentence', ''].join('\n'),
-  'recall.md': [`| Scanner | Recall | ${MEASURE} |`, '|---|---|---|', `| planted | ${glue('71', '.1', '%')} | withdrawn |`, ''].join('\n'),
+  'recall.md': [`| Scanner | Recall | ${MEASURE} |`, '|---|---|---|', `| planted | ${glue('71', '.1', '%')} | n/a |`, ''].join('\n'),
   'notice.md': [
     `${MEASURE} and precision on this corpus are withdrawn.`,
     '',
@@ -103,6 +109,23 @@ const refusals = (stderr: string): string[] =>
     .filter((match): match is RegExpExecArray => match !== null)
     .map((match) => `${match[1]}:${match[2]} ${match[3]}`);
 
+// The 1-based numbers of the lines of `content` that the third expression
+// refuses: figureLines, from the module the gate imports its expressions from,
+// run on `content` split at each newline, as the gate splits a packed file.
+// The module is an ES module and ts-jest compiles this suite to CommonJS, so a
+// child Node process imports it.
+function figureLinesOf(content: string): number[] {
+  const expressions = pathToFileURL(path.join(REPO_ROOT, 'scripts', 'pack-gate-expressions.mjs')).href;
+  const source = [
+    "import { readFileSync } from 'node:fs';",
+    `import { figureLines } from ${JSON.stringify(expressions)};`,
+    "process.stdout.write(JSON.stringify(figureLines(readFileSync(0, 'utf8').split('\\n'))));",
+  ].join('\n');
+  const run = spawnSync(process.execPath, ['--input-type=module', '--eval', source], { input: content, encoding: 'utf8' });
+  if (run.status !== 0) throw new Error(`figureLines exited ${run.status}: ${run.stderr}`);
+  return JSON.parse(run.stdout);
+}
+
 describe('the pack gate refuses a planted pack and passes a clean one', () => {
   it('the prepack script is the gate command, so npm pack, npm publish and this suite run the same arguments', () => {
     expect(prepackOf(REPO_ROOT)).toBe(GATE_COMMAND);
@@ -125,4 +148,16 @@ describe('the pack gate refuses a planted pack and passes a clean one', () => {
     },
     120_000,
   );
+
+  it('the recall near miss reaches the column rule: it passes, and the same table with one more row carrying a percentage under the F1 column is refused on that row alone', () => {
+    const lines = CLEAN['recall.md'].split('\n');
+    // The fixture ends with a newline, so its last line is empty. The extra row
+    // takes that empty line's place, so its 1-based number is lines.length.
+    expect(lines[lines.length - 1]).toBe('');
+    const extra = `| other | ${glue('1', '%')} | ${glue('99', '.9', '%')} |`;
+    const withExtra = [...lines.slice(0, -1), extra, ''].join('\n');
+
+    expect(figureLinesOf(CLEAN['recall.md'])).toEqual([]);
+    expect(figureLinesOf(withExtra)).toEqual([lines.length]);
+  });
 });
