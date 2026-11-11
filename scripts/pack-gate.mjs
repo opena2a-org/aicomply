@@ -19,30 +19,18 @@
 // exemptions are the exact file-and-line entries of EXEMPT.
 //
 // Exit 0: no hit. Exit 1: refused, each hit named by file, line, expression and
-// guidance. Exit 2: the gate could not list or read the pack, which refuses it
-// as well. Everything it prints goes to standard error, because
-// `npm pack --json` copies a lifecycle script's standard output into its JSON.
+// guidance. Exit 2: the gate could not run, which refuses the pack as well: it
+// was given an argument, its expressions did not load (they refuse a runtime
+// older than Node 23), or it could not list or read the pack. It prints the
+// reason, not a stack trace. Everything it prints goes to standard error,
+// because `npm pack --json` copies a lifecycle script's standard output into
+// its JSON.
 //
 // This file is byte-identical in every repository that publishes with it.
 
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import {
-  EXEMPT,
-  FIGURES_GUIDANCE,
-  PATTERN,
-  PATTERN_GUIDANCE,
-  VENDOR,
-  VENDOR_GUIDANCE,
-  figureLines,
-} from './pack-gate-expressions.mjs';
-
-const GUIDANCE = Object.freeze({
-  PATTERN: PATTERN_GUIDANCE,
-  VENDOR: VENDOR_GUIDANCE,
-  FIGURES: FIGURES_GUIDANCE,
-});
 
 const log = (message) => process.stderr.write(`${message}\n`);
 
@@ -88,10 +76,11 @@ function listPackFiles(root) {
   return files;
 }
 
-// Reads every file of `files` under `root` and returns each refused line as
-// { file, line, rule }, the files skipped for a NUL byte, and the exemptions
-// for `pkg` whose file is packed but carries no exempted line.
-function scanPack(root, files, pkg) {
+// Reads every file of `files` under `root` with the loaded expressions module
+// and returns each refused line as { file, line, rule }, the files skipped for
+// a NUL byte, and the exemptions for `pkg` whose file is packed but carries no
+// exempted line.
+function scanPack(root, files, pkg, { EXEMPT, PATTERN, VENDOR, figureLines }) {
   const exempt = EXEMPT.filter((entry) => entry.pkg === pkg);
   const used = new Set();
   const hits = [];
@@ -120,31 +109,42 @@ function scanPack(root, files, pkg) {
   return { hits, binary, stale };
 }
 
-function main(argv) {
+async function main(argv) {
   if (argv.length > 0) {
     log(`pack gate: takes no arguments, got ${argv.length}; the pack is refused`);
     return 2;
   }
   const root = process.cwd();
+  // The expressions are imported here rather than at the top of this file, so
+  // an error the module throws while it loads, as it does on a runtime older
+  // than Node 23, reaches this handler and its exit 2 instead of escaping as
+  // an uncaught error with a stack trace.
+  let expressions;
   let pkg;
   let files;
   try {
+    expressions = await import('./pack-gate-expressions.mjs');
     pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).name;
     files = listPackFiles(root);
   } catch (error) {
     log(`pack gate: ${error.message}; the pack is refused`);
     return 2;
   }
+  const guidance = Object.freeze({
+    PATTERN: expressions.PATTERN_GUIDANCE,
+    VENDOR: expressions.VENDOR_GUIDANCE,
+    FIGURES: expressions.FIGURES_GUIDANCE,
+  });
   let result;
   try {
-    result = scanPack(root, files, pkg);
+    result = scanPack(root, files, pkg, expressions);
   } catch (error) {
     log(`pack gate: a packed file could not be read (${error.message}); the pack is refused`);
     return 2;
   }
   const { hits, binary, stale } = result;
   for (const file of binary) log(`pack gate: skipped, NUL byte in the first 8000 bytes: ${file}`);
-  for (const hit of hits) log(`${hit.file}:${hit.line}: ${hit.rule}: ${GUIDANCE[hit.rule]}`);
+  for (const hit of hits) log(`${hit.file}:${hit.line}: ${hit.rule}: ${guidance[hit.rule]}`);
   for (const entry of stale) log(`pack gate: an exemption matches no line of ${entry.file}; delete it`);
   if (hits.length > 0 || stale.length > 0) {
     log(`pack gate: ${pkg} refused: ${hits.length} hits, ${stale.length} stale exemptions, ${files.length} packed files`);
@@ -154,4 +154,4 @@ function main(argv) {
   return 0;
 }
 
-process.exitCode = main(process.argv.slice(2));
+process.exitCode = await main(process.argv.slice(2));
