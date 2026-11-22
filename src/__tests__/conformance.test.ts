@@ -176,7 +176,7 @@ describe('pattern pack conformance suite', () => {
   it('stores each value masked from its own slice of the input, with no leading characters', () => {
     const cases = loadConformanceCases(CASES_DIR);
     const violations = cases.flatMap((c) => c.expect.violations ?? []);
-    expect(violations).toHaveLength(1627);
+    expect(violations).toHaveLength(1634);
     expect(maskDrift(cases)).toEqual([]);
   });
 

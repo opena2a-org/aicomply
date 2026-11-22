@@ -290,7 +290,7 @@ describe('README', () => {
   it('lists only Government markings the regex layer reports as CUI', async () => {
     // Each comma-separated example in the Government row is scanned inside a
     // sentence and must come back as one CUI finding over the whole marking,
-    // so the row cannot name a form (FOUO, bare CONTROLLED) that scans CLEAN.
+    // so the row cannot name a form (bare CUI or CONTROLLED) that scans CLEAN.
     const rowLine = lineOf(
       /^\| Government\s*\|/,
       lineOf(/^### Regex layer/, 1, DETECTION_LINES),

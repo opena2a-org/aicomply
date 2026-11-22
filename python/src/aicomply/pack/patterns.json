@@ -55,7 +55,7 @@
     {
       "id": "cui-marking",
       "class": "CUI",
-      "source": "\\b(CUI//SP-[A-Z-]+|CONTROLLED\\s+UNCLASSIFIED\\s+INFORMATION|FOR\\s+OFFICIAL\\s+USE\\s+ONLY|CUI//[A-Z-]+)\\b",
+      "source": "\\b((?:U|UNCLASSIFIED)//(?:FOUO|FOR\\s+OFFICIAL\\s+USE\\s+ONLY)|CUI//SP-[A-Z-]+|CONTROLLED//[A-Z-]+|CONTROLLED\\s+UNCLASSIFIED\\s+INFORMATION|FOR\\s+OFFICIAL\\s+USE\\s+ONLY|CUI//[A-Z-]+|FOUO)\\b",
       "flags": "i",
       "validator": "none",
       "context": {
@@ -64,7 +64,7 @@
       "aiisId": null,
       "techniqueId": null,
       "fpEstimate": null,
-      "note": "Controlled Unclassified Information banner markings."
+      "note": "Controlled Unclassified Information banner markings: CUI// and CONTROLLED// banners, the spelled-out CUI and FOR OFFICIAL USE ONLY markings, and the legacy FOUO token with its U// and UNCLASSIFIED// banners. Bare CUI and CONTROLLED are not matched, because both are ordinary words in prose."
     },
     {
       "id": "aws-access-key-id",

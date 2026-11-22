@@ -96,6 +96,20 @@ def test_cui():
     assert "CUI" not in _types("The CUI program trains analysts.")  # prose-mention
 
 
+def test_cui_fouo_and_controlled_banners():
+    for marking in (
+        "FOUO",
+        "U//FOUO",
+        "UNCLASSIFIED//FOUO",
+        "UNCLASSIFIED//FOR OFFICIAL USE ONLY",
+        "CONTROLLED//SP-PRVCY",
+        "CONTROLLED//BASIC",
+    ):
+        assert "CUI" in _types(f"This document is {marking}.")
+    assert "CUI" not in _types("FOUOX and XFOUO")
+    assert "CUI" not in _types("Access is CONTROLLED by badge.")
+
+
 def test_iban_mod97():
     assert "IBAN" in _types("Wire to DE53083497798682044097 today.")
     # bad checksum should fail mod-97
