@@ -8,13 +8,14 @@
  *   - No policy: behaviour unchanged
  *   - Empty content via comply(): the pack still sees the Registry step's violations
  *   - A pack the step cannot apply, or a first-argument name that is not a
- *     built-in pack, is rejected with a TypeError that names the parameter
+ *     built-in pack, is rejected with a TypeError that names the parameter,
+ *     from comply() and from ClassificationSession.comply() alike
  */
 
 import { classifyDualLayer } from '..';
-import { comply, loadPolicyPack, validatePolicyConfig } from '../../..';
+import { ClassificationSession, comply, loadPolicyPack, validatePolicyConfig } from '../../..';
 import { policyStepProblems } from '../../../policy';
-import type { RegistryIntelligenceCache } from '../../../registry';
+import { RegistryIntelligenceCache } from '../../../registry';
 import type { ComplyOptions, PolicyPack } from '../../../types';
 
 // ---------------------------------------------------------------------------
@@ -350,6 +351,26 @@ describe('policy pack validation', () => {
     await expect(call).rejects.toThrow(
       "classifyDualLayer: options.policyPack is not a valid policy pack: Rule 'block-ssn': invalid action 'deny'",
     );
+  });
+
+  it.each([
+    ['a rules value that is not an array', { ...DENY_PACK, rules: 5 }, 'Policy pack rules must be an array (got number)'],
+    ['a lower-case action', withRule({ action: 'deny' }), "Rule 'block-ssn': invalid action 'deny'"],
+  ])('rejects %s on the second argument of ClassificationSession.comply()', async (_label, policyPack, problem) => {
+    // No Registry fetch: the session only needs a cache to hand to comply().
+    const warm = jest.spyOn(RegistryIntelligenceCache.prototype, 'warm').mockResolvedValue(undefined);
+    const session = await ClassificationSession.create();
+    warm.mockRestore();
+    const options = { policyPack } as unknown as { policyPack: PolicyPack };
+
+    for (const content of [SSN_CONTENT, '']) {
+      const call = session.comply({ content, useGuard: false }, options);
+      await expect(call).rejects.toThrow(TypeError);
+      await expect(call).rejects.toThrow(
+        `comply: dualLayerOptions.policyPack is not a valid policy pack: ${problem}`,
+      );
+      await expect(call).rejects.not.toThrow('is not iterable');
+    }
   });
 
   it.each([
