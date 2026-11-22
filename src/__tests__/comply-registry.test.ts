@@ -23,7 +23,8 @@
  *   - ClassificationSession.comply() respects caller-supplied registryCache override
  *     on the first argument, and uses the session cache in place of one on the second
  *   - ClassificationSession.comply() reads a content getter or an inherited content
- *   - comply() rejects binary data, a boxed primitive and a promise as the first argument
+ *   - comply() rejects binary data, a boxed primitive, a promise and other built-in
+ *     non-plain objects (Map, Set, Date, RegExp, Error, ...) as the first argument
  *   - warmRegistryCache() returns a warmed RegistryIntelligenceCache
  */
 
@@ -1107,6 +1108,23 @@ describe('comply(): the first argument', () => {
     ['a DataView', () => new DataView(new ArrayBuffer(8)), 'DataView'],
     ['a boxed String', () => new String(SSN_TEXT), 'String object'],
     ['a promise', () => Promise.resolve({ content: SSN_TEXT }), 'Promise (await it first)'],
+    ['a Map', () => new Map([['content', SSN_TEXT]]), 'Map'],
+    ['a Set', () => new Set([SSN_TEXT]), 'Set'],
+    ['a WeakMap', () => new WeakMap(), 'WeakMap'],
+    ['a WeakSet', () => new WeakSet(), 'WeakSet'],
+    ['a Date', () => new Date(0), 'Date'],
+    ['a RegExp', () => /123-45-6789/, 'RegExp'],
+    ['an Error', () => new Error(SSN_TEXT), 'Error'],
+    ['a TypeError', () => new TypeError(SSN_TEXT), 'Error'],
+    [
+      'an arguments object',
+      () => (function (..._args: unknown[]) {
+        return arguments;
+      })(SSN_TEXT),
+      'arguments object',
+    ],
+    ['a Map iterator', () => new Map([['content', SSN_TEXT]]).entries(), 'Map Iterator'],
+    ['a generator', () => (function* () { yield SSN_TEXT; })(), 'Generator'],
   ];
 
   it.each(notOptions)('rejects %s, as a number or an array is rejected', async (_label, make, got) => {
@@ -1123,6 +1141,22 @@ describe('comply(): the first argument', () => {
     ]) {
       await expect(call).rejects.toThrow(TypeError);
       await expect(call).rejects.toThrow(message);
+    }
+  });
+
+  it('accepts a class instance and an object with no prototype that carry content', async () => {
+    class Options {
+      content = SSN_TEXT;
+      useGuard = false;
+    }
+    const bare = Object.assign(Object.create(null) as ComplyOptions, {
+      content: SSN_TEXT,
+      useGuard: false,
+    });
+
+    for (const options of [new Options(), bare]) {
+      const result = await comply(options);
+      expect(result.verdict).toBe('VIOLATION');
     }
   });
 

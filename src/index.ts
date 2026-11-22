@@ -277,10 +277,12 @@ function toComplyOptions(options: ComplyOptions | string): ComplyOptions {
 /**
  * How to name `value` in the error when it is not an options object, or
  * undefined when it is one. An array, binary data (a Buffer, a typed array,
- * an ArrayBuffer), a boxed primitive such as `new String('...')` and a
- * promise are objects, but read as options none of them has a `content`, so
- * the call would return CLEAN without classifying anything. A class instance
- * with a `content` property is an options object.
+ * an ArrayBuffer), a boxed primitive such as `new String('...')`, a promise
+ * and the other built-in objects that hold data somewhere other than their
+ * own properties (a Map, a Set, a Date, a RegExp, an Error, an arguments
+ * object, an iterator) are objects, but read as options none of them has a
+ * `content`, so the call would return CLEAN without classifying anything. A
+ * class instance with a `content` property is an options object.
  */
 function notAnOptionsObject(value: unknown): string | undefined {
   if (value === null) return 'null';
@@ -292,6 +294,21 @@ function notAnOptionsObject(value: unknown): string | undefined {
   }
   if (utilTypes.isBoxedPrimitive(value)) return `${builtInTag(value)} object`;
   if (utilTypes.isPromise(value)) return 'Promise (await it first)';
+  if (utilTypes.isArgumentsObject(value)) return 'arguments object';
+  if (value instanceof Error) return 'Error';
+  if (
+    utilTypes.isMap(value) ||
+    utilTypes.isSet(value) ||
+    utilTypes.isWeakMap(value) ||
+    utilTypes.isWeakSet(value) ||
+    utilTypes.isDate(value) ||
+    utilTypes.isRegExp(value) ||
+    utilTypes.isMapIterator(value) ||
+    utilTypes.isSetIterator(value) ||
+    utilTypes.isGeneratorObject(value)
+  ) {
+    return builtInTag(value);
+  }
   return undefined;
 }
 
