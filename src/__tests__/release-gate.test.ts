@@ -588,11 +588,12 @@ describe('npm publish lifecycle', () => {
    * the next line keeps no indentation; in a `|` block, and on a more-indented
    * line of a `>` block, YAML keeps the indentation and the shell gets two
    * words. Where the `\` follows a word it is kept in the joined line, followed
-   * by a space, for `withoutInstallFlags` and `publishTargets` to see; after a
-   * space it is joined with a space. A line of a quoted value, where YAML
-   * reads the `\` itself, is joined to the line directly after it as
-   * `joinedQuoted` reads the two. In a `>` block, the last of the lines
-   * joined decides whether the line after them is kept apart.
+   * by a space, for `withoutInstallFlags`, `publishTargets` and
+   * `continuedWords` to see; after a space it is joined with a space. A line
+   * of a quoted value, where YAML reads the `\` itself, is joined to the line
+   * directly after it as `joinedQuoted` reads the two. In a `>` block, the
+   * last of the lines joined decides whether the line after them is kept
+   * apart.
    */
   function workflowLines(workflow: string): string[] {
     const raw = workflow.split(/\r?\n/);
@@ -906,6 +907,22 @@ describe('npm publish lifecycle', () => {
   }
 
   /**
+   * `line` with each `\` that stands before a space taken out with the spaces
+   * after it, so the word it ends meets the next one. That is the word the
+   * shell gets where `workflowLines` joined a `\`-continued line whose next
+   * line keeps no indentation, as in `ignore-\` and `scripts` on two lines of
+   * a `|` block: the joined line holds `ignore-\ scripts`, which names the
+   * setting to the shell and to no other reading. The joined line does not
+   * keep whether the next line was indented, so every such `\` is read this
+   * way, also where the shell gets two words or a space inside one. A `\`
+   * after an odd number of `\` is escaped itself and continues nothing, so it
+   * and the space stay.
+   */
+  function continuedWords(line: string): string {
+    return line.replace(/\\(?:(\s+)|[\s\S])/g, (escape, gap?: string) => (gap === undefined ? escape : ''));
+  }
+
+  /**
    * What would switch prepublishOnly off for the workflow's publish. npm skips
    * it when the publish is handed something to publish (see `publishTargets`)
    * and under ignore-scripts, which reaches the publish as a flag on it, as an
@@ -915,16 +932,20 @@ describe('npm publish lifecycle', () => {
    * command it stands in begins with an install, such as
    * `npm ci --ignore-scripts`, and `withoutInstallFlags` finds no quote,
    * redirection or `\` that could put it on another command. A line is
-   * refused when any of its `readings` is. The publish's targets are read
+   * refused when any of its `readings` is, or any of the readings of its
+   * `continuedWords`, where a `\` that ends a line carries the name on from
+   * one line to the next. The publish's targets are read
    * from the line `withoutValueQuotes`, as the quote that closes the value is
    * no word of the publish; the flag is read from the line as written, where
    * `withoutInstallFlags` counts the quote that opens the value.
    */
   function scriptsSwitchedOff(workflow: string, npmrc: string | null): string[] {
+    const named = (l: string): boolean => readings(l).some((r) => /ignore[-_]scripts/i.test(withoutInstallFlags(r)));
     const found = workflowLines(workflow).filter(
       (l) =>
         readings(withoutValueQuotes(l)).some((r) => publishTargets(r).length > 0) ||
-        readings(l).some((r) => /ignore[-_]scripts/i.test(withoutInstallFlags(r))),
+        named(l) ||
+        named(continuedWords(l)),
     );
     const rc = (npmrc ?? '')
       .split('\n')
@@ -979,6 +1000,8 @@ describe('npm publish lifecycle', () => {
     ['nothing after it in a tagged double-quoted value', ['      - run: !!str "npm publish"'], null],
     ['nothing after it in a double-quoted value that starts after its key', ['      - run:', '          "npm publish"'], null],
     ['a message that puts a lone dash between npm and publish', ['      - run: echo "already on npm - skipping publish"', PUBLISH], null],
+    ['a hardened install whose flag a continued line of a | block completes', ['      - run: |', '          npm ci --ignore-\\', '          scripts', PUBLISH], null],
+    ['a name two backslashes end, which continue nothing, before a line that starts with scripts', ['      - run: |', '          echo ignore-\\\\', '          scripts/build.sh', PUBLISH], null],
     ['a hardened install after a double-quoted value that closes on its continued line before a comment that ends in a backslash', ['      - run: "npm publish --provenance \\', '          --access public" # note \\', '      - run: npm ci --ignore-scripts'], null],
   ])('lets a publish through with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).toEqual([]);
@@ -1096,6 +1119,16 @@ describe('npm publish lifecycle', () => {
     ['the flag in a tagged and anchored literal scalar', ['      - run: !!str &a |', '          npm ci', '          npm publish --ignore-scripts'], null],
     ['a tarball on a continued line of a tagged and anchored double-quoted value indented no deeper than its key', ['      - run: !!str &a "npm publish --provenance --access \\', '        public ./x.tgz"'], null],
     ['the flag on an npm run after an install that only names the input <& reads', ['      - run: npm run release <& npm ci --ignore-scripts'], null],
+    ['npm config set with the name a continued line of a | block completes', ['      - run: |', '          npm config set ignore-\\', '          scripts true', PUBLISH], null],
+    ['npm config set with the name continued in the middle of its second word', ['      - run: |', '          npm config set ignore-scr\\', '          ipts true', PUBLISH], null],
+    ['npm config set with the name continued before its dash', ['      - run: |', '          npm config set ignore\\', '          -scripts true', PUBLISH], null],
+    ['npm config set with the name continued across a line of one backslash', ['      - run: |', '          npm config set ignore-\\', '          \\', '          scripts true', PUBLISH], null],
+    ['npm config set with the name continued over three lines', ['      - run: |', '          npm config set ig\\', '          nore-\\', '          scripts true', PUBLISH], null],
+    ['npm config set with the name continued onto a word split by shell quotes', ['      - run: |', '          npm config set ignore-\\', '          scr""ipts true', PUBLISH], null],
+    ['an exported environment setting a continued line completes', ['      - run: |', '          export npm_config_ignore_\\', '          scripts=true', PUBLISH], null],
+    ['a line a step appends to .npmrc, continued inside its shell quotes', ['      - run: |', '          echo "ignore-\\', '          scripts=true" >> .npmrc', PUBLISH], null],
+    ['the flag on an npm run, completed by a continued line', ['      - run: |', '          npm run release --ignore-\\', '          scripts'], null],
+    ['the flag on an install name and a flag that continued lines complete', ['      - run: |', '          npm i\\', '          t --ignore-\\', '          scripts'], null],
   ])('refuses a publish with %s', (_label, lines, npmrc) => {
     expect(scriptsSwitchedOff(lines.join('\n'), npmrc)).not.toEqual([]);
   });
