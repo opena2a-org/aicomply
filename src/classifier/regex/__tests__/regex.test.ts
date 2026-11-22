@@ -123,6 +123,29 @@ describe('CUI patterns', () => {
     expect(matches.some(m => m.type === 'CUI')).toBe(true);
   });
 
+  it.each([
+    ['This document is FOUO.', 'FOUO'],
+    ['Header: U//FOUO', 'U//FOUO'],
+    ['UNCLASSIFIED//FOUO', 'UNCLASSIFIED//FOUO'],
+    ['UNCLASSIFIED//FOR OFFICIAL USE ONLY', 'UNCLASSIFIED//FOR OFFICIAL USE ONLY'],
+    ['Banner: CONTROLLED//SP-PRVCY', 'CONTROLLED//SP-PRVCY'],
+    ['CONTROLLED//BASIC', 'CONTROLLED//BASIC'],
+  ])('reports %j as one CUI finding over %j', (input, marking) => {
+    const cui = scanPatterns(input).filter(m => m.type === 'CUI');
+    expect(cui.map(m => input.slice(m.start, m.end))).toEqual([marking]);
+  });
+
+  it('does not match FOUO inside a longer word', () => {
+    const matches = scanPatterns('FOUOX and XFOUO');
+    expect(matches.filter(m => m.type === 'CUI')).toHaveLength(0);
+  });
+
+  it('does not match a bare CUI or CONTROLLED in prose', () => {
+    for (const text of ['The CUI program trains analysts.', 'Access is CONTROLLED by badge.']) {
+      expect(scanPatterns(text).filter(m => m.type === 'CUI')).toHaveLength(0);
+    }
+  });
+
   it('does not match partial words', () => {
     const matches = scanPatterns('uncontrolled access');
     const cui = matches.filter(m => m.type === 'CUI');
