@@ -106,6 +106,64 @@ def test_google_api_key_near_misses_and_references_are_not_reported():
     assert _credentials("const googleKey = process.env.GOOGLE_API_KEY;") == []
 
 
+def _slack_token(
+    kind: str = "b",
+    first: str = "1" * 12,
+    second: str = "2" * 13,
+    secret: str = "FAKE" + "x" * 20,
+) -> str:
+    """A FAKE Slack token, assembled at run time so this file holds no token-shaped text."""
+    return "-".join(["".join(["xo", "x"]) + kind, first, second, secret])
+
+
+_SLACK_BOT = _slack_token()
+
+
+def test_slack_bot_token_assignment_reports_at_the_confidence_of_the_github_classic_rule():
+    line = f"SLACK={_SLACK_BOT}"
+    assert _credentials(line) == [(_SLACK_BOT, 6, len(line), 0.98)]
+
+
+def test_slack_token_bare_in_prose_and_each_type_the_catalog_names():
+    found = _credentials(f"The tool returned {_SLACK_BOT} in its summary.")
+    assert [value for value, *_ in found] == [_SLACK_BOT]
+    for kind in "bapr" + "s":
+        token = _slack_token(kind)
+        assert [value for value, *_ in _credentials(f"SLACK={token}")] == [token]
+
+
+def test_slack_token_ids_of_10_and_of_13_digits():
+    short = _slack_token("b", "3" * 10, "4" * 10)
+    long = _slack_token("b", "3" * 13, "4" * 13)
+    assert [value for value, *_ in _credentials(f"SLACK={short} {long}")] == [short, long]
+
+
+def test_slack_token_is_masked_in_the_classifier_result():
+    result = classify_with_regex(f"SLACK={_SLACK_BOT}")
+    assert result.verdict == "VIOLATION"
+    assert [(v.type, v.value) for v in result.violations] == [("CREDENTIAL", "...xxxx")]
+
+
+def test_slack_token_after_api_key_or_bearer_is_one_finding_at_the_higher_confidence():
+    for line in (f"api_key={_SLACK_BOT}", f"Authorization: Bearer {_SLACK_BOT}"):
+        found = _credentials(line)
+        assert [(value, confidence) for value, _, _, confidence in found] == [(_SLACK_BOT, 0.98)]
+
+
+def test_slack_token_of_another_shape_and_references_are_not_reported():
+    near_misses = [
+        _slack_token(secret="FAKE" + "x" * 19),
+        _slack_token(secret="FAKE" + "x" * 21),
+        _slack_token(first="1" * 9),
+        _slack_token(first="1" * 14),
+        _slack_token("z"),
+        f"_{_SLACK_BOT}",
+    ]
+    for near_miss in near_misses:
+        assert _credentials(f"SLACK={near_miss}") == []
+    assert _credentials("const slackToken = process.env.SLACK_BOT_TOKEN;") == []
+
+
 def test_aws_secret_access_key():
     # The AWS secret access key (40-char base64) has no distinctive prefix, so it
     # is matched only in an aws_secret_access_key assignment context. Parity with

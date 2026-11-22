@@ -143,7 +143,7 @@ only when `NODE_ENV` is `test` or `development`, and ignored otherwise.
 ## Detection classes
 
 SSN, PAN (Luhn + IIN), credentials (AWS keys, GitHub tokens, Google API keys,
-Bearer tokens, `api_key=` patterns), CUI / controlled markings, IBAN (mod-97), passport
+Slack tokens, Bearer tokens, `api_key=` patterns), CUI / controlled markings, IBAN (mod-97), passport
 numbers, MRN, NPI (Luhn with `80840` prefix).
 
 ## Scope

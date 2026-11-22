@@ -193,6 +193,20 @@
       "note": "Google API key: AIza and 35 or more characters, the google form of the @opena2a/credential-patterns catalog with the pack's capture group and upper bound. The whole run is captured, so a longer token is masked whole. No leading word boundary, as for the Anthropic rule: the mixed-case prefix followed by 35 key characters is distinctive on its own."
     },
     {
+      "id": "slack-token",
+      "class": "CREDENTIAL",
+      "source": "\\b(xox[baprs]-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24})\\b",
+      "flags": "",
+      "validator": "none",
+      "context": {
+        "confidence": 0.98
+      },
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "Slack xox token (xoxb- for a bot, xoxp- for a user, and xoxa-, xoxr- and xoxs-): two ids of 10-13 digits and 24 letters and digits, each after a -. The slack form of the @opena2a/credential-patterns catalog with the pack's capture group between word boundaries, as for the GitHub classic token: the token has a fixed shape, so a longer run is not one."
+    },
+    {
       "id": "bearer-token",
       "class": "CREDENTIAL",
       "source": "Bearer\\s+([A-Za-z0-9._~+/=-]{20,1000})",

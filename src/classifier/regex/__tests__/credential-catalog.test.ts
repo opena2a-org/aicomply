@@ -87,6 +87,7 @@ const DERIVED: Array<[string, string, Shape]> = [
   ['openai-legacy-key', 'openai-legacy', 'run-boundary'],
   ['github-pat-classic', 'github-pat', 'token'],
   ['google-api-key', 'google', 'run'],
+  ['slack-token', 'slack', 'token'],
 ];
 
 /**
@@ -142,6 +143,10 @@ describe('the CREDENTIAL rules and the @opena2a/credential-patterns catalog', ()
 
   it('carries the catalog google form, captured and bounded, byte for byte', () => {
     expect(packSource('google-api-key')).toBe(derive(catalogEntry('google').source, 'run'));
+  });
+
+  it('carries the catalog slack form between word boundaries, byte for byte', () => {
+    expect(packSource('slack-token')).toBe(derive(catalogEntry('slack').source, 'token'));
   });
 
   it.each(DIFFERS)('compared %s with the current catalog entry %s', (_packId, catalogId, source) => {

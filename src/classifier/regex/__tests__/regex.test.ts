@@ -251,6 +251,63 @@ describe('credential patterns', () => {
     });
   });
 
+  describe('Slack tokens', () => {
+    // FAKE placeholder, assembled at run time from fragments, so this file
+    // holds no token-shaped text: xox, a type letter, a 12-digit id, a
+    // 13-digit id and 24 letters.
+    const token = (type = 'b', first = '1'.repeat(12), second = '2'.repeat(13), secret = `FAKE${'x'.repeat(20)}`) =>
+      [['xo', 'x'].join('') + type, first, second, secret].join('-');
+    const bot = token();
+    const credentials = (text: string) => scanPatterns(text).filter(m => m.type === 'CREDENTIAL');
+
+    it('reports a line that assigns a bot token, at the confidence of the GitHub classic rule', () => {
+      const line = `SLACK=${bot}`;
+      expect(credentials(line)).toEqual([
+        { type: 'CREDENTIAL', value: bot, start: 6, end: line.length, confidence: 0.98 },
+      ]);
+    });
+
+    it('reports one bare in prose, and each token type the catalog names', () => {
+      expect(credentials(`The tool returned ${bot} in its summary.`).map(m => m.value)).toEqual([bot]);
+      for (const type of ['b', 'a', 'p', 'r', 's']) {
+        expect(credentials(`SLACK=${token(type)}`).map(m => m.value)).toEqual([token(type)]);
+      }
+    });
+
+    it('reports ids of 10 and of 13 digits', () => {
+      const short = token('b', '3'.repeat(10), '4'.repeat(10));
+      const long = token('b', '3'.repeat(13), '4'.repeat(13));
+      expect(credentials(`SLACK=${short} ${long}`).map(m => m.value)).toEqual([short, long]);
+    });
+
+    it('masks the value in the classifier result', () => {
+      const result = classifyWithRegex(`SLACK=${bot}`);
+      expect(result.verdict).toBe('VIOLATION');
+      expect(result.violations.map(v => [v.type, v.value])).toEqual([['CREDENTIAL', '...xxxx']]);
+    });
+
+    it('reports one finding, at 0.98, for a token the api_key= or Bearer rule matches as well', () => {
+      expect(credentials(`api_key=${bot}`).map(m => [m.value, m.confidence])).toEqual([[bot, 0.98]]);
+      expect(credentials(`Authorization: Bearer ${bot}`).map(m => [m.value, m.confidence])).toEqual([[bot, 0.98]]);
+    });
+
+    it('does not report a token of another shape', () => {
+      const nearMisses = [
+        token('b', '1'.repeat(12), '2'.repeat(13), `FAKE${'x'.repeat(19)}`),
+        token('b', '1'.repeat(12), '2'.repeat(13), `FAKE${'x'.repeat(21)}`),
+        token('b', '1'.repeat(9)),
+        token('b', '1'.repeat(14)),
+        token('z'),
+        `_${bot}`,
+      ];
+      for (const nearMiss of nearMisses) expect(credentials(`SLACK=${nearMiss}`)).toEqual([]);
+    });
+
+    it('does not report an env-var reference to one', () => {
+      expect(credentials('const slackToken = process.env.SLACK_BOT_TOKEN;')).toEqual([]);
+    });
+  });
+
   it('detects Bearer tokens', () => {
     const matches = scanPatterns('Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test');
     expect(matches.some(m => m.type === 'CREDENTIAL')).toBe(true);
