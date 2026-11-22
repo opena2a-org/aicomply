@@ -298,6 +298,10 @@ describe('npm release gate', () => {
     ['no version', { name: 'x' }, 'missing'],
     ['a version that is not a string', { name: 'x', version: 2 }, '2'],
     ['an empty version', { name: 'x', version: '' }, '""'],
+    ['a null version', { name: 'x', version: null }, 'null'],
+    ['a boolean version', { name: 'x', version: true }, 'true'],
+    ['a version string inside an array', { name: 'x', version: [record.runtimeVersion] }, `["${record.runtimeVersion}"]`],
+    ['a version string inside an object', { name: 'x', version: { number: '1.0.0' } }, '{"number":"1.0.0"}'],
   ])('refuses a package.json with %s, even when the record names the same', (_label, pkg, shown) => {
     // A record without runtimeVersion would match a package without a version
     // if the gate compared the two, so the missing version refuses on its own.
@@ -310,6 +314,24 @@ describe('npm release gate', () => {
       fixes: ['fix: restore package.json from the commit being released: the record is compared against its "version" string'],
     });
     expect(output).not.toContain('release gate: passed');
+  });
+
+  it.each([
+    ['null', 'null'],
+    ['an array', `[{"version":"${record.runtimeVersion}"}]`],
+    ['the version string alone', `"${record.runtimeVersion}"`],
+    ['a number', '2'],
+  ])('refuses a package.json that is %s, not an object with a version', (_label, text) => {
+    // The record is the one this package's run writes, so only package.json is wrong.
+    writeRecord(record);
+    writeFileSync(join(root, 'package.json'), text);
+    const { status, output } = gate();
+    expect(status).toBe(1);
+    expect(refusedAndFixes(output)).toEqual({
+      refused: ['REFUSED package: package.json carries no version string, its version is missing'],
+      fixes: [PACKAGE_FIX],
+    });
+    expect(output).not.toMatch(/REFUSED gate:|release gate: passed/);
   });
 
   it('refuses on an error it did not foresee, here a package.json that is not JSON', () => {
