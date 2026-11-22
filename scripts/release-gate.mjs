@@ -68,9 +68,26 @@ function isDirectory(path) {
   }
 }
 
-/** The path, from `root` down towards `file`, that is not the directory it has to be. */
+function exists(path) {
+  try {
+    statSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The path, on the way from the filesystem root through `root` down towards
+ * `file`, that is not the directory it has to be. A `root` that does not exist
+ * because it sits under a file names that file, not the missing path below it.
+ */
 function nonDirectory(file) {
   let dir = root;
+  if (!exists(dir)) {
+    while (!exists(dir) && dirname(dir) !== dir) dir = dirname(dir);
+    return dir;
+  }
   for (const part of file.split('/').slice(0, -1)) {
     if (!isDirectory(dir)) break;
     dir = resolve(dir, part);
