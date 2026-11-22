@@ -422,3 +422,24 @@ def test_refuses_on_an_error_it_did_not_foresee(dist, monkeypatch, capsys):
     assert status == 1
     assert err.splitlines()[:2] == ["REFUSED gate: boom", "release gate: refused, do not publish"]
     assert "release gate: passed" not in out + err
+
+
+def test_the_script_exits_1_on_an_error_its_checks_do_not_foresee(dist):
+    # The catch-all reached through the script, with nothing patched: PKG-INFO
+    # is a link to a member the sdist does not hold, and reading it raises a
+    # KeyError that no check names.
+    with tarfile.open(dist / f"aicomply-{VERSION}.tar.gz", "w:gz") as sdist:
+        link = tarfile.TarInfo(f"aicomply-{VERSION}/PKG-INFO")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "METADATA"
+        sdist.addfile(link)
+    run = _gate(dist)
+    assert run.returncode == 1
+    refused = _refused(run)
+    assert len(refused) == 1
+    assert refused[0].startswith("REFUSED gate: ")
+    assert "release gate: refused, do not publish" in run.stderr
+    assert _fixes(run) == [_BOTH_FIX]
+    # An uncaught error exits 1 as well, so the exit code alone would not tell.
+    assert "Traceback" not in run.stderr
+    assert "release gate: passed" not in run.stdout + run.stderr
