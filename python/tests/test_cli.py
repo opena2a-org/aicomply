@@ -1053,6 +1053,28 @@ def test_directory_argument_names_the_glob_for_the_files_in_it(tmp_path, capsys)
     assert run(["scan", *files]) == 0
 
 
+# The open's own IsADirectoryError names the directory, so the message does not
+# rest on the isdir that follows it.
+def test_directory_argument_named_by_is_a_directory_error(tmp_path, monkeypatch, capsys):
+    d = tmp_path / "eisdir"
+    d.mkdir()
+    monkeypatch.setattr(os.path, "isdir", lambda _path: False)
+    assert run(["scan", str(d)]) == 2
+    assert capsys.readouterr().err == (
+        f"aicomply: '{d}' is a directory, and directories are not scanned."
+        f" Name the files in it:\n  aicomply scan {d}/*.txt\n"
+    )
+
+
+# A missing path still gets the missing-file message.
+def test_missing_path_cannot_be_read(tmp_path, capsys):
+    missing = tmp_path / "no-such-dir"
+    assert run(["scan", str(missing)]) == 2
+    assert capsys.readouterr().err == (
+        f"aicomply: cannot read '{missing}' (check the path). Try 'aicomply --help'.\n"
+    )
+
+
 # The glob is pasted into a shell, so the shell has to read the directory's name
 # back out of it.
 def test_directory_glob_is_one_shell_word_that_names_the_directory():

@@ -431,14 +431,16 @@ async function collectSources(files: string[], pipeUnread: boolean): Promise<Sou
     try {
       data = readFileSync(file);
     } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
       // The path exists, so "check the path" would send the user the wrong way.
-      if (isDirectory(file)) {
+      // EISDIR is what reading a directory fails with, ENOENT a missing path;
+      // the stat covers a directory whose read fails with another code.
+      if (code === 'EISDIR' || isDirectory(file)) {
         throw new UsageError(
           `'${file}' is a directory, and directories are not scanned. Name the files in it:\n` +
             `  aicomply scan ${filesGlob(file)}`,
         );
       }
-      const code = (err as NodeJS.ErrnoException).code;
       if (code === 'EACCES' || code === 'EPERM') {
         throw new UsageError(`cannot read '${file}': permission denied`);
       }

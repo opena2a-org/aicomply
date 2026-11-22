@@ -314,7 +314,10 @@ def _collect_sources(files: list[str], pipe_unread: bool) -> list[_Source]:
                 data = fh.read()
         except OSError as err:
             # The path exists, so "check the path" would send the user the wrong way.
-            if os.path.isdir(f):
+            # IsADirectoryError (EISDIR) is what opening a directory raises on
+            # Linux and macOS; isdir covers a directory whose open raises another
+            # error, as on Windows, where it is a PermissionError.
+            if isinstance(err, IsADirectoryError) or os.path.isdir(f):
                 raise _UsageError(
                     f"'{f}' is a directory, and directories are not scanned."
                     f" Name the files in it:\n  aicomply scan {_files_glob(f)}"
