@@ -225,6 +225,35 @@ describe('npm release gate', () => {
     expect(output).not.toContain('release gate: passed');
   });
 
+  it('names the file a --root sits under, not the missing path below it', () => {
+    const file = join(root, 'package.json');
+    const { status, output } = gate(['--root', join(file, 'sub', 'deeper')]);
+    expect(status).toBe(1);
+    expect(refusedAndFixes(output)).toEqual({
+      refused: [
+        `REFUSED package: package.json cannot be read, ${file} is not a directory`,
+        `REFUSED pack: pack/patterns.json cannot be read, ${file} is not a directory`,
+        `REFUSED record: conformance/typescript.json cannot be read, ${file} is not a directory`,
+      ],
+      fixes: [ROOT_FIX],
+    });
+    expect(output).not.toMatch(/ENOTDIR|REFUSED gate:|sub/);
+  });
+
+  it('names the file that stands where the conformance directory should be', () => {
+    rmSync(join(root, 'conformance'), { recursive: true });
+    writeFileSync(join(root, 'conformance'), '');
+    const { status, output } = gate();
+    expect(status).toBe(1);
+    expect(refusedAndFixes(output)).toEqual({
+      refused: [
+        `REFUSED record: conformance/typescript.json cannot be read, ${join(root, 'conformance')} is not a directory`,
+      ],
+      fixes: [RECORD_FIX],
+    });
+    expect(output).not.toMatch(/ENOTDIR|REFUSED gate:|does not exist/);
+  });
+
   it('names a package.json and a pack that are directories, not missing files, and fixes each in place', () => {
     // The root holds a package.json entry, so --root is not the mistake.
     writeRecord(record);
