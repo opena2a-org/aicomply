@@ -333,11 +333,15 @@ def _collect_sources(files: list[str], pipe_unread: bool) -> list[_Source]:
                 f"cannot read '{f}' (check the path). Try 'aicomply --help'."
             ) from None
         # UTF-32, UTF-16 or UTF-8 without the mark when the file starts with
-        # that byte order mark, else UTF-8, with universal newlines. A byte
-        # sequence the encoding cannot decode becomes U+FFFD and the rest is
-        # scanned, as in the TS CLI.
+        # that byte order mark, else UTF-8, keeping line endings as they are: a
+        # lone \r is not a line break, so it stays the last character of its
+        # line, as in the TS CLI and on stdin. A byte sequence the encoding
+        # cannot decode becomes U+FFFD and the rest is scanned, as in the TS CLI.
         content = io.TextIOWrapper(
-            io.BytesIO(data), encoding=_bom_encoding(data) or "utf-8", errors="replace"
+            io.BytesIO(data),
+            encoding=_bom_encoding(data) or "utf-8",
+            errors="replace",
+            newline="",
         ).read()
         sources.append(_Source(label=f, content=content, byte_count=len(data)))
 
