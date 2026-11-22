@@ -502,15 +502,25 @@ export interface FindingLocation {
 interface ContentOffsets {
   content: string;
   newlines: Uint32Array;
-  /** Index of the high surrogate of each surrogate pair. */
-  surrogatePairs: Uint32Array;
+  /**
+   * Entry `b` is the number of surrogate pairs whose high surrogate is below
+   * `b * PAIR_SAMPLE_SPAN`.
+   */
+  pairSamples: Uint32Array;
 }
+
+/**
+ * The span, in code units, between two samples of the surrogate-pair count.
+ * Locating a finding counts the pairs between the sample below it and its
+ * offset, at most this many code units.
+ */
+const PAIR_SAMPLE_SPAN = 4096;
 
 /**
  * Offsets into a content, in the order they are added, held in a Uint32Array
  * that doubles in length when it is full. On Node 26.12 an array holds at most
  * 134217728 entries (see normalize/text-builder.ts), and a content can hold
- * more newlines or surrogate pairs than that.
+ * more newlines than that.
  */
 class OffsetList {
   private offsets = new Uint32Array(1024);
@@ -532,9 +542,9 @@ class OffsetList {
   }
 }
 
-// The renderers locate every finding of one input in turn, so the newline and
-// surrogate-pair offsets of the last content are kept instead of recounted per
-// finding: a large log can carry thousands of findings.
+// The renderers locate every finding of one input in turn, so the newline
+// offsets and surrogate-pair samples of the last content are kept instead of
+// recounted per finding: a large log can carry thousands of findings.
 let offsetCache: ContentOffsets | undefined;
 
 function contentOffsets(content: string): ContentOffsets {
@@ -543,17 +553,49 @@ function contentOffsets(content: string): ContentOffsets {
     for (let i = content.indexOf('\n'); i !== -1; i = content.indexOf('\n', i + 1)) {
       newlines.add(i);
     }
-    // A character outside the Basic Multilingual Plane, such as an emoji, is
-    // one code point held in two UTF-16 code units: a high surrogate followed
-    // by a low one.
-    const surrogatePairs = new OffsetList();
-    const pair = /[\uD800-\uDBFF][\uDC00-\uDFFF]/g;
-    for (let m = pair.exec(content); m !== null; m = pair.exec(content)) {
-      surrogatePairs.add(m.index);
+    // A content can hold more surrogate pairs than an array holds entries,
+    // so their count is sampled every PAIR_SAMPLE_SPAN code units rather than
+    // each pair's index kept.
+    const pairSamples = new Uint32Array(Math.floor(content.length / PAIR_SAMPLE_SPAN) + 1);
+    let pairs = 0;
+    for (let b = 0; b < pairSamples.length; b++) {
+      pairSamples[b] = pairs;
+      pairs += countPairs(content, b * PAIR_SAMPLE_SPAN, (b + 1) * PAIR_SAMPLE_SPAN);
     }
-    offsetCache = { content, newlines: newlines.finish(), surrogatePairs: surrogatePairs.finish() };
+    offsetCache = { content, newlines: newlines.finish(), pairSamples };
   }
   return offsetCache;
+}
+
+/**
+ * How many surrogate pairs of `content` have their high surrogate at an index
+ * from `start` up to, not including, `end`. A character outside the Basic
+ * Multilingual Plane, such as an emoji, is one code point held in two UTF-16
+ * code units: a high surrogate followed by a low one. A high surrogate is
+ * never a low one, so whether a pair starts at an index depends only on the
+ * two code units there.
+ */
+function countPairs(content: string, start: number, end: number): number {
+  const last = Math.min(end, content.length - 1);
+  let count = 0;
+  for (let i = start; i < last; i++) {
+    const unit = content.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = content.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        count += 1;
+        i += 1;
+      }
+    }
+  }
+  return count;
+}
+
+/** How many surrogate pairs of `content` have their high surrogate below `limit`. */
+function pairsBelow(content: string, pairSamples: Uint32Array, limit: number): number {
+  if (limit <= 0) return 0;
+  const b = Math.floor(limit / PAIR_SAMPLE_SPAN);
+  return pairSamples[b] + countPairs(content, b * PAIR_SAMPLE_SPAN, limit);
 }
 
 /** How many of the ascending `offsets` are below `limit`. */
@@ -587,7 +629,7 @@ export function locate(
   ) {
     return undefined;
   }
-  const { newlines, surrogatePairs } = contentOffsets(content);
+  const { newlines, pairSamples } = contentOffsets(content);
   const before = countBelow(newlines, originalStart);
   const lineStart = before === 0 ? 0 : newlines[before - 1] + 1;
   // originalStart counts UTF-16 code units. A pair is two of them and one
@@ -595,7 +637,7 @@ export function locate(
   // one off the column. A `\n` is never inside a pair, so no pair spans
   // lineStart.
   const pairs =
-    countBelow(surrogatePairs, originalStart - 1) - countBelow(surrogatePairs, lineStart);
+    pairsBelow(content, pairSamples, originalStart - 1) - pairsBelow(content, pairSamples, lineStart);
   return { line: before + 1, column: originalStart - lineStart + 1 - pairs };
 }
 

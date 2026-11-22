@@ -1213,8 +1213,39 @@ describe('aicomply CLI', () => {
       expect(locate(text, text.indexOf('078-05-1120'))).toEqual({ line: 1, column: 8 });
     });
 
+    it('locate: counts code points when a pair or the line start falls at a 4096-unit sample boundary', () => {
+      // The column a reader counts: the code points between the line start and the match.
+      const expected = (text: string, start: number) => {
+        const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+        const line = text.slice(0, start).split('\n').length;
+        return { line, column: [...text.slice(lineStart, start)].length + 1 };
+      };
+      try {
+        for (const pad of [4093, 4094, 4095, 4096, 8190, 8191]) {
+          for (const text of [
+            `${'a'.repeat(pad)}${emoji}${emoji} SSN 078-05-1120`,
+            `${emoji.repeat(pad)} SSN 078-05-1120`,
+            `${'a'.repeat(pad)}\n${emoji}x${emoji} SSN 078-05-1120`,
+            `${emoji.repeat(pad)}\n${emoji}${emoji} SSN 078-05-1120`,
+            `${'a'.repeat(pad)}\uD83D${emoji} SSN 078-05-1120`,
+          ]) {
+            const start = text.indexOf('078-05-1120');
+            expect(locate(text, start)).toEqual(expected(text, start));
+            // An offset that falls inside a pair counts its high surrogate as
+            // one column, as the locator always has.
+            const inside = text.indexOf(emoji, text.lastIndexOf('\n') + 1) + 1;
+            const atPair = expected(text, inside - 1);
+            expect(locate(text, inside)).toEqual({ line: atPair.line, column: atPair.column + 1 });
+          }
+        }
+      } finally {
+        locate('', 0);
+      }
+    });
+
     // The locator held the index of each surrogate pair in one array and threw
-    // "Invalid array length" on this text.
+    // "Invalid array length" on this text. It now samples the count of pairs
+    // every 4096 code units, so this also counts pairs across samples.
     it('locate: 134217729 characters outside the BMP before the match are one column each', () => {
       const count = 134217729;
       const text = `${emoji.repeat(count)} SSN 078-05-1120`;
@@ -2148,6 +2179,39 @@ require.extensions['.ts'] = (module, filename) => {
         findings: [{ type: 'SSN', view: 'normalized', line: count + 1, column: 14 }],
       });
     }, 120_000);
+
+    // The finding locator held the index of each surrogate pair in one array,
+    // and `scan` and `scan --json` exited 2 with the same message while
+    // `scan --quiet` printed VIOLATION. It now samples the count of pairs.
+    it('reports the finding after 134217729 copies of U+1F600 and a newline, in every output form', () => {
+      const count = 134217729;
+      const input = Buffer.concat([
+        Buffer.alloc(4 * count, Buffer.from('\u{1F600}', 'utf8')),
+        Buffer.from('\nCustomer SSN 078-05-1120 on file\n'),
+      ]);
+      const scan = (args: string[]) => {
+        const child = spawnSync(process.execPath, ['-r', hook, CLI, 'scan', ...args], {
+          env: ENV,
+          input,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        return { status: child.status, stdout: child.stdout.toString(), stderr: child.stderr.toString() };
+      };
+
+      expect(scan(['--quiet'])).toEqual({ status: 1, stdout: 'VIOLATION\n', stderr: '' });
+
+      const report = scan([]);
+      expect({ status: report.status, stderr: report.stderr }).toEqual({ status: 1, stderr: '' });
+      expect(report.stdout).toContain('  VIOLATION  (stdin)   1 finding\n');
+      expect(report.stdout).toMatch(/\n {4}SSN +••• .* line 2 col 14\n/);
+
+      expect(scanStdinJson(input)).toEqual({
+        status: 1,
+        stderr: '',
+        verdict: 'VIOLATION',
+        findings: [{ type: 'SSN', view: 'normalized', line: 2, column: 14 }],
+      });
+    }, 180_000);
 
     // Each token repeat of the pack stops at its upper bound, so the token is
     // one finding and the scan goes on to the line after it.
