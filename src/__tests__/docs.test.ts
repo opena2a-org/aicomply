@@ -189,6 +189,21 @@ describe('docs', () => {
     expect(whyThisExists('c.md', 'It says what it does.\n')).toEqual([]);
   });
 
+  it('say in the README and in docs/sessions.md which registryCache session.comply() uses', () => {
+    // The behaviour itself is tested in comply-registry.test.ts: a
+    // registryCache on the first argument replaces the session's cache, and
+    // one on the second argument is not looked up.
+    const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+    expect(readme).toContain(
+      "a `registryCache` passed on its first argument is used in place of the session's, " +
+        'and a `registryCache` on its second argument is not used.',
+    );
+    const sessions = readFileSync(join(ROOT, 'docs', 'sessions.md'), 'utf8');
+    expect(sessions).toContain(
+      "a `registryCache` on the second argument is not used, and the session's cache is looked up instead.",
+    );
+  });
+
   it('does not say the Guard model has not shipped or that comply() is regex-only', () => {
     const files = trackedMarkdown();
     expect(files).toEqual(expect.arrayContaining(['README.md', 'SECURITY.md']));

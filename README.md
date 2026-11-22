@@ -119,7 +119,7 @@ Pass `useGuard: false` to make no request: [what the Guard attempt sends](docs/s
 - [Detection](docs/detection.md): what each layer detects, how inputs are canonicalized before the patterns run, and what the package does not detect.
 - [Enabling the semantic Guard](docs/semantic-guard.md): starting it, what its request sends, and why it is a preview, not a production gate.
 - [Measured accuracy](docs/accuracy.md): per-class precision and recall on the synthetic corpus, and the commands that re-run it in a clone of this repository.
-- [Session-scoped use](docs/sessions.md): `ClassificationSession.create()` for Registry fleet-anomaly and supply-chain signals, and failing closed with `onRegistryUnknown`.
+- [Session-scoped use](docs/sessions.md): `ClassificationSession.create()` for Registry fleet-anomaly and supply-chain signals, and failing closed with `onRegistryUnknown`. `session.comply()` looks a package up in the session's cache: a `registryCache` passed on its first argument is used in place of the session's, and a `registryCache` on its second argument is not used.
 - [Policy packs](docs/policy-packs.md): deny or warn on finding types with `policyPack`, and check a pack with `validatePolicyConfig()`.
 - [Verdicts and per-classifier results](docs/verdicts.md): what `CLEAN`, `VIOLATION` and `DENY` mean, and the `classifierResults`, `layers` and `pack` fields.
 - [Audit trail](docs/audit-trail.md): `originalContent` and `normalizedContent`, which hold the raw input, and `normalizations`, the transforms applied; log the masked `violations` instead.
