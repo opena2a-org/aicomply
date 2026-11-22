@@ -106,15 +106,16 @@ function read(file, where = '') {
     return { bytes: readFileSync(resolve(root, file)) };
   } catch (err) {
     const code = err?.code;
+    const message = err instanceof Error ? err.message : String(err);
     switch (code) {
       case 'ENOENT':
-        return { code, problem: `${file} does not exist${where}` };
+        return { code, message, problem: `${file} does not exist${where}` };
       case 'EISDIR':
-        return { code, problem: `${file}${where} is a directory, not a file` };
+        return { code, message, problem: `${file}${where} is a directory, not a file` };
       case 'ENOTDIR':
-        return { code, problem: `${file} cannot be read, ${nonDirectory(file)} is not a directory` };
+        return { code, message, problem: `${file} cannot be read, ${nonDirectory(file)} is not a directory` };
       default:
-        return { code, problem: `${file} cannot be read (${err instanceof Error ? err.message : String(err)})` };
+        return { code, message, problem: `${file} cannot be read (${message})` };
     }
   }
 }
@@ -153,8 +154,11 @@ function refusals() {
   const stored = read(RECORD);
   if (stored.bytes === undefined) {
     let fix = RERUN_FIX;
+    let problem = stored.problem;
     if (stored.code !== 'ENOENT') fix = wrongRoot ? ROOT_FIX : RECORD_FIX;
-    refuse(`record: ${stored.problem}`, fix);
+    // A record that is a directory is there but cannot be read: say so with the system's message.
+    if (stored.code === 'EISDIR') problem = `${RECORD} cannot be read (${stored.message})`;
+    refuse(`record: ${problem}`, fix);
     return reasons;
   }
   let record;
