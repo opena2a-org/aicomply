@@ -390,6 +390,38 @@ describe('aicomply CLI', () => {
     expect(code).toBe(0);
   });
 
+  // The read's own EISDIR names the directory, so the message does not rest on
+  // the stat that follows it.
+  it('says a directory is a directory when the read fails with EISDIR and the stat fails', async () => {
+    const d = join(dir, 'eisdir');
+    mkdirSync(d);
+    const stat = jest.spyOn(fs, 'statSync').mockImplementation(() => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
+    const cap = capture();
+    const code = await run(['scan', d]);
+    cap.restore();
+    stat.mockRestore();
+    expect({ code, err: cap.err.join('') }).toEqual({
+      code: 2,
+      err:
+        `aicomply: '${d}' is a directory, and directories are not scanned. Name the files in it:\n` +
+        `  aicomply scan ${d}/*.txt\n`,
+    });
+  });
+
+  // A missing path still gets the missing-file message.
+  it('says a missing path cannot be read', async () => {
+    const missing = join(dir, 'no-such-dir');
+    const cap = capture();
+    const code = await run(['scan', missing]);
+    cap.restore();
+    expect({ code, err: cap.err.join('') }).toEqual({
+      code: 2,
+      err: `aicomply: cannot read '${missing}' (check the path). Try 'aicomply --help'.\n`,
+    });
+  });
+
   // The glob is pasted into a shell, so the shell has to read the directory's
   // name back out of it.
   it('writes the glob for a directory as one shell word that names the directory', () => {
