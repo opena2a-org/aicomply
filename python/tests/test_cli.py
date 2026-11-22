@@ -349,6 +349,28 @@ def test_locate_counts_the_column_in_code_points(text, expected):
     assert _locate(text, text.index("078-05-1120")) == expected
 
 
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        # A lone CR is not a line break: it stays the last character of line 1.
+        (b"ab\rSSN 078-05-1120\n", (1, 8)),
+        (b"ab\r\nSSN 078-05-1120\n", (2, 5)),
+    ],
+)
+def test_named_file_and_stdin_locate_a_finding_after_a_cr_alike(
+    tmp_path, capsys, monkeypatch, data, expected
+):
+    f = tmp_path / "cr.txt"
+    f.write_bytes(data)
+    assert run(["scan", str(f), "--json"]) == 1
+    named = json.loads(capsys.readouterr().out)[0]["findings"][0]
+    _pipe_stdin(monkeypatch, data)
+    assert run(["scan", "--json"]) == 1
+    piped = json.loads(capsys.readouterr().out)[0]["findings"][0]
+    assert (named["line"], named["column"]) == expected
+    assert (piped["line"], piped["column"]) == expected
+
+
 def test_column_counts_a_character_outside_the_bmp_once(tmp_path, capsys):
     f = tmp_path / "located-emoji.txt"
     f.write_text(f"{_EMOJI}{_EMOJI} SSN 078-05-1120\n", encoding="utf-8")
