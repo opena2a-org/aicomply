@@ -108,6 +108,7 @@ def test_covers_the_full_corpus_plus_the_regression_cases():
         "regression-20-empty-key-next-line",
         "regression-20-env-example-template",
         "regression-20-control-next-line-value",
+        "regression-182-google-api-key-short",
     ):
         assert required in ids
 

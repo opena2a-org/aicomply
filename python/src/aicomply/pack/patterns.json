@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "packVersion": "1.0.0",
+  "packVersion": "1.1.0",
   "referenceForms": [
     {
       "id": "env-dotted-accessor",
@@ -177,6 +177,20 @@
       "techniqueId": null,
       "fpEstimate": null,
       "note": "GitHub fine-grained token."
+    },
+    {
+      "id": "google-api-key",
+      "class": "CREDENTIAL",
+      "source": "(AIza[0-9A-Za-z_-]{35,1000})",
+      "flags": "",
+      "validator": "none",
+      "context": {
+        "confidence": 0.98
+      },
+      "aiisId": null,
+      "techniqueId": null,
+      "fpEstimate": null,
+      "note": "Google API key: AIza and 35 or more characters, the google form of the @opena2a/credential-patterns catalog with the pack's capture group and upper bound. The whole run is captured, so a longer token is masked whole. No leading word boundary, as for the Anthropic rule: the mixed-case prefix followed by 35 key characters is distinctive on its own."
     },
     {
       "id": "bearer-token",

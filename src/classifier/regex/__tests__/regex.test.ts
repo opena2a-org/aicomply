@@ -200,6 +200,57 @@ describe('credential patterns', () => {
     expect(matches.some(m => m.type === 'CREDENTIAL')).toBe(true);
   });
 
+  describe('Google API keys', () => {
+    // Assembled at run time, so this file holds no key-shaped text.
+    const prefix = ['AI', 'za'].join('');
+    const key = `${prefix}Sy${'x'.repeat(33)}`;
+    const credentials = (text: string) => scanPatterns(text).filter(m => m.type === 'CREDENTIAL');
+
+    it('reports a line that assigns one, at the confidence of the GitHub classic rule', () => {
+      const line = `GOOGLE_MAPS_KEY=${key}`;
+      const classic = PATTERNS.find(p => p.id === 'github-pat-classic') as PatternDefinition;
+      expect(credentials(line)).toEqual([
+        { type: 'CREDENTIAL', value: key, start: 16, end: line.length, confidence: classic.confidence },
+      ]);
+      expect(classic.confidence).toBe(0.98);
+    });
+
+    it('reports one bare in prose, and one that holds - and _', () => {
+      expect(credentials(`The tool returned ${key} in its summary.`).map(m => m.value)).toEqual([key]);
+      const mixed = `${prefix}${'a-b_C0'.repeat(6)}`.slice(0, 39);
+      expect(credentials(`key: "${mixed}"`).map(m => m.value)).toEqual([mixed]);
+    });
+
+    it('masks the value in the classifier result', () => {
+      const result = classifyWithRegex(`GOOGLE_MAPS_KEY=${key}`);
+      expect(result.verdict).toBe('VIOLATION');
+      expect(result.violations.map(v => [v.type, v.value])).toEqual([['CREDENTIAL', '...xxxx']]);
+    });
+
+    it('reports one finding, at 0.98, for a key the generic api_key= rule matches as well', () => {
+      expect(credentials(`api_key=${key}`).map(m => [m.value, m.confidence])).toEqual([[key, 0.98]]);
+    });
+
+    it('captures a run of more than 35 characters after the prefix whole', () => {
+      const long = `${key}${'y'.repeat(10)}`;
+      const line = `GOOGLE_MAPS_KEY=${long}`;
+      expect(credentials(line).map(m => [m.value, m.start, m.end])).toEqual([[long, 16, line.length]]);
+    });
+
+    it('reports one after an adjacent word character', () => {
+      expect(credentials(`_${key}`).map(m => m.value)).toEqual([key]);
+    });
+
+    it('does not report the prefix followed by 34 characters, or by 35 with a character outside the key alphabet', () => {
+      expect(credentials(`GOOGLE_MAPS_KEY=${key.slice(0, -1)}`)).toEqual([]);
+      expect(credentials(`GOOGLE_MAPS_KEY=${key.slice(0, 20)}.${key.slice(21)}`)).toEqual([]);
+    });
+
+    it('does not report an env-var reference to one', () => {
+      expect(credentials('const googleKey = process.env.GOOGLE_API_KEY;')).toEqual([]);
+    });
+  });
+
   it('detects Bearer tokens', () => {
     const matches = scanPatterns('Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test');
     expect(matches.some(m => m.type === 'CREDENTIAL')).toBe(true);
@@ -621,6 +672,7 @@ describe('a token repeat stops at its upper bound', () => {
     ['openai-project-key', `${s}proj-`],
     ['openrouter-key', `${s}or-v1-`],
     ['openai-legacy-key', s],
+    ['google-api-key', 'AIza'],
     ['bearer-token', 'Bearer '],
     ['generic-key-assignment', 'api_key='],
   ];

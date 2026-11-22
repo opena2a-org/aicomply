@@ -722,6 +722,47 @@ describe('aicomply CLI', () => {
     expect(shown('card 4111111111111111')).toEqual([['...1111', '4111111111111111']]);
   });
 
+  describe('a line assigning a Google API key on stdin', () => {
+    // Assembled at run time, so this file holds no key-shaped text.
+    const key = `${['AI', 'za'].join('')}Sy${'x'.repeat(33)}`;
+    const line = `GOOGLE_MAPS_KEY=${key}\n`;
+
+    it('scan -q prints VIOLATION and exits 1', async () => {
+      pipeStdin(line);
+      const cap = capture();
+      const code = await run(['scan', '-q']);
+      cap.restore();
+      expect({ code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({ code: 1, out: 'VIOLATION\n', err: '' });
+    });
+
+    it('scan --json prints one CREDENTIAL finding with the value masked', async () => {
+      pipeStdin(line);
+      const cap = capture();
+      const code = await run(['scan', '--json']);
+      cap.restore();
+      const out = cap.out.join('');
+      expect(code).toBe(1);
+      expect(out).not.toContain(key);
+      const [input] = JSON.parse(out);
+      expect(input).toMatchObject({ source: '(stdin)', verdict: 'VIOLATION' });
+      expect(input.findings).toHaveLength(1);
+      expect(input.findings[0]).toMatchObject({ type: 'CREDENTIAL', confidence: 0.98, line: 1, column: 17 });
+      expect(input.findings[0].maskedValue).not.toContain('x');
+    });
+
+    it('the report prints one CREDENTIAL row and not the value', async () => {
+      pipeStdin(line);
+      const cap = capture();
+      const code = await run(['scan']);
+      cap.restore();
+      const out = cap.out.join('');
+      expect(code).toBe(1);
+      expect(out).not.toContain(key);
+      expect(out.split('\n').filter((row) => row.trimStart().startsWith('CREDENTIAL'))).toHaveLength(1);
+      expect(out).not.toContain('safe to forward');
+    });
+  });
+
   it('--quiet prints only the verdict word', async () => {
     const f = fixture('pii2.txt', 'SSN 078-05-1120');
     const cap = capture();
