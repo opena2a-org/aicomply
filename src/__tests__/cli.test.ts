@@ -804,6 +804,50 @@ describe('aicomply CLI', () => {
     });
   });
 
+  describe('a line assigning a Slack bot token on stdin', () => {
+    // FAKE placeholder, assembled at run time from fragments, so this file
+    // holds no token-shaped text: xoxb, a 12-digit id, a 13-digit id and 24 letters.
+    const token = [['xo', 'xb'].join(''), '1'.repeat(12), '2'.repeat(13), `FAKE${'x'.repeat(20)}`].join('-');
+    const line = `SLACK=${token}\n`;
+
+    it('scan -q prints VIOLATION and exits 1', async () => {
+      pipeStdin(line);
+      const cap = capture();
+      const code = await run(['scan', '-q']);
+      cap.restore();
+      expect({ code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({ code: 1, out: 'VIOLATION\n', err: '' });
+    });
+
+    it('scan --json prints one CREDENTIAL finding with the value masked', async () => {
+      pipeStdin(line);
+      const cap = capture();
+      const code = await run(['scan', '--json']);
+      cap.restore();
+      const out = cap.out.join('');
+      expect(code).toBe(1);
+      expect(out).not.toContain(token);
+      expect(out).not.toContain('FAKE');
+      const [input] = JSON.parse(out);
+      expect(input).toMatchObject({ source: '(stdin)', verdict: 'VIOLATION' });
+      expect(input.findings).toHaveLength(1);
+      expect(input.findings[0]).toMatchObject({ type: 'CREDENTIAL', confidence: 0.98, line: 1, column: 7 });
+      expect(input.findings[0].maskedValue).not.toMatch(/[x12]/);
+    });
+
+    it('the report prints one CREDENTIAL row and not the value', async () => {
+      pipeStdin(line);
+      const cap = capture();
+      const code = await run(['scan']);
+      cap.restore();
+      const out = cap.out.join('');
+      expect(code).toBe(1);
+      expect(out).not.toContain(token);
+      expect(out).not.toContain('FAKE');
+      expect(out.split('\n').filter((row) => row.trimStart().startsWith('CREDENTIAL'))).toHaveLength(1);
+      expect(out).not.toContain('safe to forward');
+    });
+  });
+
   it('--quiet prints only the verdict word', async () => {
     const f = fixture('pii2.txt', 'SSN 078-05-1120');
     const cap = capture();
@@ -2058,14 +2102,14 @@ require.extensions['.ts'] = (module, filename) => {
         expect(lastLine(report.out)).toBe(flaggedVerdictLine('VIOLATION', 1, 3, 2));
       });
 
-      it('every pack pattern fails: the names block is the golden pack entry, 5 lines of at most 80 columns', async () => {
+      it('every pack pattern fails: the names block is the golden pack entry, 6 lines of at most 80 columns', async () => {
         for (const p of PATTERNS) failPatternOn(p.id, MARKER);
         const report = await scan([marked]);
         expect({ code: report.code, err: report.err }).toEqual({ code: 2, err: '' });
         const block = linesUnderRow(report.out, marked);
         // The golden entry that lists every pack pattern, in pack order.
         expect(block).toEqual(namesLines(PATTERNS.map((p) => p.id)));
-        expect(block).toHaveLength(5);
+        expect(block).toHaveLength(6);
         for (const line of block) expect([...line].length).toBeLessThanOrEqual(80);
       });
 

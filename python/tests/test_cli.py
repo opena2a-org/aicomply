@@ -590,6 +590,45 @@ def test_scan_report_of_a_line_assigning_a_google_api_key_has_one_credential_row
     assert "safe to forward" not in out
 
 
+#: A FAKE Slack bot token, assembled at run time from fragments, so this file
+#: holds no token-shaped text: xoxb, a 12-digit id, a 13-digit id and 24 letters.
+_SLACK_TOKEN = "-".join(["".join(["xo", "xb"]), "1" * 12, "2" * 13, "FAKE" + "x" * 20])
+_SLACK_LINE = f"SLACK={_SLACK_TOKEN}\n".encode()
+
+
+def test_scan_quiet_of_a_line_assigning_a_slack_bot_token_on_stdin(monkeypatch, capsys):
+    _pipe_stdin(monkeypatch, _SLACK_LINE)
+    assert run(["scan", "-q"]) == 1
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("VIOLATION\n", "")
+
+
+def test_scan_json_of_a_line_assigning_a_slack_bot_token_masks_the_value(monkeypatch, capsys):
+    _pipe_stdin(monkeypatch, _SLACK_LINE)
+    assert run(["scan", "--json"]) == 1
+    out = capsys.readouterr().out
+    assert _SLACK_TOKEN not in out
+    assert "FAKE" not in out
+    (report,) = json.loads(out)
+    assert (report["source"], report["verdict"]) == ("(stdin)", "VIOLATION")
+    (finding,) = report["findings"]
+    assert (finding["type"], finding["confidence"]) == ("CREDENTIAL", 0.98)
+    assert (finding["line"], finding["column"]) == (1, 7)
+    assert not set("x12") & set(finding["maskedValue"])
+
+
+def test_scan_report_of_a_line_assigning_a_slack_bot_token_has_one_credential_row(
+    monkeypatch, capsys
+):
+    _pipe_stdin(monkeypatch, _SLACK_LINE)
+    assert run(["scan"]) == 1
+    out = capsys.readouterr().out
+    assert _SLACK_TOKEN not in out
+    assert "FAKE" not in out
+    assert len([row for row in out.splitlines() if row.lstrip().startswith("CREDENTIAL")]) == 1
+    assert "safe to forward" not in out
+
+
 def test_scan_quiet(tmp_path, capsys):
     f = tmp_path / "pii.txt"
     f.write_text("SSN 516-81-3086")
@@ -944,7 +983,7 @@ def test_the_lines_naming_the_patterns_not_evaluated_are_the_golden_lines(entry)
 def test_the_golden_lines_for_every_pattern_name_the_pack_in_pack_order():
     entry = _NOT_EVALUATED_GOLDEN["notEvaluatedLines"][-1]
     assert entry["ids"] == [p.id for p in PATTERNS]
-    assert len(entry["lines"]) == 5
+    assert len(entry["lines"]) == 6
 
 
 def test_an_input_every_pattern_ran_on_has_no_line_naming_patterns():
