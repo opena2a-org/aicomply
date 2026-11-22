@@ -460,6 +460,15 @@ describe('aicomply CLI', () => {
       expect(cap.out.join('')).toContain(`CLEAN      ${f}`);
     });
 
+    it('exits 0 on a clean file named after -- whose name starts with -', async () => {
+      fixture('-clean.txt', 'The weather is nice today.');
+      const cap = capture();
+      const code = await inDir(() => run(['scan', '--', '-clean.txt']));
+      cap.restore();
+      expect({ code, err: cap.err.join('') }).toEqual({ code: 0, err: '' });
+      expect(cap.out.join('')).toMatch(/^ {2}CLEAN {6}-clean\.txt /m);
+    });
+
     it('reads each argument after -- as a file, even one that starts with -', async () => {
       fixture('-dash.txt', 'The weather is nice today.');
       fixture('--json', 'SSN 078-05-1120');
