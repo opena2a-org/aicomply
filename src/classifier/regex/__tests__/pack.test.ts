@@ -253,12 +253,13 @@ describe('every counted repeat in the pack has an upper bound', () => {
     .filter((p) => /\{\d+,(1000)?\}/.test(p.source as string))
     .map((p) => [p.id as string, (p.source as string).replace(/\{(\d+),1000\}/, '{$1,}')]);
 
-  it('bounds the token repeat of six credential patterns', () => {
+  it('bounds the token repeat of seven credential patterns', () => {
     expect(reopened.map(([id]) => id)).toEqual([
       'anthropic-api-key',
       'openai-project-key',
       'openrouter-key',
       'openai-legacy-key',
+      'google-api-key',
       'bearer-token',
       'generic-key-assignment',
     ]);

@@ -148,6 +148,7 @@ describe('pattern pack conformance suite', () => {
         'regression-20-empty-key-next-line',
         'regression-20-env-example-template',
         'regression-20-control-next-line-value',
+        'regression-182-google-api-key-short',
       ]),
     );
   });

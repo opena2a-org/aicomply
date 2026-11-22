@@ -554,6 +554,42 @@ def test_human_output_lists_the_findings_the_ts_cli_lists_on_a_file_of_55(tmp_pa
     assert _finding_lines(py.stdout.decode()) == ts_lines
 
 
+#: Assembled at run time, so this file holds no key-shaped text.
+_GOOGLE_KEY = "".join(["AI", "za"]) + "Sy" + "x" * 33
+_GOOGLE_LINE = f"GOOGLE_MAPS_KEY={_GOOGLE_KEY}\n".encode()
+
+
+def test_scan_quiet_of_a_line_assigning_a_google_api_key_on_stdin(monkeypatch, capsys):
+    _pipe_stdin(monkeypatch, _GOOGLE_LINE)
+    assert run(["scan", "-q"]) == 1
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("VIOLATION\n", "")
+
+
+def test_scan_json_of_a_line_assigning_a_google_api_key_masks_the_value(monkeypatch, capsys):
+    _pipe_stdin(monkeypatch, _GOOGLE_LINE)
+    assert run(["scan", "--json"]) == 1
+    out = capsys.readouterr().out
+    assert _GOOGLE_KEY not in out
+    (report,) = json.loads(out)
+    assert (report["source"], report["verdict"]) == ("(stdin)", "VIOLATION")
+    (finding,) = report["findings"]
+    assert (finding["type"], finding["confidence"]) == ("CREDENTIAL", 0.98)
+    assert (finding["line"], finding["column"]) == (1, 17)
+    assert "x" not in finding["maskedValue"]
+
+
+def test_scan_report_of_a_line_assigning_a_google_api_key_has_one_credential_row(
+    monkeypatch, capsys
+):
+    _pipe_stdin(monkeypatch, _GOOGLE_LINE)
+    assert run(["scan"]) == 1
+    out = capsys.readouterr().out
+    assert _GOOGLE_KEY not in out
+    assert len([row for row in out.splitlines() if row.lstrip().startswith("CREDENTIAL")]) == 1
+    assert "safe to forward" not in out
+
+
 def test_scan_quiet(tmp_path, capsys):
     f = tmp_path / "pii.txt"
     f.write_text("SSN 516-81-3086")

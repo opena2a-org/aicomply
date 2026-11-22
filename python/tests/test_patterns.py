@@ -50,6 +50,62 @@ def test_credentials():
     assert "CREDENTIAL" not in _types("AKIA9OK6Q4TR")  # akia-short
 
 
+#: Assembled at run time, so this file holds no key-shaped text.
+_GOOGLE_PREFIX = "".join(["AI", "za"])
+_GOOGLE_KEY = f"{_GOOGLE_PREFIX}Sy{'x' * 33}"
+
+
+def _credentials(text: str) -> list[tuple[str, int, int, float]]:
+    return [
+        (m.value, m.start, m.end, m.confidence)
+        for m in scan_patterns(text)
+        if m.type == "CREDENTIAL"
+    ]
+
+
+def test_google_api_key_assignment_reports_at_the_confidence_of_the_github_classic_rule():
+    line = f"GOOGLE_MAPS_KEY={_GOOGLE_KEY}"
+    classic = next(p for p in PATTERNS if p.id == "github-pat-classic")
+    assert _credentials(line) == [(_GOOGLE_KEY, 16, len(line), classic.confidence)]
+    assert classic.confidence == 0.98
+
+
+def test_google_api_key_bare_in_prose_and_with_hyphen_and_underscore():
+    found = _credentials(f"The tool returned {_GOOGLE_KEY} in its summary.")
+    assert [value for value, *_ in found] == [_GOOGLE_KEY]
+    mixed = (_GOOGLE_PREFIX + "a-b_C0" * 6)[:39]
+    assert [value for value, *_ in _credentials(f'key: "{mixed}"')] == [mixed]
+
+
+def test_google_api_key_is_masked_in_the_classifier_result():
+    result = classify_with_regex(f"GOOGLE_MAPS_KEY={_GOOGLE_KEY}")
+    assert result.verdict == "VIOLATION"
+    assert [(v.type, v.value) for v in result.violations] == [("CREDENTIAL", "...xxxx")]
+
+
+def test_google_api_key_after_api_key_is_one_finding_at_the_higher_confidence():
+    found = _credentials(f"api_key={_GOOGLE_KEY}")
+    assert [(value, confidence) for value, _, _, confidence in found] == [(_GOOGLE_KEY, 0.98)]
+
+
+def test_google_api_key_longer_run_is_captured_whole():
+    long = _GOOGLE_KEY + "y" * 10
+    line = f"GOOGLE_MAPS_KEY={long}"
+    assert [(value, start, end) for value, start, end, _ in _credentials(line)] == [
+        (long, 16, len(line))
+    ]
+
+
+def test_google_api_key_after_an_adjacent_word_character():
+    assert [value for value, *_ in _credentials(f"_{_GOOGLE_KEY}")] == [_GOOGLE_KEY]
+
+
+def test_google_api_key_near_misses_and_references_are_not_reported():
+    assert _credentials(f"GOOGLE_MAPS_KEY={_GOOGLE_KEY[:-1]}") == []
+    assert _credentials(f"GOOGLE_MAPS_KEY={_GOOGLE_KEY[:20]}.{_GOOGLE_KEY[21:]}") == []
+    assert _credentials("const googleKey = process.env.GOOGLE_API_KEY;") == []
+
+
 def test_aws_secret_access_key():
     # The AWS secret access key (40-char base64) has no distinctive prefix, so it
     # is matched only in an aws_secret_access_key assignment context. Parity with
@@ -257,6 +313,7 @@ _BOUNDED_PREFIXES = [
     ("openai-project-key", f"{_S}proj-"),
     ("openrouter-key", f"{_S}or-v1-"),
     ("openai-legacy-key", _S),
+    ("google-api-key", "AIza"),
     ("bearer-token", "Bearer "),
     ("generic-key-assignment", "api_key="),
 ]

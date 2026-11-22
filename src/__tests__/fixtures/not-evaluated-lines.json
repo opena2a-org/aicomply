@@ -21,6 +21,7 @@
         "openai-legacy-key",
         "github-pat-classic",
         "github-pat-fine-grained",
+        "google-api-key",
         "bearer-token",
         "generic-key-assignment",
         "iban",
@@ -32,7 +33,7 @@
         "    not evaluated: ssn, pan, cui-marking, aws-access-key-id,",
         "                   aws-secret-access-key, anthropic-api-key, openai-project-key,",
         "                   openrouter-key, openai-legacy-key, github-pat-classic,",
-        "                   github-pat-fine-grained, bearer-token,",
+        "                   github-pat-fine-grained, google-api-key, bearer-token,",
         "                   generic-key-assignment, iban, passport, mrn, npi"
       ]
     }

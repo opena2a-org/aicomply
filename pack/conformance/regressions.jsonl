@@ -31,3 +31,4 @@
 {"id":"regression-87-bare-controlled-prose","input":"Access to the lab is CONTROLLED by badge.","expect":{"types":[],"verdict":"CLEAN","violations":[]},"origin":"issue #87","note":"bare CONTROLLED is an ordinary word, not a banner"}
 {"id":"regression-87-bare-cui-prose","input":"The CUI program trains analysts.","expect":{"types":[],"verdict":"CLEAN","violations":[]},"origin":"issue #87","note":"bare CUI in prose is not a banner"}
 {"id":"regression-87-fouo-substring","input":"FOUOX and XFOUO are not the token.","expect":{"types":[],"verdict":"CLEAN","violations":[]},"origin":"issue #87","note":"FOUO inside a longer word does not report"}
+{"id":"regression-182-google-api-key-short","input":"GOOGLE_MAPS_KEY=AIzaSyxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx","expect":{"types":[],"verdict":"CLEAN","violations":[]},"origin":"issue #182","note":"near miss: AIza and 34 characters is one short of a Google API key"}

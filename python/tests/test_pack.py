@@ -229,12 +229,13 @@ def test_the_pack_file_has_no_counted_repeat_without_an_upper_bound():
     assert _OPEN_REPEAT.findall(_BYTES.decode("utf-8")) == []
 
 
-def test_bounds_the_token_repeat_of_six_credential_patterns():
+def test_bounds_the_token_repeat_of_seven_credential_patterns():
     assert [pid for pid, _ in _REOPENED] == [
         "anthropic-api-key",
         "openai-project-key",
         "openrouter-key",
         "openai-legacy-key",
+        "google-api-key",
         "bearer-token",
         "generic-key-assignment",
     ]
