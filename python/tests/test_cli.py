@@ -945,7 +945,8 @@ def test_a_pattern_error_ends_the_run_with_exit_2_and_no_verdict(
     flagged = tmp_path / "flagged.txt"
     flagged.write_text("Customer SSN 078-05-1120 on file\n")
     marked = tmp_path / "marked.txt"
-    marked.write_text(f"this line holds the {marker}\n")
+    # The word the pattern needs, so that the literal prefilter does not skip it.
+    marked.write_text(f"Bearer this line holds the {marker}\n")
     for files in ([clean, marked], [clean, flagged, marked]):
         monkeypatch.setattr(sys, "argv", ["aicomply", "scan", *map(str, files), *flags])
         with pytest.raises(SystemExit) as exited:

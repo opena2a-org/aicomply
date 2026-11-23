@@ -121,13 +121,16 @@ def _find_candidates(text: str) -> list[tuple[str, int, int, str]]:
         if len(m.group(0)) >= MIN_CANDIDATE_LENGTH:
             out.append((m.group(0), m.start(), m.end(), "decoded-base64"))
 
-    for m in _URL_PATTERN.finditer(text):
-        tok = m.group(0)
-        if len(tok) < MIN_CANDIDATE_LENGTH:
-            continue
-        if _count_percent_escapes(tok) < 2:
-            continue
-        out.append((tok, m.start(), m.end(), "decoded-url"))
+    # A URL candidate holds at least two percent escapes; with no "%" in the
+    # text there is none, and the pattern would still be tried at every position.
+    if "%" in text:
+        for m in _URL_PATTERN.finditer(text):
+            tok = m.group(0)
+            if len(tok) < MIN_CANDIDATE_LENGTH:
+                continue
+            if _count_percent_escapes(tok) < 2:
+                continue
+            out.append((tok, m.start(), m.end(), "decoded-url"))
 
     return out
 

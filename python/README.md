@@ -140,6 +140,19 @@ back to regex-only. To reach a daemon elsewhere, pass
 `MOCK_NANOMIND_URL` override is for tests and local development: it is honoured
 only when `NODE_ENV` is `test` or `development`, and ignored otherwise.
 
+## Speed on large files
+
+`aicomply scan` reads a file whole and runs the regex layer in pure Python, so
+time and memory grow with the size of the file. On a 19 MB file (77,821 lines,
+two findings on each) a scan took about 3.5 s of CPU on a laptop with Python
+3.15, and the peak resident set was about 330 MB (430 MB with `--json`). The
+time is the same for the report, `--json` and `--quiet`. Text that holds none of
+the words a pattern needs (`AKIA`, `secret`, `passport` and the like) is faster
+still, because a pattern is run only when one of its words is in the file.
+`python bench/memory.py` prints these numbers for your machine. Expect a file
+many times that size to take that many times as long, and split it first if the
+memory matters.
+
 ## Detection classes
 
 SSN, PAN (Luhn + IIN), credentials (AWS keys, GitHub tokens, Google API keys,

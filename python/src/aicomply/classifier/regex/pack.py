@@ -39,6 +39,7 @@ from importlib.resources import files
 from typing import Literal, cast
 
 from ...types import PackIdentity
+from .prefilter import required_literals
 from .validators import NO_VALIDATOR, VALIDATORS, Validator
 
 PatternType = Literal["SSN", "PAN", "CUI", "CREDENTIAL", "IBAN", "PASSPORT", "MRN", "NPI"]
@@ -72,6 +73,11 @@ class PatternDefinition:
     confidence: float
     #: The entry's ``validator``; None for ``"none"``.
     validate: Validator | None = None
+    #: Literals of which every match contains one, lower case when ``ignore_case``;
+    #: None when the source gives none. A pattern none of them is in cannot match.
+    required: tuple[str, ...] | None = None
+    #: Whether the entry's flags make the regex ignore case.
+    ignore_case: bool = False
 
 
 @dataclass
@@ -323,7 +329,8 @@ def compile_pack(data: bytes) -> CompiledPack:
             validate = VALIDATORS[name]
         _check_mapping_fields(pid, entry)
 
-        re_flags = re.ASCII | (re.IGNORECASE if flags == "i" else 0)
+        ignore_case = flags == "i"
+        re_flags = re.ASCII | (re.IGNORECASE if ignore_case else 0)
         patterns.append(
             PatternDefinition(
                 id=pid,
@@ -331,6 +338,8 @@ def compile_pack(data: bytes) -> CompiledPack:
                 regex=_compile(f"pattern {pid}", entry.get("source"), re_flags),
                 confidence=float(confidence),
                 validate=validate,
+                required=required_literals(str(entry.get("source")), ignore_case),
+                ignore_case=ignore_case,
             )
         )
 
