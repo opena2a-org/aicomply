@@ -152,6 +152,9 @@ input and an overall verdict. An input of 0 bytes is not classified: it is
 listed as EMPTY, "0 bytes, nothing to classify" (--json: "bytes": 0,
 "verdict": "EMPTY", "layers": []), and the inputs that were scanned decide the
 exit code.
+A named file that cannot be read is listed as UNREADABLE with the reason
+(--json: "verdict": "UNREADABLE", "error"); the other inputs are scanned, and
+the run exits 2 unless one of them is flagged.
 The report lists the first {_MAX_FINDING_LINES} findings of each input and counts the rest by
 type; --json lists every finding.
 
@@ -200,6 +203,10 @@ _MASKED_VALUE = "•••"
 # The verdict of an input of 0 bytes, in the report and in --json. No layer runs
 # on such an input, so it gets this word in place of a layer's verdict.
 _EMPTY_VERDICT = "EMPTY"
+
+# The verdict of a named file that could not be read, in the report and in
+# --json. It is not scanned, so no layer gives it a verdict.
+_UNREADABLE_VERDICT = "UNREADABLE"
 
 
 def _bom_encoding(data: bytes) -> str | None:
@@ -279,11 +286,21 @@ def _unread_stdin() -> Literal["content", "stream"] | None:
 
 
 @dataclass
+class _Unreadable:
+    # What the report and --json give for the file.
+    reason: str
+    # The usage error when no input could be scanned.
+    message: str
+
+
+@dataclass
 class _Source:
     label: str
     content: str
     # How many bytes the input delivered. An input of 0 bytes is not classified.
     byte_count: int
+    # Set for a named file that could not be read, which is not scanned.
+    unreadable: _Unreadable | None = None
 
 
 def _files_glob(directory: str) -> str:
@@ -299,11 +316,53 @@ def _files_glob(directory: str) -> str:
     return f"{shlex.quote(name)}/*.txt"
 
 
+def _unreadable_file(f: str, err: OSError) -> _Source:
+    """Why the named file ``f`` could not be read, for the error ``err`` that
+    reading it raised. Raises a usage error for an option name written after --.
+    """
+    # The path exists, so "check the path" would send the user the wrong way.
+    # IsADirectoryError (EISDIR) is what opening a directory raises on
+    # Linux and macOS; isdir covers a directory whose open raises another
+    # error, as on Windows, where it is a PermissionError.
+    if isinstance(err, IsADirectoryError) or os.path.isdir(f):
+        glob = _files_glob(f)
+        unreadable = _Unreadable(
+            reason="a directory, and directories are not scanned;"
+            f" name the files in it: aicomply scan {glob}",
+            message=f"'{f}' is a directory, and directories are not scanned."
+            f" Name the files in it:\n  aicomply scan {glob}",
+        )
+    # PermissionError covers EACCES and EPERM, the two codes the TS CLI checks.
+    elif isinstance(err, PermissionError):
+        unreadable = _Unreadable(
+            reason="cannot read: permission denied",
+            message=f"cannot read '{f}': permission denied",
+        )
+    # The help's example ``aicomply scan src/*.txt -q`` puts the option
+    # after the files, so it gets written after -- as well (``aicomply
+    # scan -- -notes.txt -q``), where it is an input. That is a usage error,
+    # not an input to list as unreadable: the scan would run without the
+    # option.
+    elif f in _OPTION_NAMES:
+        raise _UsageError(
+            f"cannot read '{f}': after -- every argument is an input; put {f} before --"
+        ) from None
+    else:
+        unreadable = _Unreadable(
+            reason="cannot read (check the path)",
+            message=f"cannot read '{f}' (check the path). Try 'aicomply --help'.",
+        )
+    return _Source(label=f, content="", byte_count=0, unreadable=unreadable)
+
+
 def _collect_sources(files: list[str], pipe_unread: bool) -> list[_Source]:
     """Reads each named file, then stdin when it is requested.
 
     ``pipe_unread`` is true when stdin is a pipe or socket that is not read
-    because files were named.
+    because files were named. A named file that cannot be read does not end
+    the run: it is kept in its place as an unreadable source, and the other
+    inputs are scanned. When no input carries a byte to scan, the run ends on
+    a usage error that says why for each input.
     """
     real_files = [f for f in files if f != "-"]
     sources: list[_Source] = []
@@ -313,28 +372,8 @@ def _collect_sources(files: list[str], pipe_unread: bool) -> list[_Source]:
             with open(f, "rb") as fh:
                 data = fh.read()
         except OSError as err:
-            # The path exists, so "check the path" would send the user the wrong way.
-            # IsADirectoryError (EISDIR) is what opening a directory raises on
-            # Linux and macOS; isdir covers a directory whose open raises another
-            # error, as on Windows, where it is a PermissionError.
-            if isinstance(err, IsADirectoryError) or os.path.isdir(f):
-                raise _UsageError(
-                    f"'{f}' is a directory, and directories are not scanned."
-                    f" Name the files in it:\n  aicomply scan {_files_glob(f)}"
-                ) from None
-            # PermissionError covers EACCES and EPERM, the two codes the TS CLI checks.
-            if isinstance(err, PermissionError):
-                raise _UsageError(f"cannot read '{f}': permission denied") from None
-            # The help's example ``aicomply scan src/*.txt -q`` puts the option
-            # after the files, so it gets written after -- as well (``aicomply
-            # scan -- -notes.txt -q``), where it is an input.
-            if f in _OPTION_NAMES:
-                raise _UsageError(
-                    f"cannot read '{f}': after -- every argument is an input; put {f} before --"
-                ) from None
-            raise _UsageError(
-                f"cannot read '{f}' (check the path). Try 'aicomply --help'."
-            ) from None
+            sources.append(_unreadable_file(f, err))
+            continue
         # UTF-32, UTF-16 or UTF-8 without the mark when the file starts with
         # that byte order mark, else UTF-8, keeping line endings as they are: a
         # lone \r is not a line break, so it stays the last character of its
@@ -359,17 +398,24 @@ def _collect_sources(files: list[str], pipe_unread: bool) -> list[_Source]:
         sources.append(_Source(label="(stdin)", content=content, byte_count=byte_count))
 
     # comply() runs no layer on empty content and returns CLEAN, so a run in
-    # which no input carried a byte would print a verdict nothing reached.
+    # which no input carried a byte would print a verdict nothing reached. An
+    # input that could not be read carries none either. Each such input gets
+    # its own line, then the inputs that were read get the no-input line.
     # Files come first in ``sources``, then stdin. A pipe or socket left unread
     # can hold the content meant for the scan, so the line that says stdin was
     # not read follows the error, as it follows a report.
     if all(s.byte_count == 0 for s in sources):
+        lines = [s.unreadable.message for s in sources if s.unreadable]
         empty = [
             f"{s.label} is 0 bytes" if i < len(real_files) else f"{s.label} delivered 0 bytes"
             for i, s in enumerate(sources)
+            if not s.unreadable
         ]
-        note = f"\naicomply: {_STDIN_NOT_READ}" if pipe_unread else ""
-        raise _UsageError("no input: " + ", ".join(empty) + note)
+        if empty:
+            lines.append("no input: " + ", ".join(empty))
+        if pipe_unread:
+            lines.append(_STDIN_NOT_READ)
+        raise _UsageError("\naicomply: ".join(lines))
 
     return sources
 
@@ -510,45 +556,80 @@ def _not_evaluated_lines(ids: Sequence[str]) -> list[str]:
 
 
 def _verdict_line(
-    worst: str, total_findings: int, input_count: int, not_evaluated_inputs: int
+    worst: str,
+    total_findings: int,
+    input_count: int,
+    not_evaluated_inputs: int,
+    unreadable_inputs: int = 0,
 ) -> str:
-    """The report's last line, as in the TS CLI: ``worst`` is the worst verdict
-    of the inputs that were scanned, and ``not_evaluated_inputs`` the number of
-    them with a pattern the regex engine could not run, given whenever it is
-    not 0.
+    """The report's last line, as in the TS CLI: ``worst`` is the verdict of
+    the run, ``input_count`` the number of inputs that were read,
+    ``not_evaluated_inputs`` the number of them with a pattern the regex
+    engine could not run, and ``unreadable_inputs`` the number of named files
+    that could not be read; each of the last two is given whenever it is not 0.
     """
     if worst == "CLEAN":
         # CLEAN is also the verdict for an input no layer detects, so the line
         # states what was checked and makes no claim about the content.
         return "Verdict: CLEAN  ·  no findings from the layers that ran."
     m = not_evaluated_inputs
+    u = unreadable_inputs
+    not_read = f"{u} input{'' if u == 1 else 's'} could not be read"
     if worst == "INCOMPLETE":
-        if m == 1:
+        parts = []
+        if m:
+            parts.append(f"{m} input{' was' if m == 1 else 's were'} not evaluated in full")
+        if u:
+            parts.append(not_read)
+        if m == 0:
+            review = ""
+        elif m == 1:
             review = (
-                "Review it for the patterns named above, or block it, before it reaches an LLM."
+                " Review it for the patterns named above, or block it, before it reaches an LLM."
             )
         else:
             review = (
-                "Review them for the patterns named above, or block them, before they reach an LLM."
+                " Review them for the patterns named above, or block them,"
+                " before they reach an LLM."
             )
-        return (
-            f"Verdict: INCOMPLETE  ·  no findings, but {m} input"
-            f"{' was' if m == 1 else 's were'} not evaluated in full. {review}"
+        rescan = (
+            ""
+            if u == 0
+            else f" Scan the {_UNREADABLE_VERDICT} input{'' if u == 1 else 's'}"
+            f" once {'it' if u == 1 else 'they'} can be read."
         )
+        return f"Verdict: INCOMPLETE  ·  no findings, but {' and '.join(parts)}.{review}{rescan}"
     not_evaluated = "" if m == 0 else f"; {m} input{'' if m == 1 else 's'} not evaluated in full"
+    not_read_part = "" if u == 0 else f"; {not_read}"
     return (
         f"Verdict: {worst}  ·  {total_findings} "
         f"finding{'' if total_findings == 1 else 's'} across {input_count} "
-        f"input{'' if input_count == 1 else 's'}{not_evaluated}. "
+        f"input{'' if input_count == 1 else 's'}{not_evaluated}{not_read_part}. "
         "Block, redact, or log before this content reaches an LLM."
     )
+
+
+def _overall_verdict(results: list[ComplyResult], unreadable: int) -> str:
+    """The verdict of the run, for the results of the inputs that were scanned
+    and the number of inputs that could not be read, as in the TS CLI: the
+    worst verdict, but INCOMPLETE in place of CLEAN when an input could not be
+    read, as the scan reached no verdict on it.
+    """
+    if any(r.verdict == "DENY" for r in results):
+        return "DENY"
+    if any(r.verdict == "VIOLATION" for r in results):
+        return "VIOLATION"
+    return "INCOMPLETE" if unreadable else "CLEAN"
 
 
 def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
     out = _Utf8Stdout()
     any_guard = False
     total_findings = 0
-    worst = "CLEAN"
+    unreadable = sum(1 for src in sources if src.unreadable)
+    worst = _overall_verdict(
+        [res for src, res in zip(sources, results) if src.byte_count > 0], unreadable
+    )
 
     # The findings of each flagged input in input order; an empty or CLEAN
     # input lists none. Each input lists its first _MAX_FINDING_LINES.
@@ -569,6 +650,13 @@ def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
 
     out.write("\n")
     for src, res, findings in zip(sources, results, ordered):
+        if src.unreadable:
+            # It was not scanned, so it gets no layer's verdict and adds none to
+            # the total; the verdict line counts it.
+            out.write(
+                f"  {_UNREADABLE_VERDICT:<10} {src.label}   {src.unreadable.reason}\n\n"
+            )
+            continue
         if src.byte_count == 0:
             # No layer ran on it, so it gets no layer's verdict and adds none to
             # the total.
@@ -577,10 +665,6 @@ def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
         if _guard_active(res):
             any_guard = True
         total_findings += len(res.violations)
-        if res.verdict == "DENY":
-            worst = "DENY"
-        elif res.verdict == "VIOLATION" and worst != "DENY":
-            worst = "VIOLATION"
 
         tag = {
             "CLEAN": "CLEAN     ",
@@ -617,17 +701,9 @@ def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
             "  Try it: npm i -g @nanomind/daemon && nanomind-daemon start\n\n"
         )
 
-    if worst == "CLEAN":
-        # CLEAN is also the verdict for an input no layer detects, so the line
-        # states what was checked and makes no claim about the content.
-        out.write("Verdict: CLEAN  ·  no findings from the layers that ran.\n")
-    else:
-        out.write(
-            f"Verdict: {worst}  ·  {total_findings} "
-            f"finding{'' if total_findings == 1 else 's'} across {len(sources)} "
-            f"input{'' if len(sources) == 1 else 's'}. "
-            "Block, redact, or log before this content reaches an LLM.\n"
-        )
+    out.write(
+        _verdict_line(worst, total_findings, len(sources) - unreadable, 0, unreadable) + "\n"
+    )
 
 
 def _json_finding(content: str, v: Violation) -> dict:
@@ -648,8 +724,21 @@ def _json_finding(content: str, v: Violation) -> dict:
 
 
 def _render_json(sources: list[_Source], results: list[ComplyResult]) -> None:
-    payload = [
+    payload: list[dict] = [
         {
+            "source": src.label,
+            # A named file that could not be read was not scanned: its
+            # "verdict" is UNREADABLE, the word the report prints for it,
+            # "bytes" is null as no input was read, and "error" says why.
+            "bytes": None,
+            "verdict": _UNREADABLE_VERDICT,
+            "error": src.unreadable.reason,
+            "guardActive": False,
+            "layers": [],
+            "findings": [],
+        }
+        if src.unreadable
+        else {
             "source": src.label,
             # An input of 0 bytes was not classified: its "verdict" is EMPTY,
             # the word the report prints for it, and its "layers" is [].
@@ -713,22 +802,21 @@ def _run_inner(argv: list[str]) -> int:
     # An input of 0 bytes was not classified, so the inputs that were decide
     # the verdict and the exit code.
     scanned = [res for src, res in zip(sources, results) if src.byte_count > 0]
+    unreadable = [src.unreadable for src in sources if src.unreadable]
+    overall = _overall_verdict(scanned, len(unreadable))
 
     if args.json:
         _render_json(sources, results)
     elif args.quiet:
-        worst = (
-            "DENY"
-            if any(r.verdict == "DENY" for r in scanned)
-            else "VIOLATION"
-            if any(r.verdict == "VIOLATION" for r in scanned)
-            else "CLEAN"
-        )
-        _Utf8Stdout().write(f"{worst}\n")
+        _Utf8Stdout().write(f"{overall}\n")
     else:
         _render_human(sources, results)
 
     notes = [_QUIET_WITH_JSON] if args.json and args.quiet else []
+    # The report and --json name each input that could not be read; --quiet
+    # prints only the verdict, so stderr says which ones and why.
+    if args.quiet and not args.json:
+        notes.extend(u.message for u in unreadable)
     if unread == "stream":
         notes.append(_STDIN_NOT_READ)
     if notes:
@@ -737,7 +825,9 @@ def _run_inner(argv: list[str]) -> int:
         sys.stdout.flush()
         sys.stderr.write("".join(f"aicomply: {note}\n" for note in notes))
 
-    return 1 if any(r.verdict != "CLEAN" for r in scanned) else 0
+    # 0 only when every input was read and every one that was scanned is
+    # CLEAN: 1 when one is flagged, 2 when the scan reached no verdict.
+    return 0 if overall == "CLEAN" else 2 if overall == "INCOMPLETE" else 1
 
 
 def main() -> None:

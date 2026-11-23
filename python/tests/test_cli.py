@@ -1114,6 +1114,105 @@ def test_missing_path_cannot_be_read(tmp_path, capsys):
     )
 
 
+# A path that could not be read ended the run, so the files beside it were not
+# reported: a gate over a batch that held one deleted file saw no finding in the
+# others. The TS CLI tests check the same batches. stdin is left out of these
+# runs, so the line that says a pipe on stdin was not read is not printed.
+@pytest.fixture
+def _batch(tmp_path, monkeypatch):
+    monkeypatch.setattr(aicomply.cli, "_unread_stdin", lambda: None)
+    clean = tmp_path / "batch-clean.txt"
+    clean.write_text("nothing sensitive here\n")
+    dirty = tmp_path / "batch-dirty.txt"
+    dirty.write_text("SSN 078-05-1120\n")
+    return str(clean), str(dirty), str(tmp_path / "batch-missing.txt")
+
+
+def test_a_batch_with_a_missing_file_reports_the_other_files(_batch, capsys):
+    clean, dirty, missing = _batch
+    assert run(["scan", clean, missing, dirty]) == 1
+    captured = capsys.readouterr()
+    out = captured.out
+    assert captured.err == ""
+    assert f"  CLEAN      {clean}   " in out
+    assert f"  UNREADABLE {missing}   cannot read (check the path)\n\n" in out
+    assert f"  VIOLATION  {dirty}   1 finding\n" in out
+    assert out.index(clean) < out.index(missing) < out.index(dirty)
+    assert (
+        "Verdict: VIOLATION  ·  1 finding across 2 inputs; 1 input could not be read. "
+        "Block, redact, or log before this content reaches an LLM.\n"
+    ) in out
+
+
+def test_a_batch_with_no_findings_and_an_unreadable_input_exits_2(_batch, tmp_path, capsys):
+    clean, _dirty, missing = _batch
+    d = tmp_path / "batch-dir"
+    d.mkdir()
+    assert run(["scan", clean, missing, str(d)]) == 2
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert f"  CLEAN      {clean}   " in captured.out
+    assert (
+        f"  UNREADABLE {d}   a directory, and directories are not scanned;"
+        f" name the files in it: aicomply scan {d}/*.txt\n"
+    ) in captured.out
+    assert (
+        "Verdict: INCOMPLETE  ·  no findings, but 2 inputs could not be read."
+        " Scan the UNREADABLE inputs once they can be read.\n"
+    ) in captured.out
+
+
+def test_a_batch_lists_the_unreadable_input_in_json(_batch, capsys):
+    _clean, dirty, missing = _batch
+    assert run(["scan", missing, dirty, "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert len(payload) == 2
+    assert payload[0] == {
+        "source": missing,
+        "bytes": None,
+        "verdict": "UNREADABLE",
+        "error": "cannot read (check the path)",
+        "guardActive": False,
+        "layers": [],
+        "findings": [],
+    }
+    assert (payload[1]["source"], payload[1]["verdict"]) == (dirty, "VIOLATION")
+
+
+def test_a_batch_with_quiet_names_the_unreadable_input_on_stderr(_batch, capsys):
+    clean, dirty, missing = _batch
+    not_read = f"aicomply: cannot read '{missing}' (check the path). Try 'aicomply --help'.\n"
+    for files, verdict, code in (
+        ([clean, missing], "INCOMPLETE", 2),
+        ([clean, missing, dirty], "VIOLATION", 1),
+    ):
+        assert run(["scan", *files, "-q"]) == code
+        captured = capsys.readouterr()
+        assert (captured.out, captured.err) == (f"{verdict}\n", not_read)
+
+
+def test_a_batch_none_of_which_could_be_scanned_names_each_input(_batch, tmp_path, capsys):
+    _clean, _dirty, missing = _batch
+    other = str(tmp_path / "batch-missing-too.txt")
+    empty = tmp_path / "batch-empty.txt"
+    empty.write_text("")
+    for files, err in (
+        (
+            [missing, other],
+            f"aicomply: cannot read '{missing}' (check the path). Try 'aicomply --help'.\n"
+            f"aicomply: cannot read '{other}' (check the path). Try 'aicomply --help'.\n",
+        ),
+        (
+            [missing, str(empty)],
+            f"aicomply: cannot read '{missing}' (check the path). Try 'aicomply --help'.\n"
+            f"aicomply: no input: {empty} is 0 bytes\n",
+        ),
+    ):
+        assert run(["scan", *files, "--json"]) == 2
+        captured = capsys.readouterr()
+        assert (captured.out, captured.err) == ("", err)
+
+
 # The glob is pasted into a shell, so the shell has to read the directory's name
 # back out of it.
 def test_directory_glob_is_one_shell_word_that_names_the_directory():

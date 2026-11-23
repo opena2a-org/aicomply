@@ -6,13 +6,13 @@ The CLI has one command, `scan`, which reads files or piped stdin; `npx @opena2a
 
 Exit code is `0` when every input is `CLEAN`, `1` when any input is flagged (`VIOLATION`
 or `DENY`), and `2` when the scan reached no verdict: on a usage error; on no input
-(stdin is a terminal, or every input is 0 bytes, as an empty `git diff` is); on an input
-that cannot be read or decoded
+(stdin is a terminal, or every input is 0 bytes, as an empty `git diff` is); on a named
+file that cannot be read or decoded and none is flagged
 ([An input that cannot be read](#an-input-that-cannot-be-read));
 on a scan that ends on an internal error; and when an input is `INCOMPLETE` (the scan
 could not evaluate it in full) and none is flagged. A flagged input decides the exit
-even beside an `INCOMPLETE` one. A gate passes on `0` only: `2` means the scan reached
-no verdict, not that it found nothing.
+even beside an `INCOMPLETE` or unreadable one. A gate passes on `0` only: `2` means the
+scan reached no verdict, not that it found nothing.
 
 An input of 0 bytes beside others is not classified and does
 not decide the overall verdict or the exit code. The report and `--json` give it the same
@@ -26,27 +26,51 @@ evaluated on it, and `--json` lists them as `"notEvaluated"` beside
 
 ## An input that cannot be read
 
-Each named file is read before any input is scanned, and one that cannot be read
-ends the run: the CLI prints why on stderr, prints nothing on stdout, with `--json`
-too, and exits `2`. This holds for a path that does not exist, for a directory, for
-a file without read permission and for a file too large to scan as one input. Here
-`card.txt` holds a card number and is not reported:
+A named file that cannot be read does not end the run. The other inputs are scanned
+and reported, and the file is listed in its place as `UNREADABLE` with the reason.
+This holds for a path that does not exist, for a directory, for a file without read
+permission and for a file too large to scan as one input:
 
 ```
-$ aicomply scan clean.txt /nonexistent.txt card.txt --json
-aicomply: cannot read '/nonexistent.txt' (check the path). Try 'aicomply --help'.
+$ aicomply scan clean.txt /nonexistent.txt card.txt
+
+  CLEAN      clean.txt   no finding in the 8 pattern classes (aicomply --help lists them)
+
+  UNREADABLE /nonexistent.txt   cannot read (check the path)
+
+  VIOLATION  card.txt   1 finding
+    SSN          •••                confidence 0.95  layer regex  line 1 col 5
+...
+Verdict: VIOLATION  ·  1 finding across 2 inputs; 1 input could not be read. Block, redact, or log before this content reaches an LLM.
 ```
 
-A file of 2 GiB or more gets
-`cannot read '<file>': it is 2 GiB or larger, and this CLI reads files under 2 GiB`.
-A smaller file whose text does not decode into one string gets
-`cannot scan '<file>': at <n> bytes it is too large to decode as one input`; on
+`--json` gives the file `"verdict": "UNREADABLE"`, `"bytes": null`, `"layers": []`,
+`"findings": []` and the reason as `"error"`. `--quiet` prints only the verdict, so
+stderr names each file that could not be read and why, as in
+`aicomply: cannot read '/nonexistent.txt' (check the path). Try 'aicomply --help'.`
+
+The findings of the inputs that were read decide the exit code: `1` when one is
+flagged. When none is, the run exits `2`, as the scan reached no verdict on the file it
+could not read; the verdict is `INCOMPLETE`, and the report's verdict line says how many
+inputs could not be read. When no input could be scanned, as with a single missing
+file, the run ends on a usage error: stderr says why for each input, stdout is empty,
+with `--json` too, and the exit code is `2`.
+
+An option name written after `--` (`aicomply scan -- notes.txt -q`) is still a usage
+error that ends the run, as the scan would otherwise run without the option.
+
+A file of 2 GiB or more is listed with
+`cannot read: it is 2 GiB or larger, and this CLI reads files under 2 GiB`
+(on stderr, `cannot read '<file>': ...`).
+A smaller file whose text does not decode into one string is listed with
+`cannot scan: at <n> bytes it is too large to decode as one input`
+(on stderr, `cannot scan '<file>': ...`); on
 Node 26.12 that was a file of 629145600 bytes decoded as UTF-8, a UTF-16 file
 of 300000000 bytes and a UTF-32 file of 1073741784 bytes of U+1F600 characters.
 
 When stdin is scanned, it is read after the named files, and UTF-8, UTF-16 or
-UTF-32 stdin whose text does not decode into one string ends the run the same
-way, with `cannot scan (stdin): at <n> bytes it is too large to decode as one input`;
+UTF-32 stdin whose text does not decode into one string ends the run on a usage
+error, with `cannot scan (stdin): at <n> bytes it is too large to decode as one input`;
 on Node 26.12 that was 629145600 bytes decoded as UTF-8
 (`head -c 629145600 /dev/zero | aicomply scan`), UTF-16 input of 300000000 bytes
 and UTF-32 input of 1073741784 bytes of U+1F600 characters.

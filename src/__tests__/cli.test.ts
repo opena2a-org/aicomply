@@ -422,6 +422,117 @@ describe('aicomply CLI', () => {
     });
   });
 
+  // A path that could not be read ended the run, so the files beside it were
+  // not reported: a gate over a batch that held one deleted file saw no
+  // finding in the others. The Python CLI tests check the same batches.
+  describe('a batch with an input that cannot be read', () => {
+    it('reports the other files, lists the unreadable one, and exits on the findings', async () => {
+      const clean = fixture('batch-clean.txt', 'nothing sensitive here\n');
+      const dirty = fixture('batch-dirty.txt', 'SSN 078-05-1120\n');
+      const missing = join(dir, 'batch-missing.txt');
+      const cap = capture();
+      const code = await run(['scan', clean, missing, dirty]);
+      cap.restore();
+      const out = cap.out.join('');
+      expect({ code, err: cap.err.join('') }).toEqual({ code: 1, err: '' });
+      expect(out).toContain(`  CLEAN      ${clean}   `);
+      expect(out).toContain(`  UNREADABLE ${missing}   cannot read (check the path)\n\n`);
+      expect(out).toContain(`  VIOLATION  ${dirty}   1 finding\n`);
+      expect(out.indexOf(clean)).toBeLessThan(out.indexOf(missing));
+      expect(out.indexOf(missing)).toBeLessThan(out.indexOf(dirty));
+      expect(out).toContain(
+        'Verdict: VIOLATION  ·  1 finding across 2 inputs; 1 input could not be read. ' +
+          'Block, redact, or log before this content reaches an LLM.\n',
+      );
+    });
+
+    it('exits 2 with no findings, as the scan reached no verdict on the unreadable input', async () => {
+      const clean = fixture('batch-clean-only.txt', 'nothing sensitive here\n');
+      const missing = join(dir, 'batch-missing.txt');
+      const d = join(dir, 'batch-dir');
+      mkdirSync(d, { recursive: true });
+      const cap = capture();
+      const code = await run(['scan', clean, missing, d]);
+      cap.restore();
+      const out = cap.out.join('');
+      expect({ code, err: cap.err.join('') }).toEqual({ code: 2, err: '' });
+      expect(out).toContain(`  CLEAN      ${clean}   `);
+      expect(out).toContain(
+        `  UNREADABLE ${d}   a directory, and directories are not scanned; ` +
+          `name the files in it: aicomply scan ${d}/*.txt\n`,
+      );
+      expect(out).toContain(
+        'Verdict: INCOMPLETE  ·  no findings, but 2 inputs could not be read. ' +
+          'Scan the UNREADABLE inputs once they can be read.\n',
+      );
+    });
+
+    it('lists the unreadable input in --json with its reason', async () => {
+      const dirty = fixture('batch-dirty.txt', 'SSN 078-05-1120\n');
+      const missing = join(dir, 'batch-missing.txt');
+      const cap = capture();
+      const code = await run(['scan', missing, dirty, '--json']);
+      cap.restore();
+      expect(code).toBe(1);
+      const payload = JSON.parse(cap.out.join(''));
+      expect(payload).toHaveLength(2);
+      expect(payload[0]).toEqual({
+        source: missing,
+        bytes: null,
+        verdict: 'UNREADABLE',
+        error: 'cannot read (check the path)',
+        guardActive: false,
+        layers: [],
+        findings: [],
+      });
+      expect(payload[1]).toMatchObject({ source: dirty, verdict: 'VIOLATION' });
+    });
+
+    it('--quiet prints INCOMPLETE for clean inputs and names the unreadable one on stderr', async () => {
+      const clean = fixture('batch-clean-only.txt', 'nothing sensitive here\n');
+      const dirty = fixture('batch-dirty.txt', 'SSN 078-05-1120\n');
+      const missing = join(dir, 'batch-missing.txt');
+      const notRead = `aicomply: cannot read '${missing}' (check the path). Try 'aicomply --help'.\n`;
+      for (const [files, verdict, exit] of [
+        [[clean, missing], 'INCOMPLETE', 2],
+        [[clean, missing, dirty], 'VIOLATION', 1],
+      ] as const) {
+        const cap = capture();
+        const code = await run(['scan', ...files, '-q']);
+        cap.restore();
+        expect({ code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({
+          code: exit,
+          out: `${verdict}\n`,
+          err: notRead,
+        });
+      }
+    });
+
+    it('ends on a usage error that names each input when none could be scanned', async () => {
+      const empty = fixture('batch-empty.txt', '');
+      const missing = join(dir, 'batch-missing.txt');
+      const other = join(dir, 'batch-missing-too.txt');
+      const cases: Array<[string[], string]> = [
+        [
+          [missing, other],
+          `aicomply: cannot read '${missing}' (check the path). Try 'aicomply --help'.\n` +
+            `aicomply: cannot read '${other}' (check the path). Try 'aicomply --help'.\n`,
+        ],
+        [
+          [missing, empty],
+          `aicomply: cannot read '${missing}' (check the path). Try 'aicomply --help'.\n` +
+            `aicomply: no input: ${empty} is 0 bytes\n`,
+        ],
+      ];
+      for (const [files, err] of cases) {
+        const cap = capture();
+        const code = await run(['scan', ...files, '--json']);
+        cap.restore();
+        expect({ code, out: cap.out.join(''), err: cap.err.join('') }).toEqual({ code: 2, out: '', err });
+      }
+    });
+  });
+
   // The glob is pasted into a shell, so the shell has to read the directory's
   // name back out of it.
   it('writes the glob for a directory as one shell word that names the directory', () => {
