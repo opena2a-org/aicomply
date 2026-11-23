@@ -14,6 +14,7 @@ on:
       - 'python/**'
       - 'bench/**'        # shared golden corpus + baseline drive parity
       - 'src/**'          # a TS pattern change must update Python in the same PR
+      - 'pack/**'         # shared pattern pack + conformance corpus
       - '.github/workflows/python-ci.yml'
   push:
     branches:

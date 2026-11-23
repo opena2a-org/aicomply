@@ -15,6 +15,7 @@ on:
     paths:
       - 'src/**'
       - 'bench/**'
+      - 'pack/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/accuracy.yml'
