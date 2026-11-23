@@ -153,6 +153,9 @@ input and an overall verdict. An input of 0 bytes is not classified: it is
 listed as EMPTY, "0 bytes, nothing to classify" (--json: "bytes": 0,
 "verdict": "EMPTY", "layers": []), and the inputs that were scanned decide the
 exit code.
+A named file that cannot be read is listed as UNREADABLE with the reason
+(--json: "verdict": "UNREADABLE", "error"); the other inputs are scanned, and
+the run exits 2 unless one of them is flagged.
 The report lists the first ${MAX_FINDING_LINES} findings of each input and counts the rest by
 type; --json lists every finding.
 
@@ -206,6 +209,12 @@ const MASKED_VALUE = '•••';
 const EMPTY_VERDICT = 'EMPTY';
 
 /**
+ * The verdict of a named file that could not be read or decoded, in the
+ * report and in --json. It is not scanned, so no layer gives it a verdict.
+ */
+const UNREADABLE_VERDICT = 'UNREADABLE';
+
+/**
  * The verdicts of an input that was scanned, from the worst: --quiet prints
  * the worst one any input has, and the report gives it as the overall verdict.
  */
@@ -232,13 +241,24 @@ function worstVerdict(verdicts: InputVerdict[]): InputVerdict {
 }
 
 /**
- * The exit code for the verdicts of the inputs that were scanned: 1 when any
- * input is flagged (VIOLATION or DENY), whatever the others are; otherwise 2
- * when any is INCOMPLETE, as the scan reached no verdict on it; otherwise 0.
+ * The verdict of the run, for the verdicts of the inputs that were scanned
+ * and the number of inputs that could not be read: the worst of the verdicts,
+ * but INCOMPLETE in place of CLEAN when an input could not be read, as the
+ * scan reached no verdict on it.
  */
-function exitCode(verdicts: InputVerdict[]): 0 | 1 | 2 {
+function overallVerdict(verdicts: InputVerdict[], unreadable: number): InputVerdict {
   const worst = worstVerdict(verdicts);
-  return worst === 'CLEAN' ? 0 : worst === 'INCOMPLETE' ? 2 : 1;
+  return worst === 'CLEAN' && unreadable > 0 ? 'INCOMPLETE' : worst;
+}
+
+/**
+ * The exit code for the verdict of the run: 1 when any input is flagged
+ * (VIOLATION or DENY), whatever the others are; otherwise 2 when any is
+ * INCOMPLETE or could not be read, as the scan reached no verdict on it;
+ * otherwise 0.
+ */
+function exitCode(overall: InputVerdict): 0 | 1 | 2 {
+  return overall === 'CLEAN' ? 0 : overall === 'INCOMPLETE' ? 2 : 1;
 }
 
 function readStdin(): Promise<Buffer> {
@@ -287,6 +307,58 @@ interface Source {
   content: string;
   /** How many bytes the input delivered. An input of 0 bytes is not classified. */
   bytes: number;
+  /**
+   * Set for a named file that could not be read or decoded, which is not
+   * scanned: `reason` is what the report and --json give for it, and
+   * `message` the usage error when no input could be scanned.
+   */
+  unreadable?: { reason: string; message: string };
+}
+
+/** A named file that could not be read or decoded, as a source that is not scanned. */
+function unreadableSource(label: string, reason: string, message: string): Source {
+  return { label, content: '', bytes: 0, unreadable: { reason, message } };
+}
+
+/**
+ * Why a named file could not be read, for the error `err` that reading it
+ * threw. Throws a UsageError for an option name written after --.
+ */
+function unreadableFile(file: string, err: unknown): Source {
+  const code = (err as NodeJS.ErrnoException).code;
+  // The path exists, so "check the path" would send the user the wrong way.
+  // EISDIR is what reading a directory fails with, ENOENT a missing path;
+  // the stat covers a directory whose read fails with another code.
+  if (code === 'EISDIR' || isDirectory(file)) {
+    const glob = filesGlob(file);
+    return unreadableSource(
+      file,
+      `a directory, and directories are not scanned; name the files in it: aicomply scan ${glob}`,
+      `'${file}' is a directory, and directories are not scanned. Name the files in it:\n` +
+        `  aicomply scan ${glob}`,
+    );
+  }
+  let why: string;
+  if (code === 'EACCES' || code === 'EPERM') {
+    why = 'permission denied';
+  } else if (code === 'ERR_FS_FILE_TOO_LARGE') {
+    // On Node 26.12, readFileSync reads a file of 2147483647 bytes and
+    // refuses one of 2147483648 (2 GiB) or more.
+    why = 'it is 2 GiB or larger, and this CLI reads files under 2 GiB';
+  } else if (OPTION_NAMES.has(file)) {
+    // The help's example `aicomply scan src/*.txt -q` puts the option after
+    // the files, so it gets written after -- as well (`aicomply scan --
+    // -notes.txt -q`), where it is an input. That is a usage error, not an
+    // input to list as unreadable: the scan would run without the option.
+    throw new UsageError(`cannot read '${file}': after -- every argument is an input; put ${file} before --`);
+  } else {
+    return unreadableSource(
+      file,
+      'cannot read (check the path)',
+      `cannot read '${file}' (check the path). Try 'aicomply --help'.`,
+    );
+  }
+  return unreadableSource(file, `cannot read: ${why}`, `cannot read '${file}': ${why}`);
 }
 
 function isDirectory(path: string): boolean {
@@ -406,6 +478,13 @@ function decodeUtf32(data: Buffer, littleEndian: boolean): string {
  * input's size in bytes.
  */
 function decodeNamed(data: Buffer, name: string): string {
+  const content = tryDecode(data);
+  if (content === undefined) throw new UsageError(`cannot scan ${name}: ${tooLargeToDecode(data)}`);
+  return content;
+}
+
+/** decodeInput, or undefined when the decode throws. */
+function tryDecode(data: Buffer): string | undefined {
   try {
     return decodeInput(data);
   } catch {
@@ -414,13 +493,21 @@ function decodeNamed(data: Buffer, name: string): string {
     // ERR_STRING_TOO_LONG past the longest string, and the UTF-16 TextDecoder
     // throws ERR_ENCODING_INVALID_ENCODED_DATA from 268435456 bytes on.
     // decodeUtf32 throws a RangeError past the longest string.
-    throw new UsageError(`cannot scan ${name}: at ${data.length} bytes it is too large to decode as one input`);
+    return undefined;
   }
+}
+
+function tooLargeToDecode(data: Buffer): string {
+  return `at ${data.length} bytes it is too large to decode as one input`;
 }
 
 /**
  * Reads each named file, then stdin when it is requested. `pipeUnread` is true
  * when stdin is a pipe or socket that is not read because files were named.
+ * A named file that cannot be read or decoded does not end the run: it is
+ * kept in its place as an unreadable source, and the other inputs are
+ * scanned. When no input carries a byte to scan, the run ends on a usage
+ * error that says why for each input.
  */
 async function collectSources(files: string[], pipeUnread: boolean): Promise<Source[]> {
   const realFiles = files.filter((f) => f !== '-');
@@ -431,35 +518,16 @@ async function collectSources(files: string[], pipeUnread: boolean): Promise<Sou
     try {
       data = readFileSync(file);
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      // The path exists, so "check the path" would send the user the wrong way.
-      // EISDIR is what reading a directory fails with, ENOENT a missing path;
-      // the stat covers a directory whose read fails with another code.
-      if (code === 'EISDIR' || isDirectory(file)) {
-        throw new UsageError(
-          `'${file}' is a directory, and directories are not scanned. Name the files in it:\n` +
-            `  aicomply scan ${filesGlob(file)}`,
-        );
-      }
-      if (code === 'EACCES' || code === 'EPERM') {
-        throw new UsageError(`cannot read '${file}': permission denied`);
-      }
-      // On Node 26.12, readFileSync reads a file of 2147483647 bytes and
-      // refuses one of 2147483648 (2 GiB) or more.
-      if (code === 'ERR_FS_FILE_TOO_LARGE') {
-        throw new UsageError(`cannot read '${file}': it is 2 GiB or larger, and this CLI reads files under 2 GiB`);
-      }
-      // The help's example `aicomply scan src/*.txt -q` puts the option after
-      // the files, so it gets written after -- as well (`aicomply scan --
-      // -notes.txt -q`), where it is an input.
-      if (OPTION_NAMES.has(file)) {
-        throw new UsageError(
-          `cannot read '${file}': after -- every argument is an input; put ${file} before --`,
-        );
-      }
-      throw new UsageError(`cannot read '${file}' (check the path). Try 'aicomply --help'.`);
+      sources.push(unreadableFile(file, err));
+      continue;
     }
-    sources.push({ label: file, content: decodeNamed(data, `'${file}'`), bytes: data.length });
+    const content = tryDecode(data);
+    if (content === undefined) {
+      const why = tooLargeToDecode(data);
+      sources.push(unreadableSource(file, `cannot scan: ${why}`, `cannot scan '${file}': ${why}`));
+      continue;
+    }
+    sources.push({ label: file, content, bytes: data.length });
   }
 
   if (stdinRequested(files)) {
@@ -476,16 +544,20 @@ async function collectSources(files: string[], pipeUnread: boolean): Promise<Sou
   }
 
   // comply() runs no layer on empty content and returns CLEAN, so a run in
-  // which no input carried a byte would print a verdict nothing reached.
+  // which no input carried a byte would print a verdict nothing reached. An
+  // input that could not be read carries none either. Each such input gets
+  // its own line, then the inputs that were read get the no-input line.
   // Files come first in `sources`, then stdin. A pipe or socket left unread
   // can hold the content meant for the scan, so the line that says stdin was
   // not read follows the error, as it follows a report.
   if (sources.every((s) => s.bytes === 0)) {
-    const empty = sources.map((s, i) =>
-      i < realFiles.length ? `${s.label} is 0 bytes` : `${s.label} delivered 0 bytes`,
+    const lines = sources.flatMap((s) => (s.unreadable ? [s.unreadable.message] : []));
+    const empty = sources.flatMap((s, i) =>
+      s.unreadable ? [] : [i < realFiles.length ? `${s.label} is 0 bytes` : `${s.label} delivered 0 bytes`],
     );
-    const note = pipeUnread ? `\naicomply: ${STDIN_NOT_READ}` : '';
-    throw new UsageError(`no input: ${empty.join(', ')}${note}`);
+    if (empty.length > 0) lines.push(`no input: ${empty.join(', ')}`);
+    if (pipeUnread) lines.push(STDIN_NOT_READ);
+    throw new UsageError(lines.join('\naicomply: '));
   }
 
   return sources;
@@ -731,7 +803,8 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
   // The verdict of each input that was scanned; an input of 0 bytes has none.
   const verdicts = sources.map((src, i) => (src.bytes === 0 ? undefined : inputVerdict(results[i])));
   const scanned = verdicts.filter((v): v is InputVerdict => v !== undefined);
-  const worst = worstVerdict(scanned);
+  const unreadable = sources.filter((s) => s.unreadable).length;
+  const worst = overallVerdict(scanned, unreadable);
   // The inputs that were scanned with a pattern the regex engine could not run.
   const notEvaluatedInputs = verdicts.filter(
     (v, i) => v !== undefined && (results[i].unevaluatedPatterns ?? []).length > 0,
@@ -761,6 +834,12 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
   for (let i = 0; i < sources.length; i++) {
     const src = sources[i];
     const res = results[i];
+    if (src.unreadable) {
+      // It was not scanned, so it gets no layer's verdict and adds none to the
+      // total; the verdict line counts it.
+      out.write(`  ${UNREADABLE_VERDICT.padEnd(10)} ${src.label}   ${src.unreadable.reason}\n\n`);
+      continue;
+    }
     if (src.bytes === 0) {
       // No layer ran on it, so it gets no layer's verdict and adds none to the
       // total.
@@ -827,30 +906,66 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
     );
   }
 
+  out.write(verdictLine(worst, totalFindings, sources.length - unreadable, notEvaluatedInputs, unreadable));
+}
+
+/**
+ * The report's last line. `worst` is the verdict of the run, `inputs` the
+ * number of inputs that were read, `notEvaluated` the number of them with a
+ * pattern the regex engine could not run, and `unreadable` the number of
+ * named files that could not be read; each of the last two is given whenever
+ * it is not 0.
+ */
+export function verdictLine(
+  worst: InputVerdict,
+  totalFindings: number,
+  inputs: number,
+  notEvaluated: number,
+  unreadable = 0,
+): string {
+  const m = notEvaluated;
+  const u = unreadable;
+  const notRead = `${u} input${u === 1 ? '' : 's'} could not be read`;
   if (worst === 'CLEAN') {
     // CLEAN is also the verdict for an input no layer detects, so the line
     // states what was checked and makes no claim about the content.
-    out.write('Verdict: CLEAN  ·  no findings from the layers that ran.\n');
-  } else if (worst === 'INCOMPLETE') {
-    const m = notEvaluatedInputs;
-    out.write(
-      `Verdict: INCOMPLETE  ·  no findings, but ${m} input${m === 1 ? ' was' : 's were'} not evaluated in full. ` +
-        (m === 1
-          ? 'Review it for the patterns named above, or block it, before it reaches an LLM.\n'
-          : 'Review them for the patterns named above, or block them, before they reach an LLM.\n'),
-    );
-  } else {
-    const m = notEvaluatedInputs;
-    const notEvaluated = m === 0 ? '' : `; ${m} input${m === 1 ? '' : 's'} not evaluated in full`;
-    out.write(
-      `Verdict: ${worst}  ·  ${totalFindings} finding${totalFindings === 1 ? '' : 's'} across ${sources.length} input${sources.length === 1 ? '' : 's'}${notEvaluated}. ` +
-        'Block, redact, or log before this content reaches an LLM.\n',
-    );
+    return 'Verdict: CLEAN  ·  no findings from the layers that ran.\n';
   }
+  if (worst === 'INCOMPLETE') {
+    const parts = [
+      ...(m === 0 ? [] : [`${m} input${m === 1 ? ' was' : 's were'} not evaluated in full`]),
+      ...(u === 0 ? [] : [notRead]),
+    ];
+    const review =
+      m === 0
+        ? ''
+        : m === 1
+          ? ' Review it for the patterns named above, or block it, before it reaches an LLM.'
+          : ' Review them for the patterns named above, or block them, before they reach an LLM.';
+    const rescan = u === 0 ? '' : ` Scan the ${UNREADABLE_VERDICT} input${u === 1 ? '' : 's'} once ${u === 1 ? 'it' : 'they'} can be read.`;
+    return `Verdict: INCOMPLETE  ·  no findings, but ${parts.join(' and ')}.${review}${rescan}\n`;
+  }
+  const notEvaluatedPart = m === 0 ? '' : `; ${m} input${m === 1 ? '' : 's'} not evaluated in full`;
+  const notReadPart = u === 0 ? '' : `; ${notRead}`;
+  return (
+    `Verdict: ${worst}  ·  ${totalFindings} finding${totalFindings === 1 ? '' : 's'} across ${inputs} input${inputs === 1 ? '' : 's'}${notEvaluatedPart}${notReadPart}. ` +
+    'Block, redact, or log before this content reaches an LLM.\n'
+  );
 }
 
 export function renderJson(sources: Source[], results: ComplyResult[]): void {
-  const payload = sources.map((src, i) => ({
+  const payload = sources.map((src, i) => src.unreadable ? {
+    source: src.label,
+    // A named file that could not be read or decoded was not scanned: its
+    // `verdict` is UNREADABLE, the word the report prints for it, `bytes` is
+    // null as no input was read, and `error` says why.
+    bytes: null,
+    verdict: UNREADABLE_VERDICT,
+    error: src.unreadable.reason,
+    guardActive: false,
+    layers: [],
+    findings: [],
+  } : ({
     source: src.label,
     // An input of 0 bytes was not classified: its `verdict` is EMPTY, the
     // word the report prints for it, and its `layers` is [].
@@ -935,12 +1050,19 @@ async function runInner(argv: string[]): Promise<number> {
   // An input of 0 bytes was not classified, so the inputs that were decide
   // the verdict and the exit code.
   const verdicts = results.filter((_, i) => sources[i].bytes > 0).map(inputVerdict);
+  const unreadable = sources.filter((s) => s.unreadable);
+  const overall = overallVerdict(verdicts, unreadable.length);
 
   if (args.json) renderJson(sources, results);
-  else if (args.quiet) process.stdout.write(`${worstVerdict(verdicts)}\n`);
+  else if (args.quiet) process.stdout.write(`${overall}\n`);
   else renderHuman(sources, results);
 
   const notes = args.json && args.quiet ? [QUIET_WITH_JSON] : [];
+  // The report and --json name each input that could not be read; --quiet
+  // prints only the verdict, so stderr says which ones and why.
+  if (args.quiet && !args.json) {
+    for (const s of unreadable) if (s.unreadable) notes.push(s.unreadable.message);
+  }
   if (unread === 'stream') notes.push(STDIN_NOT_READ);
   if (notes.length > 0) {
     // Most of a large report can still be queued for a piped stdout. Writing
@@ -950,9 +1072,10 @@ async function runInner(argv: string[]): Promise<number> {
     process.stderr.write(notes.map((note) => `aicomply: ${note}\n`).join(''));
   }
 
-  // 0 only when every input that was scanned is CLEAN, so a CI gate passes
-  // on 0 alone: 1 when one is flagged, 2 when the scan reached no verdict.
-  return exitCode(verdicts);
+  // 0 only when every input was read and every one that was scanned is
+  // CLEAN, so a CI gate passes on 0 alone: 1 when one is flagged, 2 when the
+  // scan reached no verdict.
+  return exitCode(overall);
 }
 
 /**
