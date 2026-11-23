@@ -256,9 +256,9 @@ regex-only.
   the cache holds an answer that is not complete for it, the package is
   `partial`, with that answer's reason and figures; otherwise it is
   `partial` from that page, as a package that is not listed is.
-- **NanoMind-Guard semantic classifier.** The model has shipped
+- **NanoMind semantic classifier (`@nanomind/daemon`).** The model has shipped
   (`nanomind-security-classifier` tme-v0.5.0, served by `@nanomind/daemon`
-  over HTTP), but the Guard is a preview: the current model over-flags
+  over HTTP), but this layer is a preview: the current model over-flags
   benign text (measured 2026-06-25 against `@nanomind/daemon` 0.3.0: 7 of
   10 ordinary-benign sentences flagged at the 0.8 block threshold), so it
   is not a production control. It is off unless a daemon is running;

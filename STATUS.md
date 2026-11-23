@@ -6,7 +6,7 @@
 
 ## Stage rationale
 
-`@opena2a/aicomply 1.0.0` (released 2026-05-28) closes the three v0.x README gaps - adversarial-mutation handling (NFKC + zero-width + targeted whitespace + bounded Base64/URL decode), a measured-accuracy baseline (3200 synthetic samples, per-class P/R/F1 in CI), and NanoMind-Guard IPC wiring (real socket protocol, mock-socket testable). Semver applies from 1.0.0; breaking changes require a major bump and migration note.
+`@opena2a/aicomply 1.0.0` (released 2026-05-28) closes the three v0.x README gaps - adversarial-mutation handling (NFKC + zero-width + targeted whitespace + bounded Base64/URL decode), a measured-accuracy baseline (3200 synthetic samples, per-class P/R/F1 in CI), and a socket IPC client in aicomply's own protocol (it sends `content` and reads `verdict`; the NanoMind-Guard daemon reads `text`), tested against a mock socket. Semver applies from 1.0.0; breaking changes require a major bump and migration note.
 
 The semantic Guard layer is wired and the NanoMind model has shipped (`nanomind-security-classifier` tme-v0.5.0, served by `@nanomind/daemon` over HTTP on `127.0.0.1:47200`). However, the current model over-flags benign text (measured 2026-06-25: roughly 70% benign false positives at the 0.8 block threshold, many at near-1.0 confidence), so the Guard remains a **preview** and is not recommended for production gating. The regex layer is the stable production surface and carries the measured accuracy in [SECURITY.md](./SECURITY.md); `comply()` runs regex-only whenever no daemon is reachable, which is the default. Promoting the Guard out of preview is gated on a model recalibration that fixes the benign false-positive rate.
 
