@@ -23,6 +23,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import select
 import shlex
 import stat
 import sys
@@ -270,9 +271,11 @@ def _unread_stdin() -> Literal["content", "stream"] | None:
     would hold up the scan.
 
     ``"content"``  a regular file with bytes (``aicomply scan a.txt < b.txt``)
-    ``"stream"``   a pipe or socket: what it carries is known only by reading it
+    ``"stream"``   a pipe or socket that has bytes, or may still get some
     ``None``       anything else: a terminal or /dev/null (character devices),
-                   an empty file, or no descriptor 0
+                   an empty file, a pipe or socket whose writer has closed it
+                   with nothing written (``true | aicomply scan a.txt``), or
+                   no descriptor 0
     """
     try:
         st = os.fstat(0)
@@ -281,8 +284,32 @@ def _unread_stdin() -> Literal["content", "stream"] | None:
     if stat.S_ISREG(st.st_mode):
         return "content" if st.st_size > 0 else None
     if stat.S_ISFIFO(st.st_mode) or stat.S_ISSOCK(st.st_mode):
-        return "stream"
+        return None if _stream_at_end_of_file() else "stream"
     return None
+
+
+def _stream_at_end_of_file() -> bool:
+    """True when stdin is a pipe or socket that is at its end with no byte in it.
+
+    Asked without blocking and without consuming a byte: a zero-timeout select
+    says whether a read would return at once, and FIONREAD says how many bytes
+    it would return. A read that would return at once with 0 bytes available is
+    the end of file. A writer that holds the pipe open with nothing written yet
+    is not readable, so it is not at its end. Where either call is missing
+    (Windows) or fails, the answer is False.
+    """
+    try:
+        import fcntl
+        import struct
+        import termios
+
+        readable, _, _ = select.select([0], [], [], 0)
+        if not readable:
+            return False
+        waiting = struct.unpack("i", fcntl.ioctl(0, termios.FIONREAD, b"\0\0\0\0"))[0]
+    except (ImportError, OSError, ValueError, AttributeError):
+        return False
+    return waiting == 0
 
 
 @dataclass
