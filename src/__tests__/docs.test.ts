@@ -399,4 +399,19 @@ describe('2.3.0 release notes', () => {
     const end = text.indexOf('\n## ', start + 1);
     expect(text.slice(start, end === -1 ? undefined : end)).toContain((error as TypeError).message);
   });
+
+  it('list the TypeError a non-string sourcePackage now throws, with its message', async () => {
+    const error = await comply({ content: 'hello', useGuard: false, sourcePackage: 5 as unknown as string }).then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(TypeError);
+    const text = notes();
+    const start = text.indexOf('\n## A `sourcePackage` that is not a string now throws a TypeError\n');
+    expect(start).not.toBe(-1);
+    const end = text.indexOf('\n## ', start + 1);
+    const section = text.slice(start, end === -1 ? undefined : end);
+    expect(section).toContain('sourcePackage must be a string (got number)');
+    expect((error as TypeError).message).toContain('sourcePackage must be a string (got number)');
+  });
 });
