@@ -1406,6 +1406,43 @@ def test_files_named_socket_keeps_the_exit_code_of_the_files(tmp_path):
     assert result.stderr == _NOT_READ
 
 
+def test_files_named_pipe_closed_with_nothing_written_prints_no_line(tmp_path):
+    # ``true | aicomply scan clean.txt -q``: the writer is gone, so stdin
+    # delivered no byte and there is nothing the notice could point to.
+    read_end, write_end = os.pipe()
+    os.close(write_end)
+    try:
+        result = _scan([_clean_file(tmp_path), "-q"], tmp_path, stdin=read_end)
+    finally:
+        os.close(read_end)
+    assert result.returncode == 0
+    assert result.stdout == "CLEAN\n"
+    assert result.stderr == ""
+
+
+def test_files_named_pipe_closed_after_a_write_still_prints_the_line(tmp_path):
+    read_end, write_end = os.pipe()
+    os.write(write_end, b"SSN 078-05-1120\n")
+    os.close(write_end)
+    try:
+        result = _scan([_clean_file(tmp_path), "-q"], tmp_path, stdin=read_end)
+    finally:
+        os.close(read_end)
+    assert result.returncode == 0
+    assert result.stderr == _NOT_READ
+
+
+def test_files_named_pipe_held_open_with_nothing_written_prints_the_line(tmp_path):
+    read_end, write_end = os.pipe()
+    try:
+        result = _scan([_clean_file(tmp_path), "-q"], tmp_path, stdin=read_end)
+    finally:
+        os.close(read_end)
+        os.close(write_end)
+    assert result.returncode == 0
+    assert result.stderr == _NOT_READ
+
+
 # A run whose named files are all 0 bytes ends with no input before any report,
 # and the pipe it left unread can hold the content meant for it.
 @pytest.mark.parametrize("flags", [[], ["--json"], ["--quiet"]], ids=["human", "json", "quiet"])

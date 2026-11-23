@@ -98,8 +98,12 @@ When files are named and `-` is not among them, stdin is not scanned. If stdin i
 pipe or a socket, a line on stderr after the report says so:
 `aicomply: stdin not read because files were named; add - to scan it too`. The CLI
 tells a pipe from a terminal or a file without reading it, as a read would wait until
-the writer closes the pipe, so the line follows a pipe that carries no bytes as well:
-`true | aicomply scan clean.txt` prints it. With stdin from `/dev/null`
-(`aicomply scan clean.txt < /dev/null`) it is not printed. A file with content on
+the writer closes the pipe. The Python CLI also checks, without reading a byte, whether
+the pipe is already closed with nothing written, and prints no line then:
+`true | aicomply scan clean.txt -q` prints none. A pipe whose writer is still open, or
+has not yet written or exited when the check runs, gets the line. The Node CLI cannot
+make that check, so it prints the line after a pipe that carries no bytes as well. With
+stdin from `/dev/null` (`aicomply scan clean.txt < /dev/null`) neither prints it. A file
+with content on
 stdin is a usage error (exit `2`) whose message names the form that scans it too,
 `aicomply scan - <files>`.
