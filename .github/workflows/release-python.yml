@@ -70,6 +70,14 @@ jobs:
       - name: Build sdist + wheel
         run: python -m build
 
+      # The gate reads the pack and the version out of the wheel and sdist in
+      # dist/, the files the next step uploads, and exits non-zero unless the
+      # record the conformance run just wrote matches them with every case passing.
+      - name: Conformance + release gate (against the built artifacts)
+        run: |
+          python bench/conformance.py
+          python bench/release_gate.py
+
       - name: Publish to PyPI (Trusted Publishing + attestations)
         uses: pypa/gh-action-pypi-publish@release/v1
         with:

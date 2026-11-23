@@ -16,6 +16,7 @@ on:
       - main
     paths:
       - 'src/**'
+      - 'pack/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/real-daemon.yml'
