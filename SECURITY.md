@@ -140,8 +140,8 @@ The daemon runs as a separate process and its responses are an attack
 surface in the same sense Guard's ARP-signed responses are. The
 adapter validates every field on the daemon response (canonical
 `attackClass` enum, confidence in [0,1], non-empty modelVersion,
-non-negative latencyMs); any schema violation falls back to
-regex-only.
+non-negative latencyMs); on any schema violation the Guard layer is
+skipped and only the regex layer runs.
 
 **Mitigations baked into the adapter:**
 
@@ -196,8 +196,8 @@ regex-only.
   scan with a dedicated pattern.
 - **Guard fallback observability.** When the nanomind-daemon adapter
   cannot reach `/v1/infer` on the configured URL (connection refused,
-  timeout, non-2xx, malformed response), it silently falls back to
-  regex-only. The library does not log these conditions (no library
+  timeout, non-2xx, malformed response), the Guard layer is silently
+  skipped and only the regex layer runs. The library does not log these conditions (no library
   should write to stderr without consent); the Guard is treated as a
   defense-in-depth layer whose presence is
   optional. Operators who need observability should health-check the
@@ -262,7 +262,7 @@ regex-only.
   benign text (measured 2026-06-25 against `@nanomind/daemon` 0.3.0: 7 of
   10 ordinary-benign sentences flagged at the 0.8 block threshold), so it
   is not a production control. It is off unless a daemon is running;
-  without one, `comply()` falls back to regex-only - which is sufficient
+  without one, only the regex layer runs in `comply()` - which is sufficient
   for the syntactic classes above but does not provide semantic context
   detection.
 
@@ -298,7 +298,8 @@ regex-only.
 
 1. **Semantic Guard is a preview and off by default.** `comply()` adds the
    Guard layer only when `@nanomind/daemon` is reachable over HTTP (default
-   `http://127.0.0.1:47200`); otherwise it is regex-only. The shipped model
+   `http://127.0.0.1:47200`); with no daemon running, the default, only the
+   regex layer runs. The shipped model
    (tme-v0.5.0) over-flags benign text, so do not rely on the Guard as a
    production gate until a recalibrated model ships. See
    [Guard status](./docs/semantic-guard.md#guard-status-preview-not-production-ready).
@@ -319,8 +320,8 @@ regex-only.
    non-empty input, `comply()` makes one request,
    `POST http://127.0.0.1:47200/v1/infer`, with the input verbatim in the
    body. The address is loopback, so the request does not leave the host,
-   and with nothing listening the connection is refused and the result is
-   regex-only. Whichever local process holds port 47200 receives every
+   and with nothing listening the connection is refused and only the regex
+   layer runs. Whichever local process holds port 47200 receives every
    classified input, whether or not it is the nanomind-daemon. Pass
    `useGuard: false` to `comply()` to make no request.
 6. **Synthetic-corpus baseline is not a field SLA.** The accuracy numbers
