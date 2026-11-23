@@ -14,6 +14,7 @@ shared pattern pack, compiled once by ``.pack``; named validators live in
 
 from __future__ import annotations
 
+import re
 from bisect import bisect_left
 from dataclasses import dataclass
 
@@ -45,6 +46,14 @@ class PatternMatch:
 PATTERNS: list[PatternDefinition] = PACK.patterns
 
 
+#: The reference forms as one pattern: one pass for a value, not one per form.
+#: Each form is anchored on its own, so each alternative is whole against the value.
+_REFERENCE_FORMS = re.compile(
+    "|".join(f"(?:{form.pattern})" for form in PACK.reference_forms) or "(?!)",
+    re.ASCII,
+)
+
+
 def is_env_var_reference(value: str) -> bool:
     """True when the value is a reference to a credential, not the credential.
 
@@ -55,15 +64,26 @@ def is_env_var_reference(value: str) -> bool:
     value, so a value that merely contains a reference-shaped substring
     (``process.envXABC...``) is still a finding.
     """
-    trimmed = value.strip()
-    return any(form.fullmatch(trimmed) for form in PACK.reference_forms)
+    return _REFERENCE_FORMS.fullmatch(value.strip()) is not None
 
 
 def scan_patterns(content: str) -> list[PatternMatch]:
     """Scan content against all patterns and return validated, de-overlapped matches."""
     matches: list[PatternMatch] = []
+    lowered: str | None = None
 
     for pattern in PATTERNS:
+        # A pattern whose required literals are all absent cannot match; looking
+        # for them is far cheaper than running the regex over the whole input.
+        if pattern.required is not None:
+            if pattern.ignore_case:
+                if lowered is None:
+                    lowered = content.lower()
+                haystack = lowered
+            else:
+                haystack = content
+            if not any(literal in haystack for literal in pattern.required):
+                continue
         for match in pattern.regex.finditer(content):
             full_match = match.group(0)
             group1 = match.group(1) if match.lastindex else None
