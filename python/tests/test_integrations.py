@@ -317,6 +317,52 @@ def test_langchain_handler_redact_raises_when_the_message_rejects_assignment(err
     assert message.content == _SSN_COMPLETION
 
 
+@pytest.mark.parametrize("error", [AttributeError, TypeError, ValueError])
+def test_langchain_redact_raises_when_assignment_fails_without_langchain_core(
+    monkeypatch, error
+):
+    # The same failed assignment, driven through on_llm_end with stand-in
+    # langchain_core modules so it runs on an install without langchain-core,
+    # where the invoke() test above skips.
+    from aicomply.integrations import langchain as lc_mod
+
+    class BaseCallbackHandler:
+        raise_error = False
+
+    class GenerationChunk:
+        pass
+
+    class ChatGenerationChunk:
+        pass
+
+    callbacks_base = types.ModuleType("langchain_core.callbacks.base")
+    callbacks_base.BaseCallbackHandler = BaseCallbackHandler
+    outputs = types.ModuleType("langchain_core.outputs")
+    outputs.GenerationChunk = GenerationChunk
+    outputs.ChatGenerationChunk = ChatGenerationChunk
+    monkeypatch.setitem(sys.modules, "langchain_core.callbacks.base", callbacks_base)
+    monkeypatch.setitem(sys.modules, "langchain_core.outputs", outputs)
+
+    class ReadOnlyContentMessage:
+        def __init__(self, content):
+            object.__setattr__(self, "content", content)
+
+        def __setattr__(self, name, value):
+            if name == "content":
+                raise error("content is read-only")
+            object.__setattr__(self, name, value)
+
+    message = ReadOnlyContentMessage(_SSN_COMPLETION)
+    generation = types.SimpleNamespace(text=_SSN_COMPLETION, message=message)
+    response = types.SimpleNamespace(generations=[[generation]])
+    handler = lc_mod.AIComplyCallbackHandler(on_violation="redact", use_guard=False)
+
+    with pytest.raises(ComplianceViolation, match="SSN"):
+        handler.on_llm_end(response)
+
+    assert message.content == _SSN_COMPLETION
+
+
 def _streaming_fake_langchain_model(kind: str, response: str, **handler_options):
     """A LangChain fake chat or completion model whose ``stream()`` yields chunks."""
     pytest.importorskip("langchain_core")
