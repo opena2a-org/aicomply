@@ -156,6 +156,9 @@ exit code.
 A named file that cannot be read is listed as UNREADABLE with the reason
 (--json: "verdict": "UNREADABLE", "error"); the other inputs are scanned, and
 the run exits 2 unless one of them is flagged.
+A binary input (one whose text holds a NUL byte) is decoded as text,
+as any input is, and scanned; its line in the report says "binary, scanned
+as text". A value stored compressed or encoded in it is not seen.
 The report lists the first {_MAX_FINDING_LINES} findings of each input and counts the rest by
 type; --json lists every finding.
 
@@ -225,6 +228,20 @@ def _bom_encoding(data: bytes) -> str | None:
     if data.startswith(b"\xef\xbb\xbf"):
         return "utf-8-sig"
     return None
+
+
+def _is_binary(content: str) -> bool:
+    """Whether decoded text is binary: it holds a NUL character, which text files
+    do not and nearly every binary format does. The mark of a UTF-16 or UTF-32
+    input is decoded first, so the zero bytes of its text do not count.
+    """
+    return "\x00" in content
+
+
+# The note on the input line of a binary input. Its bytes were decoded as text,
+# each sequence that does not decode as U+FFFD, and the patterns ran on that
+# text, so a value stored in a compressed or encoded form is not seen.
+_BINARY_NOTE = "binary, scanned as text;"
 
 
 def _read_stdin() -> tuple[str, int]:
@@ -328,6 +345,10 @@ class _Source:
     byte_count: int
     # Set for a named file that could not be read, which is not scanned.
     unreadable: _Unreadable | None = None
+    # True when the decoded text holds a NUL character, as a binary file does.
+    # Its bytes are still decoded as text and scanned; the report says so on
+    # its input line.
+    binary: bool = False
 
 
 def _files_glob(directory: str) -> str:
@@ -412,7 +433,9 @@ def _collect_sources(files: list[str], pipe_unread: bool) -> list[_Source]:
             errors="replace",
             newline="",
         ).read()
-        sources.append(_Source(label=f, content=content, byte_count=len(data)))
+        sources.append(
+            _Source(label=f, content=content, byte_count=len(data), binary=_is_binary(content))
+        )
 
     if _stdin_requested(files):
         if sys.stdin.isatty():
@@ -422,7 +445,14 @@ def _collect_sources(files: list[str], pipe_unread: bool) -> list[_Source]:
                 '  echo "My SSN is 123-45-6789" | aicomply scan'
             )
         content, byte_count = _read_stdin()
-        sources.append(_Source(label="(stdin)", content=content, byte_count=byte_count))
+        sources.append(
+            _Source(
+                label="(stdin)",
+                content=content,
+                byte_count=byte_count,
+                binary=_is_binary(content),
+            )
+        )
 
     # comply() runs no layer on empty content and returns CLEAN, so a run in
     # which no input carried a byte would print a verdict nothing reached. An
@@ -698,15 +728,16 @@ def _render_human(sources: list[_Source], results: list[ComplyResult]) -> None:
             "DENY": "DENY      ",
             "VIOLATION": "VIOLATION ",
         }[res.verdict]
-        out.write(f"  {tag} {src.label}")
+        out.write(f"  {tag} {src.label}" + (f"   {_BINARY_NOTE}" if src.binary else ""))
+        gap = " " if src.binary else "   "
         if res.verdict == "CLEAN":
             out.write(
-                f"   no finding in the {len(PATTERN_TYPES)} pattern classes"
+                f"{gap}no finding in the {len(PATTERN_TYPES)} pattern classes"
                 " (aicomply --help lists them)\n\n"
             )
             continue
         n = len(res.violations)
-        out.write(f"   {n} finding{'' if n == 1 else 's'}\n")
+        out.write(f"{gap}{n} finding{'' if n == 1 else 's'}\n")
         for v, loc in findings[:_MAX_FINDING_LINES]:
             view = f"  view {v.view}" if v.view and v.view != "normalized" else ""
             where = f"  line {loc[0]} col {loc[1]}" if loc else ""

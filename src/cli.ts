@@ -156,6 +156,9 @@ exit code.
 A named file that cannot be read is listed as UNREADABLE with the reason
 (--json: "verdict": "UNREADABLE", "error"); the other inputs are scanned, and
 the run exits 2 unless one of them is flagged.
+A binary input (one whose text holds a NUL byte) is decoded as text,
+as any input is, and scanned; its line in the report says "binary, scanned
+as text". A value stored compressed or encoded in it is not seen.
 The report lists the first ${MAX_FINDING_LINES} findings of each input and counts the rest by
 type; --json lists every finding.
 
@@ -307,6 +310,12 @@ interface Source {
   content: string;
   /** How many bytes the input delivered. An input of 0 bytes is not classified. */
   bytes: number;
+  /**
+   * True when the decoded text holds a NUL character, as a binary file does.
+   * Its bytes are still decoded as text and scanned; the report says so on
+   * its input line.
+   */
+  binary?: boolean;
   /**
    * Set for a named file that could not be read or decoded, which is not
    * scanned: `reason` is what the report and --json give for it, and
@@ -497,6 +506,22 @@ function tryDecode(data: Buffer): string | undefined {
   }
 }
 
+/**
+ * Whether decoded text is binary: it holds a NUL character, which text files
+ * do not and nearly every binary format does. The mark of a UTF-16 or UTF-32
+ * input is decoded first, so the zero bytes of its text do not count.
+ */
+export function isBinary(content: string): boolean {
+  return content.includes('\u0000');
+}
+
+/**
+ * The note on the input line of a binary input. Its bytes were decoded as
+ * text, each sequence that does not decode as U+FFFD, and the patterns ran on
+ * that text, so a value stored in a compressed or encoded form is not seen.
+ */
+export const BINARY_NOTE = 'binary, scanned as text;';
+
 function tooLargeToDecode(data: Buffer): string {
   return `at ${data.length} bytes it is too large to decode as one input`;
 }
@@ -527,7 +552,7 @@ async function collectSources(files: string[], pipeUnread: boolean): Promise<Sou
       sources.push(unreadableSource(file, `cannot scan: ${why}`, `cannot scan '${file}': ${why}`));
       continue;
     }
-    sources.push({ label: file, content, bytes: data.length });
+    sources.push({ label: file, content, bytes: data.length, binary: isBinary(content) });
   }
 
   if (stdinRequested(files)) {
@@ -540,7 +565,8 @@ async function collectSources(files: string[], pipeUnread: boolean): Promise<Sou
       );
     }
     const data = await readStdin();
-    sources.push({ label: '(stdin)', content: decodeNamed(data, '(stdin)'), bytes: data.length });
+    const content = decodeNamed(data, '(stdin)');
+    sources.push({ label: '(stdin)', content, bytes: data.length, binary: isBinary(content) });
   }
 
   // comply() runs no layer on empty content and returns CLEAN, so a run in
@@ -850,9 +876,10 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
     const verdict = verdicts[i] as InputVerdict;
 
     // Each verdict is at most 10 characters, the width of the column.
-    out.write(`  ${verdict.padEnd(10)} ${src.label}`);
+    out.write(`  ${verdict.padEnd(10)} ${src.label}${src.binary ? `   ${BINARY_NOTE}` : ''}`);
+    const gap = src.binary ? ' ' : '   ';
     if (verdict === 'CLEAN') {
-      out.write(`   no finding in the ${PATTERN_TYPES.length} pattern classes (aicomply --help lists them)\n\n`);
+      out.write(`${gap}no finding in the ${PATTERN_TYPES.length} pattern classes (aicomply --help lists them)\n\n`);
       continue;
     }
     const findings = ordered[i];
@@ -862,11 +889,11 @@ export function renderHuman(sources: Source[], results: ComplyResult[]): void {
     const k = unevaluated.length;
     const notRun = `${k} pattern${k === 1 ? '' : 's'} not evaluated`;
     if (verdict === 'INCOMPLETE') {
-      out.write(`   ${notRun}\n`);
+      out.write(`${gap}${notRun}\n`);
     } else {
       const n = findings.length;
       totalFindings += n;
-      out.write(`   ${n} finding${n === 1 ? '' : 's'}${k === 0 ? '' : `, ${notRun}`}\n`);
+      out.write(`${gap}${n} finding${n === 1 ? '' : 's'}${k === 0 ? '' : `, ${notRun}`}\n`);
     }
     for (const { v, loc } of findings.slice(0, MAX_FINDING_LINES)) {
       const layer = v.classifier;

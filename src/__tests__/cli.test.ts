@@ -2636,4 +2636,58 @@ require.extensions['.ts'] = (module, filename) => {
       expect([scanned.status, scanned.stdout, scanned.stderr]).toEqual([1, 'VIOLATION\n', '']);
     }, 60_000);
   });
+
+  // A binary input is decoded as text and scanned as any other input is. Its
+  // line in the report says so, so a CLEAN beside a PNG or an archive does not
+  // read as a statement about what the file holds in a compressed form.
+  describe('a binary input', () => {
+    async function scan(args: string[]): Promise<{ code: number; out: string; err: string }> {
+      const cap = capture();
+      try {
+        const code = await run(['scan', ...args]);
+        return { code, out: cap.out.join(''), err: cap.err.join('') };
+      } finally {
+        cap.restore();
+      }
+    }
+
+    function binaryFixture(name: string, text: string): string {
+      const p = join(dir, name);
+      writeFileSync(p, Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x00, 0x0d]), Buffer.from(text)]));
+      return p;
+    }
+
+    it('is noted on its CLEAN input line', async () => {
+      const file = binaryFixture('binary-clean.bin', ' nothing sensitive\n');
+      const { code, out } = await scan([file]);
+      expect(code).toBe(0);
+      expect(out).toContain(
+        `  CLEAN      ${file}   binary, scanned as text; no finding in the ${PATTERN_TYPES.length} pattern classes (aicomply --help lists them)\n`,
+      );
+    });
+
+    it('is noted on its flagged input line, and its findings are still reported', async () => {
+      const file = binaryFixture('binary-flagged.bin', ' Customer SSN 078-05-1120 on file\n');
+      const { code, out } = await scan([file]);
+      expect(code).toBe(1);
+      expect(out).toContain(`  VIOLATION  ${file}   binary, scanned as text; 1 finding\n    SSN `);
+    });
+
+    it('is noted on stdin', async () => {
+      pipeStdin(Buffer.from('a\0b Customer SSN 078-05-1120 on file\n'));
+      const { code, out } = await scan([]);
+      expect(code).toBe(1);
+      expect(out).toContain('  VIOLATION  (stdin)   binary, scanned as text; 1 finding\n');
+    });
+
+    it('is not noted for text, nor for UTF-16 text whose zero bytes are part of its characters', async () => {
+      const text = fixture('plain-text.txt', 'nothing sensitive\n');
+      const utf16 = join(dir, 'plain-utf16.txt');
+      writeFileSync(utf16, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('nothing sensitive\n', 'utf16le')]));
+      const { code, out } = await scan([text, utf16]);
+      expect(code).toBe(0);
+      expect(out).not.toContain('binary, scanned as text');
+      expect(out).toContain(`  CLEAN      ${utf16}   no finding in the `);
+    });
+  });
 });
