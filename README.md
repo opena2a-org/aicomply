@@ -2,7 +2,7 @@
 
 [![Status: stable](https://img.shields.io/badge/status-stable-green)](STATUS.md)
 [![npm version](https://img.shields.io/npm/v/@opena2a/aicomply.svg)](https://www.npmjs.com/package/@opena2a/aicomply)
-[![Tests](https://github.com/opena2a-org/aicomply/actions/workflows/release.yml/badge.svg)](https://github.com/opena2a-org/aicomply/actions/workflows/release.yml)
+[![Tests](https://github.com/opena2a-org/aicomply/actions/workflows/ci.yml/badge.svg)](https://github.com/opena2a-org/aicomply/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 > **[OpenA2A](https://github.com/opena2a-org)**: [CLI](https://github.com/opena2a-org/opena2a) · [HackMyAgent](https://github.com/opena2a-org/hackmyagent) · [Secretless](https://github.com/opena2a-org/secretless-ai) · [AIM](https://github.com/opena2a-org/agent-identity-management) · [Browser Guard](https://github.com/opena2a-org/ai-browserguard) · [DVAA](https://github.com/opena2a-org/damn-vulnerable-ai-agent)
