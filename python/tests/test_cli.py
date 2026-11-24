@@ -1586,3 +1586,44 @@ def test_scan_holds_a_small_multiple_of_the_input_in_memory(tmp_path, capsys):
     assert code == 1
     assert len(json.loads(capsys.readouterr().out)[0]["findings"]) == 4000
     assert peak < 50 * size
+
+
+# A binary input is decoded as text and scanned as any other input is. Its line
+# in the report says so, so a CLEAN beside a PNG or an archive does not read as
+# a statement about what the file holds in a compressed form.
+_PNG_HEAD = b"\x89PNG\x00\x00\x00\x0d"
+
+
+def test_binary_input_is_noted_on_its_clean_line(tmp_path, capsys):
+    f = tmp_path / "binary-clean.bin"
+    f.write_bytes(_PNG_HEAD + b" nothing sensitive\n")
+    assert run(["scan", str(f)]) == 0
+    assert (
+        f"  CLEAN      {f}   binary, scanned as text; no finding in the "
+        f"{len(PATTERN_TYPES)} pattern classes (aicomply --help lists them)\n"
+    ) in capsys.readouterr().out
+
+
+def test_binary_input_is_noted_on_its_flagged_line(tmp_path, capsys):
+    f = tmp_path / "binary-flagged.bin"
+    f.write_bytes(_PNG_HEAD + b" Customer SSN 078-05-1120 on file\n")
+    assert run(["scan", str(f)]) == 1
+    out = capsys.readouterr().out
+    assert f"  VIOLATION  {f}   binary, scanned as text; 1 finding\n    SSN " in out
+
+
+def test_binary_stdin_is_noted(monkeypatch, capsys):
+    _pipe_stdin(monkeypatch, b"a\x00b Customer SSN 078-05-1120 on file\n")
+    assert run(["scan"]) == 1
+    assert "  VIOLATION  (stdin)   binary, scanned as text; 1 finding\n" in capsys.readouterr().out
+
+
+def test_text_and_utf16_inputs_are_not_noted_as_binary(tmp_path, capsys):
+    text = tmp_path / "text.txt"
+    text.write_text("nothing sensitive\n")
+    utf16 = tmp_path / "utf16.txt"
+    utf16.write_bytes(b"\xff\xfe" + "nothing sensitive\n".encode("utf-16-le"))
+    assert run(["scan", str(text), str(utf16)]) == 0
+    out = capsys.readouterr().out
+    assert "binary, scanned as text" not in out
+    assert f"  CLEAN      {utf16}   no finding in the " in out

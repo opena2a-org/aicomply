@@ -78,6 +78,23 @@ and UTF-32 input of 1073741784 bytes of U+1F600 characters.
 A gate over the files of a diff can leave out the deleted ones:
 `git diff --cached --name-only --diff-filter=d` lists the staged files without them.
 
+## A binary input
+
+A binary input, such as an image, an archive or a compiled file, is not skipped. Its
+bytes are decoded as any input's are (as UTF-8 unless a byte order mark names UTF-16 or
+UTF-32, each sequence that does not decode becoming U+FFFD), and the patterns run on
+that text. A value written out in it as plain text is found; a value stored compressed
+or encoded, as in a zip file or a PDF stream, is not. An input whose text holds a NUL
+character is binary, and its line in the report says so:
+
+```
+  CLEAN      logo.png   binary, scanned as text; no finding in the 8 pattern classes (aicomply --help lists them)
+  VIOLATION  dump.bin   binary, scanned as text; 1 finding
+```
+
+The zero bytes of UTF-16 or UTF-32 text read with its byte order mark are part of its
+characters, so such an input is not binary. `--json` gives a binary input as any other.
+
 ## Output
 
 The report lists the findings of an input in the order they appear in it, at most 50
