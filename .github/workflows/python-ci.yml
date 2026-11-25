@@ -25,12 +25,20 @@ jobs:
     name: Lint, type-check, test, parity
     # pinned: ubuntu-latest moved to 26.04, which has no Python 3.9 build (2026-11-04)
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: python
     strategy:
       matrix:
-        python-version: ['3.9', '3.12']
+        # 3.12 installs the langchain extra so the LangChain adapter tests run;
+        # 3.9 keeps it out so the "langchain-core not installed" path stays tested.
+        include:
+          - python-version: '3.9'
+            extras: 'dev'
+          - python-version: '3.12'
+            extras: 'dev,langchain'
 
     steps:
       - name: Checkout
@@ -41,8 +49,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install (editable + dev tools)
-        run: pip install -e '.[dev]'
+      - name: Install (editable + ${{ matrix.extras }} extras)
+        run: pip install -e '.[${{ matrix.extras }}]'
 
       - name: Ruff
         run: ruff check src tests bench
